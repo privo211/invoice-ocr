@@ -1,0 +1,14 @@
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+env/
+
+# Flask uploads folder (temporary files)
+uploads/
+
+# Local environment variables
+.env
+

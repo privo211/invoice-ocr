@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HM Clause: Extracted Invoice Data</title>
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <style>
+    :root {
+      --primary-color: #0099d8;
+      --background-color: #f4f4f4;
+      --text-color: #000000;
+      --card-bg: #ffffff;
+    }
+    body.dark-mode {
+      --background-color: #1e1e1e;
+      --text-color: #f0f0f0;
+      --card-bg: #2a2a2a;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      background-color: var(--background-color);
+      color: var(--text-color);
+      padding: 2em;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1em;
+    }
+    .header h2 {
+      color: var(--primary-color);
+      margin: 0;
+      font-size: 1.5em;
+    }
+    .button-group {
+      display: flex;
+      gap: 0.5em;
+    }
+    .button-group button,
+    .button-group a {
+      background: var(--primary-color);
+      color: white;
+      border: none;
+      padding: 0.6em 1em;
+      border-radius: 4px;
+      cursor: pointer;
+      text-decoration: none;
+      font-size: 0.9em;
+      font-weight: bold;
+    }
+    .button-group button:hover,
+    .button-group a:hover {
+      opacity: 0.9;
+    }
+    .invoice-block {
+      background-color: var(--card-bg);
+      border-radius: 8px;
+      padding: 1.5em;
+      margin-bottom: 2em;
+      box-shadow: 0 0 8px rgba(0,0,0,0.1);
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1em 2em;
+      margin-top: 1em;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+    }
+    .form-group label {
+      font-weight: bold;
+      margin-bottom: 0.3em;
+      color: var(--primary-color);
+    }
+    .field-box {
+      padding: 0.5em;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background-color: var(--background-color);
+      color: var(--text-color);
+    }
+    .field-box[contenteditable="true"] {
+      background-color: rgba(255,255,255,0.05);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h2>HM Clause: Extracted Invoice Data</h2>
+    <div class="button-group">
+      <button id="theme-toggle">Dark Mode</button>
+      <a href="/" class="back-button">Go Back</a>
+    </div>
+  </div>
+
+  {% if items %}
+    {% for filename, item_list in items.items() %}
+      <h3>📄 {{ filename }}</h3>
+      {% for item in item_list %}
+        <div class="invoice-block">
+          <p><strong>{{ item.VendorItemNumber }} – {{ item.VendorItemDescription }}</strong></p>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>VendorBatchLot</label>
+              <div contenteditable="true" class="field-box">{{ item.VendorBatchLot }}</div>
+            </div>
+            <div class="form-group">
+              <label>VendorProductLot</label>
+              <div contenteditable="true" class="field-box">{{ item.VendorProductLot }}</div>
+            </div>
+            <div class="form-group">
+              <label>OriginCountry</label>
+              <div contenteditable="true" class="field-box">{{ item.OriginCountry }}</div>
+            </div>
+            <div class="form-group">
+              <label>UnitPrice</label>
+              <div contenteditable="true" class="field-box">{{ item.UnitPrice }}</div>
+            </div>
+            <div class="form-group">
+              <label>ProductForm</label>
+              <div contenteditable="true" class="field-box">{{ item.ProductForm }}</div>
+            </div>
+            <div class="form-group">
+              <label>Treatment</label>
+              <div contenteditable="true" class="field-box">{{ item.Treatment }}</div>
+            </div>
+            <div class="form-group">
+              <label>Germ</label>
+              <div contenteditable="true" class="field-box">{{ item.Germ }}</div>
+            </div>
+            <div class="form-group">
+              <label>GermDate</label>
+              <div contenteditable="true" class="field-box">{{ item.GermDate }}</div>
+            </div>
+            <div class="form-group">
+              <label>SeedCount</label>
+              <div contenteditable="true" class="field-box">{{ item.SeedCount }}</div>
+            </div>
+            <div class="form-group">
+              <label>Purity</label>
+              <div contenteditable="true" class="field-box">{{ item.Purity }}</div>
+            </div>
+            <div class="form-group">
+              <label>SeedSize</label>
+              <div contenteditable="true" class="field-box">{{ item.SeedSize }}</div>
+            </div>
+            <div class="form-group">
+              <label>PureSeed</label>
+              <div contenteditable="true" class="field-box">{{ item.PureSeed }}</div>
+            </div>
+            <div class="form-group">
+              <label>OtherCropSeed</label>
+              <div contenteditable="true" class="field-box">{{ item.OtherCropSeed }}</div>
+            </div>
+            <div class="form-group">
+              <label>InertMatter</label>
+              <div contenteditable="true" class="field-box">{{ item.InertMatter }}</div>
+            </div>
+            <div class="form-group">
+              <label>WeedSeed</label>
+              <div contenteditable="true" class="field-box">{{ item.WeedSeed }}</div>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    {% endfor %}
+  {% else %}
+    <p>No data was extracted.</p>
+  {% endif %}
+
+  <script>
+    const btn = document.getElementById('theme-toggle');
+    btn.addEventListener('click', () => {
+      const dark = document.body.classList.toggle('dark-mode');
+      btn.textContent = dark ? 'Light Mode' : 'Dark Mode';
+      localStorage.setItem('theme', dark ? 'dark-mode' : '');
+    });
+    if (localStorage.getItem('theme') === 'dark-mode') {
+      document.body.classList.add('dark-mode');
+      btn.textContent = 'Light Mode';
+    }
+  </script>
+</body>
+</html>

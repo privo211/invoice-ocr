@@ -1,0 +1,8 @@
+Flask>=2.0
+Werkzeug>=2.0
+pandas>=2.0
+requests>=2.25
+msal>=1.0
+python-dotenv>=1.0
+PyMuPDF>=1.23
+openpyxl>=3.0

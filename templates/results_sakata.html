@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sakata: Extracted Invoice Data</title>
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  />
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <style>
+    :root {
+      --primary-color: #0099d8;
+      --background-color: #f4f4f4;
+      --text-color: #000000;
+      --card-bg: #ffffff;
+    }
+    body.dark-mode {
+      --background-color: #1e1e1e;
+      --text-color: #f0f0f0;
+      --card-bg: #2a2a2a;
+    }
+    body {
+      font-family: Segoe UI, sans-serif;
+      background-color: var(--background-color);
+      color: var(--text-color);
+      padding: 2em;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1em;
+    }
+    .header h2 {
+      color: var(--primary-color);
+      margin: 0;
+      font-size: 1.7em;
+    }
+    h3 {
+      font-size: 1.5em;
+      margin-top: 1.5em;
+      margin-bottom: 0.75em;
+      color: var(--text-color);
+    }
+    .btn-theme, .btn-back {
+      background: var(--primary-color);
+      color: white;
+      border: none;
+      padding: 0.6em 1em;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9em;
+      font-weight: bold;
+      text-decoration: none;
+    }
+    .btn-theme:hover, .btn-back:hover {
+      opacity: 0.9;
+    }
+    .row-cols-md-2 .card {
+      position: relative;      
+      padding-top: 2rem; 
+      background-color: var(--card-bg);
+      border: none;
+      border-radius: 8px;
+      box-shadow: 0 0 8px rgba(0,0,0,0.1);
+    }
+    .item-header {
+      color: var(--primary-color);
+      font-weight: bold;
+      margin-bottom: 1rem;
+      line-height: 1.2;
+    }
+    dt {
+      color: var(--text-color);
+      padding-top: .5rem;
+      font-weight: 600;
+    }
+    dd {
+      margin-bottom: .5rem;
+    }
+    .card dl dd:last-child {
+      margin-bottom: 0;
+    }
+    .field-box {
+      padding: .5rem;
+      line-height: 1.3;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background-color: var(--background-color);
+      color: var(--text-color);
+    }
+    .lookup-btn {
+      border-radius: 0 4px 4px 0 !important;
+      padding: 0 .5rem;
+      min-width: 2.1rem;
+      margin-left: -1px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #ccc !important;
+      background: var(--background-color);
+      color: var(--text-color) !important;
+    }
+    .lookup-btn:hover {
+      background: var(--card-bg);
+      color: #fff;
+      border-color: var(--primary-color);
+    }
+    .input-group-sm .form-control,
+    .input-group-sm .lookup-btn {
+      height: calc(1.5rem + 0.75rem);
+      line-height: 1.5;
+    }
+    /* modal sizing & centering */
+    .modal-dialog {
+      max-width: 60%;
+      width: 45%;
+      margin: 1.5rem auto;
+    }
+    .modal-dialog-centered {
+      display: flex;
+      align-items: center;
+      min-height: calc(100% - 1rem);
+    }
+    .modal-dialog .modal-content {
+      max-height: 90vh;
+      overflow: hidden;
+    }
+    .modal-dialog .modal-content ul {
+      max-height: calc(80vh - 8rem);
+      overflow-y: auto;
+    }
+    .modal-content,
+    .modal-content h4,
+    .modal-content label {
+      font-size: 1.1rem;
+    }
+    .modal-content .form-check-label {
+      font-size: 1rem;
+      padding-left: .25rem;
+    }
+    .modal-content {
+      background-color: var(--card-bg) !important;
+      color: var(--text-color);
+      border-radius: 8px;
+      box-shadow: 0 0 16px rgba(0,0,0,0.2);
+    }
+    .modal-content h4 {
+      color: var(--primary-color);
+      font-size: 1.5rem;
+    }
+    .lookup-ok {
+      background: var(--primary-color);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: .4em 1em;
+      font-weight: bold;
+    }
+    .lookup-cancel {
+      background: transparent;
+      color: var(--text-color);
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: .4em 1em;
+      font-weight: bold;
+    }
+    body.dark-mode .lookup-cancel {
+      border: 1px solid #ccc;
+    }
+    body.dark-mode .form-control,
+    body.dark-mode .field-box {
+      background-color: var(--background-color);
+      color: var(--text-color);
+      border: 1px solid #ccc;
+    }
+    body.dark-mode input::placeholder {
+      color: var(--text-color);
+      opacity: 0.6;
+    }
+
+    .btn-auth {
+      background: var(--primary-color);
+      color: white;
+      border: none;
+      padding: 0.6em 1em;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9em;
+      font-weight: bold;
+      text-decoration: none;
+    }
+    .btn-auth:hover {
+      opacity: 0.9;
+    }
+
+    .lot-checkbox {
+      position: absolute;
+      top: 0.8rem;
+      left: 0.8rem;
+      transform: scale(1.3);
+      background: var(--card-bg);
+      z-index: 1;
+    }
+    .select-all-container {
+      display: flex;
+      align-items: center;
+      margin-bottom: 1rem;
+      gap: 0.5rem;
+    }
+    .select-all-container input {
+      transform: scale(1.3);
+      margin-right: 0.5rem;
+    }
+
+  </style>
+</head>
+<body>
+
+  <div class="header container-fluid">
+    <div class="d-flex align-items-center">
+      <img id="stokes-logo" src="{{ url_for('static', filename='stokes_logo_rect.png') }}" alt="Stokes Logo" style="max-height: 50px; margin-right: 1rem;">
+      <h2 class="m-0">Sakata: Extracted Invoice Data</h2>
+    </div>
+    <div class="auth-section">
+      <button id="theme-toggle" class="btn-theme me-2">Dark Mode</button>
+      <a href="/" class="btn-back me-2">Go Back</a>
+
+      {% if not session.get("user_token") %}
+        <a href="{{ url_for('sign_in') }}" class="btn-auth">Sign In</a>
+      {% else %}
+        <span style="color: var(--text-color); margin-right: 0.5rem;">
+          {{ session.user_name }}
+        </span>
+        <a href="{{ url_for('sign_out') }}" class="btn-auth">Sign Out</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="container">
+    {% if items %}
+      {% for filename, item_list in items.items() %}
+        <!-- <div class="select-all-container">
+          <input type="checkbox" id="select-all-lots" />
+          <label for="select-all-lots" style="font-weight:600;">
+            Select / Deselect All Lots
+          </label>
+        </div> -->
+        <h3>📄 {{ filename }} — Vendor Invoice No.: {{ item_list[0].Lots[0].InvoiceNumber }}</h3>
+        <div class="row row-cols-1 row-cols-md-2 g-4">
+          {% for item in item_list %}
+            {% set item_idx = loop.index0 %}
+            {% for lot in item.Lots %}
+              {% set lot_idx = loop.index0 %}
+              <div class="col">
+                <div class="card h-100 p-3">
+                  <!--  <div>
+                    <input
+                      type="checkbox"
+                      class="form-check-input lot-checkbox"
+                      id="chk-{{ item_idx }}-{{ lot_idx }}"
+                      data-item-idx="{{ item_idx }}"
+                      data-lot-idx="{{ lot_idx }}"
+                    />
+                  </div>  -->
+                  <div class="item-header">
+                    {{ item.VendorItemNumber }} — {{ item.VendorDescription }}
+                  </div>
+                  <dl class="row">
+                    <dt class="col-sm-4">Vendor Lot No.</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="VendorLotNo" contenteditable="true">
+                        {{ lot.VendorLotNo }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Search Purchase Order</dt>
+                    <dd class="col-sm-8">
+                      <div
+                        class="field-box po-field"
+                        contenteditable="true"
+                        data-item-idx="{{ item_idx }}"
+                        data-lot-idx="{{ lot_idx }}"
+                      >{{ item.PurchaseOrder }}</div>
+                    </dd>
+
+                    <dt class="col-sm-4">Select BC Item No.</dt>
+                    <dd class="col-sm-8">
+                      <select
+                        class="field-box form-select"
+                        onchange="handleBCChange(this)"
+                        data-item-idx="{{ item_idx }}"
+                        data-lot-idx="{{ lot_idx }}"
+                        data-field="BCItemNo"
+                      >
+                        {% for opt in item.BCOptions %}
+                          <option value="{{ opt.No }}"
+                                  {% if lot.BCItemNo == opt.No %}selected{% endif %}>
+                            {{ opt.No }} — {{ opt.Description }}
+                          </option>
+                        {% endfor %}
+                        <option value="Other"
+                                {% if lot.BCItemNo == 'Other' or item.BCOptions|length == 0 %}selected{% endif %}>
+                          Other
+                        </option>
+                      </select>
+
+                      <select
+                        id="bc-input-{{ item_idx }}-{{ lot_idx }}"
+                        class="field-box form-select mt-1"
+                        style="{% if lot.BCItemNo == 'Other' or item.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}"
+                      >
+                        <option value="" {% if not lot.BCItemNo or lot.BCItemNo == 'Other' %}selected{% endif %}>
+                          — Choose an Item No. —
+                        </option>
+                        <!-- JS will fill in the rest when “Other” is selected -->
+                      </select>
+                    </dd>
+
+                    
+
+                    <dt class="col-sm-4">Vendor Treatment Name</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="VendorTreatmentName" contenteditable="true">
+                        {{ item.TreatmentName }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Treatments Description</dt>
+                    <dd class="col-sm-8">
+                      <div class="input-group input-group-sm">
+                        <input
+                          type="text"
+                          id="td1-{{ item_idx }}-{{ lot_idx }}"
+                          class="form-control"
+                          data-field="TreatmentsDescription"
+                          value="{{ lot.TreatmentsDescription or '' }}"
+                        />
+                        <button
+                          class="btn btn-outline-secondary btn-sm lookup-btn"
+                          type="button"
+                          data-bs-toggle="modal"
+                          data-bs-target="#lookup-modal-1"
+                          data-target-id="td1-{{ item_idx }}-{{ lot_idx }}"
+                        >☰</button>
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Treatments Description 2</dt>
+                    <dd class="col-sm-8">
+                      <div class="input-group input-group-sm">
+                        <input
+                          type="text"
+                          id="td2-{{ item_idx }}-{{ lot_idx }}"
+                          class="form-control"
+                          data-field="TreatmentsDescription2"
+                          value="{{ lot.TreatmentsDescription2 or '' }}"
+                        />
+                        <button
+                          class="btn btn-outline-secondary btn-sm lookup-btn"
+                          type="button"
+                          data-bs-toggle="modal"
+                          data-bs-target="#lookup-modal-2"
+                          data-target-id="td2-{{ item_idx }}-{{ lot_idx }}"
+                        >☰</button>
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Package Description</dt>
+                    <dd class="col-sm-8">
+                      <select
+                        class="form-select field-box"
+                        data-field="PackageDescription"
+                      >
+                        <option value="" {% if not lot.PackageDescription %}selected{% endif %}>
+                          — Choose a Package Description —
+                        </option>
+                        {% for desc in pkg_descs %}
+                          <option
+                            value="{{ desc }}"
+                            {% if lot.PackageDescription == desc %}selected{% endif %}
+                          >
+                            {{ desc }}
+                          </option>
+                        {% endfor %}
+                      </select>
+                    </dd>
+
+                    <dt class="col-sm-4">Package Quantity</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="Pkg_Qty" contenteditable="true">
+                        {{ lot.Pkg_Qty or "" }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">USD Actual Cost $</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="USD_Actual_Cost_$" contenteditable="true">
+                        {{ lot["USD_Actual_Cost_$"] or "" }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Total Price</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="TotalPrice" contenteditable="true">
+                        {{ item.TotalPrice }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Grower Germ</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="GrowerGerm" contenteditable="true">
+                        {{ lot.CurrentGerm }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Grower Germ Date</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="GrowerGermDate" contenteditable="true">
+                        {{ lot.GermDate }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Seed Count</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="SeedCount" contenteditable="true">
+                        {{ lot.SeedCount }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Seed Size</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="SeedSize" contenteditable="true">
+                        {{ lot.SeedSize }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Purity</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="Purity" contenteditable="true">
+                        {{ lot.Purity }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Origin Country</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="OriginCountry" contenteditable="true">
+                        {{ lot.OriginCountry }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Sprout Count</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="SproutCount" contenteditable="true">
+                        {{ lot.SproutCount }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Inert</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="Inert" contenteditable="true">
+                        {{ lot.Inert }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Weed</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="Weed" contenteditable="true">
+                        {{ lot.Weed }}
+                      </div>
+                    </dd>
+
+                  </dl>
+                </div>
+              </div>
+            {% endfor %}
+          {% endfor %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="text-muted">No data was extracted.</p>
+    {% endif %}
+  </div>
+
+  <!-- Lookup Modals -->
+  {% for modal_id, treatments in {1:treatments1, 2:treatments2}.items() %}
+  <div class="modal fade" id="lookup-modal-{{modal_id}}" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
+      <div class="modal-content p-3">
+        <h4>Select Treatments</h4>
+        <ul class="list-unstyled mb-3">
+          {% for t in treatments %}
+            <li>
+              <label><input type="checkbox" value="{{t}}" /> {{t}}</label>
+            </li>
+          {% endfor %}
+        </ul>
+        <div class="text-end">
+          <button type="button" class="lookup-ok" data-modal-id="{{modal_id}}">OK</button>
+          <button type="button" class="lookup-cancel" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="text-center my-4">
+    {% if session.get("user_token") %}
+      <button id="create-lots-btn" class="btn btn-success btn-lg">
+        Create Lots in Business Central
+      </button>
+    {% else %}
+      <p class="text-warning">You must <a href="{{ url_for('sign_in') }}">sign in</a> before creating lots.</p>
+    {% endif %}
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- <script>
+    // Dark/Light toggle
+    const themeBtn = document.getElementById('theme-toggle');
+    themeBtn.addEventListener('click', () => {
+      const dark = document.body.classList.toggle('dark-mode');
+      themeBtn.textContent = dark ? 'Light Mode' : 'Dark Mode';
+      localStorage.setItem('theme', dark ? 'dark-mode' : '');
+    });
+    if (localStorage.getItem('theme') === 'dark-mode') {
+      document.body.classList.add('dark-mode');
+      themeBtn.textContent = 'Light Mode';
+    }
+
+    // Only one handleBCChange
+    function handleBCChange(sel) {
+      const idx   = sel.dataset.itemIdx,
+            lid   = sel.dataset.lotIdx,
+            input = document.getElementById(`bc-input-${idx}-${lid}`);
+      input.style.display = sel.value === 'Other' ? 'block' : 'none';
+    }
+
+    // On load, wire-up selects and PO blur
+    window.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('select[data-item-idx]').forEach(handleBCChange);
+      document.querySelectorAll('.po-field').forEach(div => {
+        div.addEventListener('blur', async e => {
+          const po      = e.target.textContent.trim();
+          const itemIdx = e.target.dataset.itemIdx;
+          const lotIdx  = e.target.dataset.lotIdx;
+          if (!po) return;
+          // fetch new BC options
+          const res = await fetch(`/bc-options?po=${encodeURIComponent(po)}`);
+          if (!res.ok) throw new Error(await res.text());
+          const opts = await res.json();
+          const select = document.querySelector(
+            `select[data-item-idx="${itemIdx}"][data-lot-idx="${lotIdx}"]`
+          );
+          select.innerHTML = '';
+          opts.forEach(o => {
+            const optEl = document.createElement('option');
+            optEl.value       = o.No;
+            optEl.textContent = `${o.No} — ${o.Description}`;
+            select.append(optEl);
+          });
+          const otherEl = document.createElement('option');
+          otherEl.value       = 'Other';
+          otherEl.textContent = 'Other';
+          select.append(otherEl);
+          handleBCChange(select);
+        });
+      });
+    });
+
+    // Re-wire the lookup buttons so they remember which input they target
+    document.querySelectorAll('.lookup-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const modalEl = document.querySelector(btn.getAttribute('data-bs-target'));
+        modalEl.dataset.targetId = btn.getAttribute('data-target-id');
+      });
+    });
+
+
+    // Lookup ok button hides modal
+    document.querySelectorAll('.lookup-ok').forEach(ok => {
+      ok.addEventListener('click', () => {
+        const modalId = ok.dataset.modalId;
+        const modalEl = document.getElementById(`lookup-modal-${modalId}`);
+        const targetId = modalEl.dataset.targetId;
+        const inp = document.getElementById(targetId);
+        const values = Array.from(
+          modalEl.querySelectorAll('input[type=checkbox]:checked')
+        ).map(cb => cb.value);
+        inp.value = values.join(', ');
+        bootstrap.Modal.getInstance(modalEl).hide();
+      });
+    });
+  </script> -->
+  <script>
+    async function handleBCChange(sel) {
+      const idx   = sel.dataset.itemIdx,
+            lid   = sel.dataset.lotIdx,
+            input = document.getElementById(`bc-input-${idx}-${lid}`);
+      
+      if (sel.value === 'Other') {
+        input.style.display = 'block';
+
+        // If not already filled, fetch the full item list:
+        if (!input.dataset.filled) {
+          try {
+            const resp = await fetch("/api/items");
+            const items = await resp.json();
+            // Populate the dropdown:
+            for (const itm of items) {
+              const opt = document.createElement("option");
+              opt.value       = itm.No;
+              opt.textContent = `${itm.No} — ${itm.Description}`;
+              input.appendChild(opt);
+            }
+            input.dataset.filled = "true";
+          } catch (err) {
+            console.error("Failed to load BC Items:", err);
+          }
+        }
+      } else {
+        input.style.display = 'none';
+        input.value = "";
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      const themeBtn = document.getElementById('theme-toggle');
+      const logo     = document.getElementById('stokes-logo');
+
+      function updateLogoTheme(isDark) {
+        if (logo) {
+          logo.src = isDark
+            ? "{{ url_for('static', filename='stokes_logo_rect_white.png') }}"
+            : "{{ url_for('static', filename='stokes_logo_rect.png') }}";
+        }
+      }
+
+      // Apply theme on load
+      if (localStorage.getItem('theme') === 'dark-mode') {
+        document.body.classList.add('dark-mode');
+        themeBtn.textContent = 'Light Mode';
+        updateLogoTheme(true);
+      }
+
+      // Toggle theme and logo
+      themeBtn.addEventListener('click', () => {
+        const dark = document.body.classList.toggle('dark-mode');
+        themeBtn.textContent = dark ? 'Light Mode' : 'Dark Mode';
+        localStorage.setItem('theme', dark ? 'dark-mode' : '');
+        updateLogoTheme(dark);
+      });
+
+      // File input display
+      const fileInput = document.getElementById("pdfs");
+      const fileInfo  = document.getElementById("file-name");
+      if (fileInput && fileInfo) {
+        fileInput.addEventListener("change", function () {
+          const files = Array.from(this.files);
+          fileInfo.textContent = files.length
+            ? files.length + " file(s):\n" + files.map(f => f.name).join("\n")
+            : "No files chosen";
+        });
+      }
+
+      // Re-wire PO and BC logic
+      document.querySelectorAll('select[data-item-idx]').forEach(handleBCChange);
+      document.querySelectorAll('.po-field').forEach(div => {
+        div.addEventListener('blur', async e => {
+          const po      = e.target.textContent.trim();
+          const itemIdx = e.target.dataset.itemIdx;
+          const lotIdx  = e.target.dataset.lotIdx;
+          if (!po) return;
+          const res = await fetch(`/bc-options?po=${encodeURIComponent(po)}`);
+          if (!res.ok) throw new Error(await res.text());
+          const opts = await res.json();
+          const select = document.querySelector(
+            `select[data-item-idx="${itemIdx}"][data-lot-idx="${lotIdx}"]`
+          );
+          select.innerHTML = '';
+          opts.forEach(o => {
+            const optEl = document.createElement('option');
+            optEl.value       = o.No;
+            optEl.textContent = `${o.No} — ${o.Description}`;
+            select.append(optEl);
+          });
+          const otherEl = document.createElement('option');
+          otherEl.value       = 'Other';
+          otherEl.textContent = 'Other';
+          select.append(otherEl);
+          handleBCChange(select);
+        });
+      });
+
+      /*function handleBCChange(sel) {
+        const idx   = sel.dataset.itemIdx,
+              lid   = sel.dataset.lotIdx,
+              input = document.getElementById(`bc-input-${idx}-${lid}`);
+        input.style.display = sel.value === 'Other' ? 'block' : 'none';
+      }*/
+
+      document.querySelectorAll('.lookup-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const modalEl = document.querySelector(btn.getAttribute('data-bs-target'));
+          modalEl.dataset.targetId = btn.getAttribute('data-target-id');
+        });
+      });
+
+      document.querySelectorAll('.lookup-ok').forEach(ok => {
+        ok.addEventListener('click', () => {
+          const modalId = ok.dataset.modalId;
+          const modalEl = document.getElementById(`lookup-modal-${modalId}`);
+          const targetId = modalEl.dataset.targetId;
+          const inp = document.getElementById(targetId);
+          const values = Array.from(
+            modalEl.querySelectorAll('input[type=checkbox]:checked')
+          ).map(cb => cb.value);
+          inp.value = values.join(', ');
+          bootstrap.Modal.getInstance(modalEl).hide();
+        });
+      });
+    });
+
+    function getFieldValue(cardEl, fieldName) {
+      // First look for contenteditable div
+      let el = cardEl.querySelector(`[data-field="${fieldName}"]`);
+      if (!el) return '';
+      // If it's an <input> or <select>, use .value; otherwise .textContent
+      if ('value' in el) return el.value.trim();
+      return el.textContent.trim();
+    }
+
+    // ─── “Select All” toggle logic ───
+    /*document.getElementById('select-all-lots')?.addEventListener('change', function() {
+      const checkboxes = document.querySelectorAll('.lot-checkbox');
+      checkboxes.forEach(cb => { cb.checked = this.checked; });
+    });*/
+
+    document.getElementById('create-lots-btn').addEventListener('click', async () => {
+
+      const cards = document.querySelectorAll('.card');
+      for (const card of cards) {
+        // Prompt user
+        const name = card.querySelector('.item-header')?.textContent.trim();
+        if (!confirm(`Create this lot?\n\n${name}`)) continue;
+
+        // 1) First read whatever was selected in the BC dropdown
+        let bcItemNo = getFieldValue(card, 'BCItemNo');
+
+        // 2) If the dropdown was "Other", override with the manually-typed input
+        if (bcItemNo === 'Other') {
+          // find the <select> so we can pull its data-item-idx / data-lot-idx
+          const selectEl = card.querySelector('select[data-field="BCItemNo"]');
+          const itemIdx = selectEl.dataset.itemIdx;
+          const lotIdx  = selectEl.dataset.lotIdx;
+          // now grab the text input by ID:
+          const manualInput = document.getElementById(`bc-input-${itemIdx}-${lotIdx}`);
+          bcItemNo = manualInput.value.trim();
+        }
+
+      // 1) Gather all checked boxes
+     /* const checkedBoxes = document.querySelectorAll('.lot-checkbox:checked');
+      if (checkedBoxes.length === 0) {
+        alert("No lots were selected. Please check at least one checkbox.");
+        return;
+      }
+
+      // 2) For each checked box, find its card & send exactly one POST
+      for (const cb of checkedBoxes) {
+        const itemIdx = cb.dataset.itemIdx;
+        const lotIdx  = cb.dataset.lotIdx;
+        // Locate the nearest .card parent
+        const cardEl = cb.closest('.card');
+        if (!cardEl) continue;
+
+        // (Optional) per-card confirm:
+        // const name = cardEl.querySelector('.item-header')?.textContent.trim();
+        // if (!confirm(`Create this lot?\n\n${name}`)) continue;
+
+        // 3) Build the data object exactly as before
+        let bcItemNo = getFieldValue(cardEl, 'BCItemNo');
+        if (bcItemNo === 'Other') {
+          const manualInput = document.getElementById(`bc-input-${itemIdx}-${lotIdx}`);
+          bcItemNo = manualInput.value.trim();
+        }*/
+
+        const data = {
+          BCItemNo:           bcItemNo,
+          VendorLotNo:        getFieldValue(card, 'VendorLotNo'),
+          OriginCountry:      getFieldValue(card, 'OriginCountry'),
+          TreatmentsDescription:  getFieldValue(card, 'TreatmentsDescription'),
+          TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
+          SeedSize:           getFieldValue(card, 'SeedSize'),
+          SeedCount:          getFieldValue(card, 'SeedCount'),
+          GrowerGerm:        getFieldValue(card, 'GrowerGerm'),
+          GrowerGermDate:           getFieldValue(card, 'GrowerGermDate'),
+          Purity:             getFieldValue(card, 'Purity'),
+          Inert:              getFieldValue(card, 'Inert'),
+          SproutCount:            getFieldValue(card, 'SproutCount'),
+          Weed:               getFieldValue(card, 'Weed'),
+          OtherCropSeed:   getFieldValue(card, 'OtherCropSeed'),
+          VendorTreatmentName: getFieldValue(card, 'VendorTreatmentName'),
+          Pkg_Qty:            getFieldValue(card, 'Pkg_Qty'),
+          USD_Actual_Cost_$: getFieldValue(card, 'USD_Actual_Cost_$'),
+          PackageDescription: getFieldValue(card, 'PackageDescription'),
+          TotalPrice:         getFieldValue(card, 'TotalPrice'),
+          VendorItemNumber: getFieldValue(card, 'VendorItemNumber'),
+          VendorDescription: getFieldValue(card, 'VendorDescription')
+        };
+
+        // Send to backend
+        try {
+          const res = await fetch('/create-lot', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify(data)
+          });
+
+          if (res.redirected || res.status === 401) {
+            // If the server sent a 302 to /sign_in or returned 401, force a real redirect
+            window.location.href = '/sign_in';
+            return;
+          }
+
+          const json = await res.json();
+          if (json.status === 'success') {
+            alert(`✅ Created Lot ${json.lotNo}`);
+          } else {
+            alert(`❌ Error: ${json.message}`);
+          }
+        } catch (err) {
+          alert(`❌ Network error: ${err.message}`);
+        }
+      }
+    });
+  </script>
+</body>
+</html>
