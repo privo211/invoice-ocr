@@ -336,9 +336,7 @@ def create_lot():
     
     #Integer → only convert if non-empty
     pkg_qty_dec_val = parse_decimal(data.get("Pkg_Qty"))
-    
-    if pkg_qty_dec_val is not None:
-        pkg_qty_val = int(pkg_qty_dec_val)
+    pkg_qty_val = int(pkg_qty_dec_val) if pkg_qty_dec_val is not None else None
 
     # Date → parse only if non-empty
     raw_date = data.get("GrowerGermDate", "").strip()
