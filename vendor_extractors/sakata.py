@@ -7,9 +7,6 @@ from difflib import get_close_matches
 import time
 import logging
 from functools import wraps
-import time
-import logging
-from functools import wraps
 
 # Use the root logger (or a named logger) instead of app.logger
 logger = logging.getLogger("invoice-ocr")
@@ -64,19 +61,21 @@ token = get_bc_token(
     tenant_id=BC_TENANT
 )
 
+_items_cache = None
+
 @timed_func("load_all_items")
-def load_all_items() -> list[dict]:
-    """
-    Call BC OData /Items to get all { No, Description } entries.
-    Returns a list of dicts: [{ "No": "1000", "Description": "WHEAT SEED" }, …].
-    """
+def load_all_items(force: bool = False) -> list[dict]:
+    """Return cached {No, Description} rows from BC Items."""
+    global _items_cache
+    if _items_cache is not None and not force:
+        return _items_cache
+
     base_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
         f"{BC_TENANT}/SANDBOX-2025/ODataV4/"
         f"Company('{BC_COMPANY}')/FilteredItems"
     )
-    
-    # only pull No and Description, ordered by No
+
     params = {
         "$select": "No,Description",
         "$orderby": "No"
@@ -87,8 +86,8 @@ def load_all_items() -> list[dict]:
     }
     resp = requests.get(base_url, params=params, headers=headers)
     resp.raise_for_status()
-    data = resp.json().get("value", [])
-    return data
+    _items_cache = resp.json().get("value", [])
+    return _items_cache
 
 
 #─── FETCH “Package Descriptions” ───
@@ -164,8 +163,12 @@ def find_best_package_description(vendor_desc: str) -> str:
     matches = get_close_matches(normalized, pkg_desc_list, n=1, cutoff=0.6)
     return matches[0] if matches else ""
 
+_po_cache = {}
+
 @timed_func("get_po_items")
 def get_po_items(po_number, token):
+    if po_number in _po_cache:
+        return _po_cache[po_number]
     environment = "SANDBOX-2025"
     tenant_id = "33b1b67a-786c-4b46-9372-c4e492d15cf1"
 
@@ -192,11 +195,13 @@ def get_po_items(po_number, token):
     response = requests.get(url, headers=headers)
     response.raise_for_status()
 
-    return [
+    data = [
         {"No": item["ItemNumber"], "Description": item["ItemDescription"]}
         for item in response.json().get("value", [])
         if item.get("ItemNumber")
     ]
+    _po_cache[po_number] = data
+    return data
 
 alpha3_to_bc = {
     "ARE": "AE", "ARG": "AR", "AUT": "AT", "AUS": "AU", "AZE": "AZ",
@@ -382,13 +387,18 @@ def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
     return report_map
 
 @timed_func("extract_invoice_from_pdf")
-def extract_invoice_from_pdf(pdf_path: str, fallback_po: str = "", token: str = "") -> List[Dict]:
-    doc = fitz.open(pdf_path)
+def extract_invoice_from_pdf(pdf_path: str, fallback_po: str = "", token: str = "", doc: fitz.Document | None = None) -> List[Dict]:
+    close_doc = False
+    if doc is None:
+        doc = fitz.open(pdf_path)
+        close_doc = True
+
     all_blocks = []
     for page in doc:
         blocks = page.get_text("blocks")
         all_blocks.extend(sorted(blocks, key=lambda b: (b[1], b[0])))
-    doc.close()
+    if close_doc:
+        doc.close()
 
     items: List[Dict] = []
     current = None
@@ -555,20 +565,17 @@ def extract_sakata_data(pdf_paths: List[str]) -> List[Dict]:
     all_items: List[Dict] = []
     for path in pdf_paths:
         doc = fitz.open(path)
-        # skip seed‐analysis PDFs
-        if any("Report of Seed Analysis" in p.get_text() for p in doc):
+        page_texts = [p.get_text() for p in doc]
+        if any("Report of Seed Analysis" in t for t in page_texts):
             doc.close()
             continue
-        doc.close()
-        
-        # extract this file’s invoice number
-        doc = fitz.open(path)
-        hdr = doc[0].get_text()
-        doc.close()
+
+        hdr = page_texts[0]
         m = re.search(r"INV[-\s]*0*([0-9]+)", hdr, re.IGNORECASE)
         invoice_id = m.group(1) if m else ""
 
-        raw_items = extract_invoice_from_pdf(path, fallback_po=fallback_po, token=token)
+        raw_items = extract_invoice_from_pdf(path, fallback_po=fallback_po, token=token, doc=doc)
+        doc.close()
         for itm in raw_items:
             parsed = []
             for raw in itm["Lots"]:
