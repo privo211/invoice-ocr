@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 from flask import session, redirect, url_for, render_template_string
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 import re
 import traceback
@@ -78,6 +79,9 @@ def fetch_start_counter():
 lot_counter = fetch_start_counter()
 
 app = Flask(__name__)
+
+# Tell Flask to honor X-Forwarded-Proto / X-Forwarded-For headers from NGINX
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
