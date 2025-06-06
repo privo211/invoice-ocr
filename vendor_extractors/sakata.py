@@ -7,7 +7,26 @@ from difflib import get_close_matches
 import time
 import logging
 from functools import wraps
-from app import app, timed_func
+import time
+import logging
+from functools import wraps
+
+# Use the root logger (or a named logger) instead of app.logger
+logger = logging.getLogger("invoice-ocr")
+logger.setLevel(logging.INFO)
+
+def timed_func(label: str):
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = fn(*args, **kwargs)
+            elapsed = time.perf_counter() - start
+            logger.info(f"[TIMING] {label} took {elapsed:.2f}s")
+            return result
+        return wrapper
+    return decorator
+
 
 # BC connection settings
 BC_TENANT  = os.getenv("AZURE_TENANT_ID")
