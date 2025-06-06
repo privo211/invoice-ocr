@@ -78,20 +78,15 @@ def fetch_start_counter():
 lot_counter = fetch_start_counter()
 
 app = Flask(__name__)
-UPLOAD_FOLDER = "uploads"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
 # generate a new random key every time
 app.secret_key = os.urandom(24)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-
-# df1 = pd.read_excel(os.path.join(DATA_DIR, "Lot Treatments List.xlsx"))
-# df2 = pd.read_excel(os.path.join(DATA_DIR, "Lot Treatments List 2.xlsx"))
-
-# treatments1 = [t.strip() for t in df1['Treatment Name'].dropna()]
-# treatments2 = [t.strip() for t in df2['Treatment Name'].dropna()]
 
 # ─── pull live “Lot_Treatments_Card_Excel” tables from BC ───
 def load_treatments(endpoint: str) -> list[str]:
