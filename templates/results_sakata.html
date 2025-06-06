@@ -595,34 +595,41 @@
     });
   </script> -->
   <script>
+    let bcItemsCache = null;
+
+    async function fetchBcItems() {
+      if (!bcItemsCache) {
+        const resp = await fetch('/api/items');
+        bcItemsCache = await resp.json();
+      }
+      return bcItemsCache;
+    }
+
     async function handleBCChange(sel) {
       const idx   = sel.dataset.itemIdx,
             lid   = sel.dataset.lotIdx,
             input = document.getElementById(`bc-input-${idx}-${lid}`);
-      
+
       if (sel.value === 'Other') {
         input.style.display = 'block';
 
-        // If not already filled, fetch the full item list:
         if (!input.dataset.filled) {
           try {
-            const resp = await fetch("/api/items");
-            const items = await resp.json();
-            // Populate the dropdown:
+            const items = await fetchBcItems();
             for (const itm of items) {
-              const opt = document.createElement("option");
+              const opt = document.createElement('option');
               opt.value       = itm.No;
               opt.textContent = `${itm.No} — ${itm.Description}`;
               input.appendChild(opt);
             }
-            input.dataset.filled = "true";
+            input.dataset.filled = 'true';
           } catch (err) {
-            console.error("Failed to load BC Items:", err);
+            console.error('Failed to load BC Items:', err);
           }
         }
       } else {
         input.style.display = 'none';
-        input.value = "";
+        input.value = '';
       }
     }
 
