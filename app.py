@@ -15,6 +15,29 @@ from msal import ConfidentialClientApplication
 
 from vendor_extractors.sakata import extract_sakata_data, load_all_items, load_package_descriptions, get_po_items, token as bc_token
 from vendor_extractors.hm_clause import extract_hm_clause_data
+import time
+import logging
+
+app = Flask(__name__)
+
+logging.basicConfig(level=logging.INFO)
+
+# ─── Timing wrappers ───
+def timed_get(url, **kwargs):
+    start = time.perf_counter()
+    resp = requests.get(url, **kwargs)
+    elapsed = time.perf_counter() - start
+    app.logger.info(f"[TIMING] GET {url} took {elapsed:.2f}s")
+    resp.raise_for_status()
+    return resp
+
+def timed_post(url, **kwargs):
+    start = time.perf_counter()
+    resp = requests.post(url, **kwargs)
+    elapsed = time.perf_counter() - start
+    app.logger.info(f"[TIMING] POST {url} took {elapsed:.2f}s")
+    resp.raise_for_status()
+    return resp
 
 # BC connection settings
 BC_TENANT  = "33b1b67a-786c-4b46-9372-c4e492d15cf1"
@@ -50,7 +73,7 @@ def token_is_valid(access_token: str) -> bool:
         f"{BC_TENANT}/{BC_ENV}/ODataV4/"
         f"Company('{BC_COMPANY}')/Items?$top=1"
     )
-    resp = requests.get(
+    resp = timed_get(
         test_url,
         headers={"Authorization": f"Bearer {access_token}"}
     )
@@ -66,7 +89,7 @@ def fetch_start_counter():
       "&$orderby=Lot_No desc"
       "&$top=1"
     )
-    resp = requests.get(url, headers={"Authorization":f"Bearer {bc_token}"})
+    resp = timed_get(url, headers={"Authorization":f"Bearer {bc_token}"})
     resp.raise_for_status()
     vals = resp.json().get('value', [])
     if not vals:
@@ -77,8 +100,6 @@ def fetch_start_counter():
 
 # at module scope, instead of lot_counter=1:
 lot_counter = fetch_start_counter()
-
-app = Flask(__name__)
 
 # Tell Flask to honor X-Forwarded-Proto / X-Forwarded-For headers from NGINX
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
@@ -107,7 +128,7 @@ def load_treatments(endpoint: str) -> list[str]:
         "Authorization": f"Bearer {bc_token}",
         "Accept":         "application/json"
     }
-    resp = requests.get(url, headers=headers)
+    resp = timed_get(url, headers=headers)
     resp.raise_for_status()
     rows = resp.json().get("value", [])
     # assume each row has a field called "Treatment_Name"
@@ -400,7 +421,7 @@ def create_lot():
         "Prefer":        "odata.maxversion=4.0;IEEE754Compatible=true"
     }
 
-    resp = requests.post(bc_url, json=payload, headers=headers)
+    resp = timed_post(bc_url, json=payload, headers=headers)
     try:
         resp.raise_for_status()
         return jsonify({"status": "success", "lotNo": lot_no})
