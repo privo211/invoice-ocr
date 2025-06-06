@@ -17,10 +17,25 @@ from vendor_extractors.sakata import extract_sakata_data, load_all_items, load_p
 from vendor_extractors.hm_clause import extract_hm_clause_data
 import time
 import logging
+from functools import wraps
 
 app = Flask(__name__)
 
 logging.basicConfig(level=logging.INFO)
+
+
+# ─── A decorator to time any function and log its elapsed time ───
+def timed_func(label: str):
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = fn(*args, **kwargs)
+            elapsed = time.perf_counter() - start
+            app.logger.info(f"[TIMING] {label} took {elapsed:.2f}s")
+            return result
+        return wrapper
+    return decorator
 
 # ─── Timing wrappers ───
 def timed_get(url, **kwargs):
@@ -60,6 +75,7 @@ msal_app = msal.ConfidentialClientApplication(
     authority=AUTHORITY
 )
 
+@timed_func("token_is_valid")
 def token_is_valid(access_token: str) -> bool:
     """
     Do a tiny GET against a read‐only BC endpoint to confirm the token still works.
@@ -79,6 +95,7 @@ def token_is_valid(access_token: str) -> bool:
     )
     return resp.status_code == 200
 
+@timed_func("fetch_start_counter")
 def fetch_start_counter():
     # 1) Pull the top 1 V-INV-AUTO-TEST-xxxx record, ordered by Lot No descending
     url = (
@@ -114,6 +131,7 @@ app.secret_key = os.urandom(24)
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
 # ─── pull live “Lot_Treatments_Card_Excel” tables from BC ───
+@timed_func("load_treatments")
 def load_treatments(endpoint: str) -> list[str]:
     """
     Fetch all rows from BC OData endpoint
@@ -144,6 +162,7 @@ def login_required(f):
 
 @app.route("/", methods=["GET", "POST"])
 @login_required
+@timed_func("index handler")
 def index():
     
     user_token = session.get("user_token")
@@ -294,6 +313,7 @@ def bc_options():
 
 @app.route("/create-lot", methods=["POST"])
 @login_required
+@timed_func("create_lot")
 def create_lot():
     global lot_counter
     

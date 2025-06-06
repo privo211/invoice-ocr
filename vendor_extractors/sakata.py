@@ -4,6 +4,10 @@ import fitz  # PyMuPDF
 from typing import List, Dict, TypedDict, Union
 import requests
 from difflib import get_close_matches
+import time
+import logging
+from functools import wraps
+from app import app, timed_func
 
 # BC connection settings
 BC_TENANT  = os.getenv("AZURE_TENANT_ID")
@@ -41,6 +45,7 @@ token = get_bc_token(
     tenant_id=BC_TENANT
 )
 
+@timed_func("load_all_items")
 def load_all_items() -> list[dict]:
     """
     Call BC OData /Items to get all { No, Description } entries.
@@ -70,6 +75,7 @@ def load_all_items() -> list[dict]:
 #─── FETCH “Package Descriptions” ───
 _pkg_desc_list = None
 
+@timed_func("load_package_descriptions")
 def load_package_descriptions():
     """
     Fetch all rows from BC OData endpoint
@@ -139,7 +145,7 @@ def find_best_package_description(vendor_desc: str) -> str:
     matches = get_close_matches(normalized, pkg_desc_list, n=1, cutoff=0.6)
     return matches[0] if matches else ""
 
-
+@timed_func("get_po_items")
 def get_po_items(po_number, token):
     environment = "SANDBOX-2025"
     tenant_id = "33b1b67a-786c-4b46-9372-c4e492d15cf1"
@@ -276,7 +282,7 @@ def parse_lot_block(raw_text: str) -> Dict:
     except Exception as e:
         return {"error": str(e), "raw": raw_text}
 
-
+@timed_func("extract_seed_analysis_reports")
 def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
     """
     Pulls “Purity Analysis” sections out of any PDF in the folder
@@ -356,6 +362,7 @@ def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
 
     return report_map
 
+@timed_func("extract_invoice_from_pdf")
 def extract_invoice_from_pdf(pdf_path: str, fallback_po: str = "", token: str = "") -> List[Dict]:
     doc = fitz.open(pdf_path)
     all_blocks = []
@@ -484,6 +491,7 @@ def extract_invoice_from_pdf(pdf_path: str, fallback_po: str = "", token: str = 
 
     return items
 
+@timed_func("extract_sakata_data")
 def extract_sakata_data(pdf_paths: List[str]) -> List[Dict]:
     """
     For each invoice PDF:
