@@ -209,7 +209,7 @@
     </div>
   </div>
 
-  <script>
+    <!--<script>
     // Dark/Light toggle + logo switch (unchanged)
     const toggleButton = document.getElementById('theme-toggle');
     const body = document.body;
@@ -271,6 +271,50 @@
         }
       });
     }
+  </script>-->
+  <script>
+    const overlay = document.getElementById('loading-overlay');
+    const form    = document.getElementById('extract-form');
+
+    form.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      overlay.style.display = 'flex';
+      overlay.classList.add('d-flex');
+
+      try {
+        const res = await fetch('/', {
+          method: 'POST',
+          body: new FormData(form),
+          // follow: 'manual' if you want to detect 302 yourself
+        });
+
+        // 1) handle redirect to sign_in
+        if (res.redirected && new URL(res.url).pathname.startsWith('/sign_in')) {
+          window.location.href = res.url;
+          return;
+        }
+
+        // 2) handle HTTP errors
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`Server returned ${res.status}: ${errText}`);
+        }
+
+        // 3) on success, replace the document
+        const html = await res.text();
+        document.open();
+        document.write(html);
+        document.close();
+
+      } catch (err) {
+        console.error('Extraction error:', err);
+        alert('Extraction failed:\n' + err.message);
+      } finally {
+        overlay.style.display = 'none';
+        overlay.classList.remove('d-flex');
+      }
+    });
   </script>
+
 </body>
 </html>
