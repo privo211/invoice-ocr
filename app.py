@@ -12,7 +12,7 @@ import msal
 from dotenv import load_dotenv
 from functools import wraps
 from msal import ConfidentialClientApplication
-
+from multiprocessing import Pool, cpu_count
 from vendor_extractors.sakata import extract_sakata_data, load_all_items, load_package_descriptions, get_po_items, token as bc_token
 from vendor_extractors.hm_clause import extract_hm_clause_data
 import time
@@ -23,6 +23,10 @@ app = Flask(__name__)
 
 logging.basicConfig(level=logging.INFO)
 
+def _extract_sakata_file(path):
+    """Helper for Pool: returns (filename, items)"""
+    from vendor_extractors.sakata import extract_sakata_data
+    return os.path.basename(path), extract_sakata_data([path])
 
 # ─── A decorator to time any function and log its elapsed time ───
 def timed_func(label: str):
@@ -151,6 +155,11 @@ def load_treatments(endpoint: str) -> list[str]:
     # assume each row has a field called "Treatment_Name"
     return [r["Treatment_Name"].strip() for r in rows if r.get("Treatment_Name")]
 
+# ─── preload caches at module-import (works with gunicorn --preload) ───
+load_package_descriptions()
+load_treatments("Lot_Treatments_Card_Excel")
+load_treatments("Lot_Treatments_Card_2_Excel")
+
 def login_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -187,41 +196,75 @@ def index():
 
         # group results by filename
         grouped = {}
+        # if vendor == "sakata":
+        #     for path in pdf_paths:
+        #         filename = os.path.basename(path)
+        #         items = extract_sakata_data([path])   # returns List[Dict]
+        #         if items:
+        #             grouped[filename] = items
+                    
+        #         # ── DELETE the file immediately once it’s been OCR’d ──
+        #         try:
+        #             os.remove(path)
+        #         except Exception as e:
+        #             app.logger.error(f"Could not delete {path}: {e}")
+                
+        #     for fname, items in grouped.items():
+        #             for i, itm in enumerate(items):
+        #                 for j, lot in enumerate(itm['Lots']):
+        #                     td1 = request.form.getlist(f"td1-{fname}-{j}")
+        #                     td2 = request.form.getlist(f"td2-{fname}-{j}")
+        #                     lot['TreatmentsDescription']  = ",".join(td1)
+        #                     lot['TreatmentsDescription2'] = ",".join(td2)
+                            
+        #     # ── fetch live list of package descriptions from BC ──
+        #     pkg_descs = load_package_descriptions()
+            
+        #     # now fetch both lists:
+        #     treatments1 = load_treatments("Lot_Treatments_Card_Excel")
+        #     treatments2 = load_treatments("Lot_Treatments_Card_2_Excel")
+                            
+        #     return render_template(
+        #         "results_sakata.html", 
+        #         items=grouped, 
+        #         treatments1=treatments1, 
+        #         treatments2=treatments2,
+        #         pkg_descs=pkg_descs
+        #     )
         if vendor == "sakata":
-            for path in pdf_paths:
-                filename = os.path.basename(path)
-                items = extract_sakata_data([path])   # returns List[Dict]
+            grouped = {}
+
+            # spawn one process per CPU, each preloading the caches
+            with Pool(
+                processes=cpu_count(),
+                initializer=lambda: (
+                    load_package_descriptions(),
+                    load_treatments("Lot_Treatments_Card_Excel"),
+                    load_treatments("Lot_Treatments_Card_2_Excel")
+                )
+            ) as pool:
+                results = pool.map(_extract_sakata_file, pdf_paths)
+
+            for filename, items in results:
                 if items:
                     grouped[filename] = items
-                    
-                # ── DELETE the file immediately once it’s been OCR’d ──
+                # delete each file after processing
                 try:
-                    os.remove(path)
+                    os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
                 except Exception as e:
-                    app.logger.error(f"Could not delete {path}: {e}")
-                
-            for fname, items in grouped.items():
-                    for i, itm in enumerate(items):
-                        for j, lot in enumerate(itm['Lots']):
-                            td1 = request.form.getlist(f"td1-{fname}-{j}")
-                            td2 = request.form.getlist(f"td2-{fname}-{j}")
-                            lot['TreatmentsDescription']  = ",".join(td1)
-                            lot['TreatmentsDescription2'] = ",".join(td2)
-                            
-            # ── fetch live list of package descriptions from BC ──
-            pkg_descs = load_package_descriptions()
-            
-            # now fetch both lists:
+                    app.logger.error(f"Could not delete {filename}: {e}")
+
+            pkg_descs   = load_package_descriptions()
             treatments1 = load_treatments("Lot_Treatments_Card_Excel")
             treatments2 = load_treatments("Lot_Treatments_Card_2_Excel")
-                            
             return render_template(
-                "results_sakata.html", 
-                items=grouped, 
-                treatments1=treatments1, 
+                "results_sakata.html",
+                items=grouped,
+                treatments1=treatments1,
                 treatments2=treatments2,
                 pkg_descs=pkg_descs
             )
+
 
         elif vendor == "hm_clause":
             for path in pdf_paths:
