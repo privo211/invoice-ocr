@@ -313,8 +313,10 @@
       });
     }
 
-
-    // ——— Loading overlay + AJAX form submit ———
+    
+  </script>
+  <!-- Optional: Loading overlay + AJAX form submit
+  <script>
     const overlay = document.getElementById('loading-overlay');
     const form    = document.getElementById('extract-form');
     if (form && overlay) {
@@ -354,6 +356,18 @@
           overlay.style.display = 'none';
           overlay.classList.remove('d-flex');
         }
+      });
+    } 
+  </script>-->
+  
+
+  <script>
+    const form    = document.getElementById('extract-form');
+    const overlay = document.getElementById('loading-overlay');
+    if (form && overlay) {
+      form.addEventListener('submit', function() {
+        overlay.style.display = 'flex';
+        overlay.classList.add('d-flex');
       });
     }
   </script>

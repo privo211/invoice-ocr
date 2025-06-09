@@ -125,8 +125,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-# generate a new random key every time
-app.secret_key = os.urandom(24)
+app.secret_key = os.environ["SECRET_KEY"]
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
