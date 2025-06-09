@@ -247,7 +247,7 @@
         : "No files chosen";
     });
 
-    // Loading overlay + AJAX form submit (unchanged)
+    // Loading overlay + AJAX form submit
     const overlay = document.getElementById('loading-overlay');
     const myForm  = document.getElementById('extract-form');
 
@@ -258,14 +258,26 @@
         overlay.classList.add('d-flex');
 
         try {
-          const res  = await fetch('/', { method: 'POST', body: new FormData(myForm) });
+          const res = await fetch('/', { method: 'POST', body: new FormData(myForm) });
+
+          // If the session expired, Flask redirects to /sign_in
+          if (res.redirected && new URL(res.url).pathname.startsWith('/sign_in')) {
+            overlay.style.display = 'none';
+            overlay.classList.remove('d-flex');
+            window.location.href = res.url;
+            return;
+          }
+
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+
           const html = await res.text();
           document.open();
           document.write(html);
           document.close();
         } catch (err) {
           console.error(err);
-          alert('Extraction failed');
+          alert('Extraction failed. Please try again.');
+        } finally {
           overlay.style.display = 'none';
           overlay.classList.remove('d-flex');
         }

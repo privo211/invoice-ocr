@@ -69,11 +69,26 @@ AUTHORITY     = f"https://login.microsoftonline.com/{TENANT_ID}"
 REDIRECT_PATH = "/auth/callback"
 SCOPE_BC      = ["https://api.businesscentral.dynamics.com/.default"]
 
-msal_app = msal.ConfidentialClientApplication(
-    client_id=CLIENT_ID,
-    client_credential=CLIENT_SECRET,
-    authority=AUTHORITY
-)
+# --- MSAL token cache helpers ---
+
+def load_cache():
+    cache = msal.SerializableTokenCache()
+    if session.get("token_cache"):
+        cache.deserialize(session["token_cache"])
+    return cache
+
+def save_cache(cache):
+    if cache.has_state_changed:
+        session["token_cache"] = cache.serialize()
+
+def build_msal_app(cache=None):
+    return ConfidentialClientApplication(
+        client_id=CLIENT_ID,
+        client_credential=CLIENT_SECRET,
+        authority=AUTHORITY,
+        token_cache=cache
+    )
+
 
 @timed_func("token_is_valid")
 def token_is_valid(access_token: str) -> bool:
@@ -125,11 +140,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-# generate a new random key every time
-app.secret_key = os.urandom(24)
+app.secret_key = os.getenv("SECRET_KEY") or os.urandom(24)
+if not os.getenv("SECRET_KEY"):
+    app.logger.warning("SECRET_KEY not set; using random key that resets sessions on restart")
+app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
-
 # ─── pull live “Lot_Treatments_Card_Excel” tables from BC ───
 @timed_func("load_treatments")
 def load_treatments(endpoint: str) -> list[str]:
@@ -151,6 +167,25 @@ def load_treatments(endpoint: str) -> list[str]:
     rows = resp.json().get("value", [])
     # assume each row has a field called "Treatment_Name"
     return [r["Treatment_Name"].strip() for r in rows if r.get("Treatment_Name")]
+@app.before_request
+def refresh_access_token():
+    if "user_token" not in session:
+        return
+    if request.endpoint in ("sign_in", "auth_callback", "static"):
+        return
+    cache = load_cache()
+    msal_app = build_msal_app(cache)
+    accounts = msal_app.get_accounts()
+    if accounts:
+        result = msal_app.acquire_token_silent(SCOPE_BC, account=accounts[0])
+        if "access_token" in result:
+            session["user_token"] = result["access_token"]
+
+            save_cache(cache)
+        else:
+            session.pop("user_token", None)
+            session.pop("user_name", None)
+
 
 def login_required(f):
     @wraps(f)
@@ -240,30 +275,39 @@ def index():
             return render_template("results_hm_clause.html", items=grouped)
 
         else:
-            return "Unsupported vendor selected", 400
+            return "Unsupported vendor", 400
 
-    return render_template("index.html", user_name=session.get("user_name"))
 
-# ─── Sign-In Route ────
+# ——— Sign-In Route ———
 @app.route("/sign_in")
 def sign_in():
+    session["state"] = os.urandom(16).hex()
+    cache = load_cache()
+    msal_app = build_msal_app(cache)
     auth_url = msal_app.get_authorization_request_url(
         scopes=SCOPE_BC,
         redirect_uri=url_for("auth_callback", _external=True),
+        state=session["state"],
         prompt="select_account"
     )
     return redirect(auth_url)
 
-# ─── OAuth Callback (authorization code) ─────
+# ——— OAuth Callback (authorization code) ———
 @app.route(REDIRECT_PATH)
 def auth_callback():
     if "error" in request.args:
         return f"Error: {request.args['error']}, {request.args.get('error_description')}", 400
 
+    if request.args.get('state') != session.get('state'):
+        return "State mismatch", 400
+    session.pop('state', None)
+
     code = request.args.get("code")
     if not code:
         return "No authorization code provided", 400
 
+    cache = load_cache()
+    msal_app = build_msal_app(cache)
     result = msal_app.acquire_token_by_authorization_code(
         code=code,
         scopes=SCOPE_BC,
@@ -272,11 +316,11 @@ def auth_callback():
 
     if "access_token" in result:
         session["user_token"] = result["access_token"]
-        session["user_name"]  = result.get("id_token_claims", {}).get("preferred_username", "")
+        session["user_name"] = result.get("id_token_claims", {}).get("preferred_username", "")
+        save_cache(cache)
         return redirect(url_for("index"))
     else:
         return f"Token acquisition failed: {result.get('error')} - {result.get('error_description')}", 400
-
 # ─── Sign-Out Route ────
 @app.route("/sign_out")
 def sign_out():
@@ -318,6 +362,8 @@ def create_lot():
     global lot_counter
     
     # silent MSAL refresh on every create_lot call
+    cache = load_cache()
+    msal_app = build_msal_app(cache)
     accounts = msal_app.get_accounts()
     if accounts:
         result = msal_app.acquire_token_silent(
@@ -326,6 +372,7 @@ def create_lot():
         )
         if "access_token" in result:
             session["user_token"] = result["access_token"]
+            save_cache(cache)
         else:
             session.pop("user_token", None)
             session.pop("user_name", None)
@@ -334,9 +381,9 @@ def create_lot():
         session.pop("user_token", None)
         session.pop("user_name", None)
         return redirect(url_for("sign_in"))
-    
+
     data = request.get_json()
-    
+
     def parse_decimal(val):
         s = str(val or "").strip()
         if not s or s.lower() == "none":
