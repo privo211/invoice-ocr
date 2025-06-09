@@ -273,9 +273,51 @@
     }
   </script>-->
   <script>
-    const overlay = document.getElementById('loading-overlay');
-    const form    = document.getElementById('extract-form');
+  // ——— Dark/Light toggle + logo switch ———
+  const toggleButton = document.getElementById('theme-toggle');
+  const body         = document.body;
+  const logo         = document.getElementById('stokes-logo');
 
+  function updateLogoTheme(isDark) {
+    if (!logo) return;
+    logo.src = isDark
+      ? "{{ url_for('static', filename='stokes_logo_rect_white.png') }}"
+      : "{{ url_for('static', filename='stokes_logo_rect.png') }}";
+  }
+
+  // Apply stored theme on load
+  if (localStorage.getItem('theme') === 'dark-mode') {
+    body.classList.add('dark-mode');
+    toggleButton.textContent = 'Light Mode';
+    updateLogoTheme(true);
+  }
+
+  toggleButton.addEventListener('click', () => {
+    const dark = body.classList.toggle('dark-mode');
+    toggleButton.textContent = dark ? 'Light Mode' : 'Dark Mode';
+    localStorage.setItem('theme', dark ? 'dark-mode' : 'light-mode');
+    updateLogoTheme(dark);
+  });
+
+
+  // ——— File-input change listener ———
+  const pdfInput = document.getElementById('pdfs');
+  const fileNameDisplay = document.getElementById('file-name');
+
+  if (pdfInput && fileNameDisplay) {
+    pdfInput.addEventListener('change', function () {
+      const files = Array.from(this.files);
+      fileNameDisplay.textContent = files.length
+        ? `${files.length} file(s):\n${files.map(f => f.name).join('\n')}`
+        : 'No files chosen';
+    });
+  }
+
+
+  // ——— Loading overlay + AJAX form submit ———
+  const overlay = document.getElementById('loading-overlay');
+  const form    = document.getElementById('extract-form');
+  if (form && overlay) {
     form.addEventListener('submit', async function(e) {
       e.preventDefault();
       overlay.style.display = 'flex';
@@ -285,22 +327,21 @@
         const res = await fetch('/', {
           method: 'POST',
           body: new FormData(form),
-          // follow: 'manual' if you want to detect 302 yourself
         });
 
-        // 1) handle redirect to sign_in
+        // redirect to sign_in if session expired
         if (res.redirected && new URL(res.url).pathname.startsWith('/sign_in')) {
           window.location.href = res.url;
           return;
         }
 
-        // 2) handle HTTP errors
+        // HTTP error?
         if (!res.ok) {
           const errText = await res.text();
           throw new Error(`Server returned ${res.status}: ${errText}`);
         }
 
-        // 3) on success, replace the document
+        // success → swap in new HTML
         const html = await res.text();
         document.open();
         document.write(html);
@@ -314,7 +355,9 @@
         overlay.classList.remove('d-flex');
       }
     });
-  </script>
+  }
+</script>
+
 
 </body>
 </html>
