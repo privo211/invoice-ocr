@@ -99,7 +99,7 @@ def fetch_start_counter(token: str = None):
             f"{BC_TENANT}/{BC_ENV}/ODataV4/"
             f"Company('{BC_COMPANY}')/Lot_No_Information_Card_Excel"
             "?$filter=startswith(Lot_No,'V-INV-AUTO-TEST-')"
-            "&$orderby=Lot_No"
+            "&$orderby=Lot_No desc"
             "&$top=1"
         )
         from vendor_extractors.sakata import token as bc_token
@@ -187,6 +187,8 @@ def _extract_hm_clause_file(path):
 # Authentication routes
 @app.route("/sign-in")
 def sign_in():
+    if session.get("user_token"):
+        return redirect(url_for("index"))
     auth_url = msal_app.get_authorization_request_url(
         scopes=SCOPE_BC,
         redirect_uri=url_for("auth_callback", _external=True)
@@ -214,7 +216,13 @@ def auth_callback():
 def sign_out():
     session.pop("user_token", None)
     session.pop("user_name", None)
-    return redirect(url_for("sign_in"))
+    return redirect(url_for("sign_in", _external=True))
+
+@app.route("/logout")
+def logout():
+    session.pop("user_token", None)
+    session.pop("user_name", None)
+    return render_template("logout.html")
 
 # Login required decorator
 def login_required(f):

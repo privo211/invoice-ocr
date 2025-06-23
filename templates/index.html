@@ -166,7 +166,7 @@
       </a>
     {% else %}
       <p><strong>Status:</strong> Signed in as {{ session.user_name }}</p>
-      <a class="auth-btn" href="{{ url_for('sign_out') }}">
+      <a class="auth-btn" href="{{ url_for('logout') }}">
         Sign Out
       </a>
 
