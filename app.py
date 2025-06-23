@@ -130,6 +130,22 @@ _treatments_cache = {}
 def load_treatments(endpoint: str, token: str) -> list[str]:
     if endpoint in _treatments_cache:
         return _treatments_cache[endpoint]
+    
+    # Validate token
+    if not token_is_valid(token):
+        app.logger.warning(f"Invalid token for endpoint {endpoint}, attempting refresh")
+        accounts = msal_app.get_accounts()
+        if accounts:
+            result = msal_app.acquire_token_silent(scopes=SCOPE_BC, account=accounts[0])
+            if "access_token" in result:
+                token = result["access_token"]
+            else:
+                app.logger.error(f"Silent token refresh failed: {result.get('error_description')}")
+                return []
+        else:
+            app.logger.error("No accounts available for token refresh")
+            return []
+
     url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
         f"{BC_TENANT}/Production/ODataV4/"
