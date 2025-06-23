@@ -17,6 +17,7 @@ import logging
 app = Flask(__name__)
 
 # Configure logging
+lot_counter = None
 logging.basicConfig(level=logging.INFO)
 app.logger.setLevel(logging.INFO)
 
@@ -255,20 +256,12 @@ def index():
             if all_pos:
                 try:
                     po_items = get_po_items("|".join(all_pos), user_token)
-                    po_items_dict = {}
-                    for pi in po_items:
-                        po = pi.get("PurchaseOrderNo")
-                        if po:
-                            po_items_dict.setdefault(po, []).append({
-                                "No": pi.get("ItemNumber", ""),
-                                "Description": pi.get("ItemDescription", "")
-                            })
-                        else:
-                            app.logger.warning(f"Item missing PurchaseOrderNo: {pi}")
-
                     for item in all_items:
                         po = item.get("PurchaseOrder")
-                        item["BCOptions"] = po_items_dict.get(po, [])
+                        if po:
+                            item["BCOptions"] = po_items  # Assign all PO items to each item with a matching PO
+                        else:
+                            item["BCOptions"] = []
                 except Exception as e:
                     app.logger.error(f"Failed to fetch PO items: {e}")
                     for item in all_items:
@@ -313,41 +306,132 @@ def index():
 @timed_func("create_lot")
 def create_lot():
     global lot_counter
-    user_token = session.get("user_token")
+    
+    # Silent MSAL refresh on every create_lot call
+    accounts = msal_app.get_accounts()
+    if accounts:
+        result = msal_app.acquire_token_silent(
+            scopes=SCOPE_BC,
+            account=accounts[0]
+        )
+        if "access_token" in result:
+            session["user_token"] = result["access_token"]
+            app.logger.info("Token refreshed successfully")
+        else:
+            app.logger.error("Silent token refresh failed: %s", result.get("error_description", "No details"))
+            session.pop("user_token", None)
+            session.pop("user_name", None)
+            return redirect(url_for("sign_in"))
+    else:
+        app.logger.warning("No accounts found for silent token refresh")
+        session.pop("user_token", None)
+        session.pop("user_name", None)
+        return redirect(url_for("sign_in"))
+    
     data = request.get_json()
-    if not data:
-        return jsonify({"status": "error", "message": "No data provided"}), 400
+    
+    def parse_decimal(val):
+        s = str(val or "").strip()
+        if not s or s.lower() == "none":
+            return None
+        try:
+            return float(s)
+        except ValueError:
+            return None
+    
+    for key, val in data.items():
+        if isinstance(val, str) and val.lower() == "none":
+            data[key] = ""
+            
+    raw_sprout = data.get("SproutCount", "").strip()
 
-    lot_no = f"V-INV-AUTO-TEST-{lot_counter}"
+    # Initialize lot_counter if not set
+    if lot_counter is None:
+        lot_counter = fetch_start_counter(session.get("user_token"))
+
+    # Generate new Lot No. with zero-padding
+    lot_no = f"V-INV-AUTO-TEST-{lot_counter:03d}"
     lot_counter += 1
+
+    # Null-guard all inputs
+    item_no     = str(data.get("BCItemNo", "")).strip() or None
+    vendor_lot  = str(data.get("VendorLotNo", "")).strip() or None
+    country     = str(data.get("OriginCountry", "")).strip() or None
+    td1         = str(data.get("TreatmentsDescription", "")).strip() or None
+    td2_text    = str(data.get("TreatmentsDescription2", "")).strip() or None
+    seed_size   = str(data.get("SeedSize", "")).strip() or None
+
+    seed_count = parse_decimal(data.get("SeedCount"))
+    germ_pct   = parse_decimal(data.get("GrowerGerm"))
+    purity     = parse_decimal(data.get("Purity"))
+    inert      = parse_decimal(data.get("Inert"))
+    usd_cost_val = parse_decimal(data.get("USD_Actual_Cost_$"))
+    pkg_qty_dec_val = parse_decimal(data.get("Pkg_Qty"))
+    pkg_qty_val = int(pkg_qty_dec_val) if pkg_qty_dec_val is not None else None
+
+    raw_date = data.get("GrowerGermDate", "").strip()
+    germ_date_iso = (
+        datetime.strptime(raw_date, "%m/%d/%Y").date().isoformat()
+        if raw_date else None
+    )
+
+    treated = "Yes" if td1 and td1.lower() != "untreated" else "No"
+    
+    if raw_sprout:
+        td2_text = f"SPROUT COUNT-{raw_sprout}" + (", " + td2_text if td2_text else "")
+    td2 = td2_text or None
+    
+    pkg_desc_val = data.get("PackageDescription")
+
+    raw_payload = {
+        "Item_No":                     item_no,
+        "Lot_No":                      lot_no,
+        "TMG_Vendor_Lot_No":           vendor_lot,
+        "TMG_Country_Of_Origin":       country,
+        "TMG_Treatment_Description":   td1,
+        "TMG_Treatment_Description_2": td2,
+        "TMG_Seed_Size":               seed_size,
+        "TMG_Seed_Count":              seed_count,
+        "TMG_Grower_Germ_Percent":     germ_pct,
+        "TMG_GrowerGermDate":          germ_date_iso,
+        "TMG_Purity":                  purity,
+        "TMG_Inert":                   inert,
+        "TMG_Treated":                 treated,
+        "TMG_PackageQty":              pkg_qty_val,
+        "TMG_USD_Actual_Cost":         usd_cost_val,
+        "TMG_PackageDesc":             pkg_desc_val
+    }
+
+    payload = {k: v for k, v in raw_payload.items() if v is not None}
+
+    app.logger.info("Extracted data: %s", data)
+    app.logger.info("Raw payload: %s", raw_payload)
+    app.logger.info("Prepared payload for BC: %s", payload)
+    
     bc_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
         f"{BC_TENANT}/{BC_ENV}/ODataV4/"
-        f"Company('{BC_COMPANY}')/Lot_No_Information_Card_Excel"
+        f"Company('{BC_COMPANY}')/Lot_Info_Card"
     )
-    payload = {
-        "Lot_No": lot_no,
-        "Item_No": data.get("itemNo", ""),
-        "Description": data.get("description", ""),
-        "Treatment_Name": data.get("treatment", "")
-    }
     headers = {
-        "Authorization": f"Bearer {user_token}",
+        "Authorization": f"Bearer {session.get('user_token')}",
         "Content-Type": "application/json",
-        "Accept": "application/json"
+        "Prefer": "odata.maxversion=4.0;IEEE754Compatible=true"
     }
+
     try:
         resp = timed_post(bc_url, json=payload, headers=headers)
+        resp.raise_for_status()
         return jsonify({"status": "success", "lotNo": lot_no})
     except requests.exceptions.HTTPError as e:
-        app.logger.error(f"HTTP error creating lot: {e.response.status_code} - {e.response.text}")
+        app.logger.error("HTTP error creating lot: %d - %s", e.response.status_code, e.response.text)
         if e.response.status_code == 401:
             session.pop("user_token", None)
             session.pop("user_name", None)
             return redirect(url_for("sign_in"))
         return jsonify({"status": "error", "message": e.response.text}), e.response.status_code
     except Exception as e:
-        app.logger.error(f"Unexpected error creating lot: {e}")
+        app.logger.error("Unexpected error creating lot: %s", str(e))
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":

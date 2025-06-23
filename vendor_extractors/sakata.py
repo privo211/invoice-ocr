@@ -94,40 +94,38 @@ def load_all_items(force: bool = False) -> list[dict]:
 _pkg_desc_list = None
 
 @timed_func("load_package_descriptions")
-def load_package_descriptions():
+def load_package_descriptions(token: str) -> list[str]:
     """
-    Fetch all rows from BC OData endpoint
-    /Package_Descriptions_List_Excel, and build a list of package‐description strings.
+    Fetch all rows from BC OData endpoint /Package_Descriptions_List_Excel, and build a list of package-description strings.
     """
     global _pkg_desc_list
     if _pkg_desc_list is not None:
         return _pkg_desc_list
 
-    # 2) OData URL for the Package Descriptions table
     odata_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
         f"{BC_TENANT}/{BC_ENV}/ODataV4/"
         f"Company('{BC_COMPANY}')/Package_Descriptions_List_Excel"
     )
-
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json"
     }
-    resp = requests.get(odata_url, headers=headers)
-    resp.raise_for_status()
-    payload = resp.json()
-    rows = payload.get("value", [])
-
-    # 3) Pull out the “Package Description” field from each row, uppercase + dedupe
-    desc_set = set()
-    for row in rows:
-        pkg_desc = row.get("Package_Description")
-        if pkg_desc:
-            desc_set.add(pkg_desc.strip().upper())
-
-    _pkg_desc_list = sorted(desc_set)
-    return _pkg_desc_list
+    try:
+        resp = requests.get(odata_url, headers=headers)
+        resp.raise_for_status()
+        payload = resp.json()
+        rows = payload.get("value", [])
+        desc_set = set()
+        for row in rows:
+            pkg_desc = row.get("Package_Description")
+            if pkg_desc:
+                desc_set.add(pkg_desc.strip().upper())
+        _pkg_desc_list = sorted(desc_set)
+        return _pkg_desc_list
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to load package descriptions: {e}")
+        return []
 
 def normalize_text(s: str) -> str:
     # remove commas, extra spaces, uppercase
@@ -138,7 +136,10 @@ def find_best_package_description(vendor_desc: str) -> str:
     Given a vendor description (e.g. "Beet Chioggia Guardsmark Treated 500M"),
     return the closest match from the live BC Package Descriptions.
     """
-    pkg_desc_list = load_package_descriptions()  # pulls from BC once
+    global _pkg_desc_list
+    if _pkg_desc_list is None:
+        raise RuntimeError("Package descriptions not loaded. Ensure load_package_descriptions is called first.")
+    pkg_desc_list = _pkg_desc_list
 
     normalized = normalize_text(vendor_desc)
 
