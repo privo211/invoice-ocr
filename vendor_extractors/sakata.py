@@ -72,7 +72,7 @@ def load_all_items(force: bool = False) -> list[dict]:
 
     base_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/SANDBOX-2025/ODataV4/"
+        f"{BC_TENANT}/Production/ODataV4/"
         f"Company('{BC_COMPANY}')/FilteredItems"
     )
 
@@ -104,7 +104,7 @@ def load_package_descriptions(token: str) -> list[str]:
 
     odata_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/{BC_ENV}/ODataV4/"
+        f"{BC_TENANT}/Production/ODataV4/"
         f"Company('{BC_COMPANY}')/Package_Descriptions_List_Excel"
     )
     headers = {
@@ -184,7 +184,7 @@ def get_po_items(po_number, token):
         filter_clause = " or ".join(f"PurchaseOrderNo eq '{po}'" for po in po_numbers)
 
     url = (
-        f"https://api.businesscentral.dynamics.com/v2.0/{tenant_id}/{environment}"
+        f"https://api.businesscentral.dynamics.com/v2.0/{tenant_id}/Production"
         f"/ODataV4/Company('Stokes%20Seeds%20Limited')/PurchaseOrderQuery?$filter={filter_clause}"
     )
 
