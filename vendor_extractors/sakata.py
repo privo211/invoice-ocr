@@ -170,7 +170,7 @@ _po_cache = {}
 def get_po_items(po_number, token):
     if po_number in _po_cache:
         return _po_cache[po_number]
-    environment = "SANDBOX-2025"
+
     tenant_id = "33b1b67a-786c-4b46-9372-c4e492d15cf1"
 
     # Split PO string if multiple are given
@@ -183,24 +183,38 @@ def get_po_items(po_number, token):
     else:
         filter_clause = " or ".join(f"PurchaseOrderNo eq '{po}'" for po in po_numbers)
 
-    url = (
-        f"https://api.businesscentral.dynamics.com/v2.0/{tenant_id}/Production"
-        f"/ODataV4/Company('Stokes%20Seeds%20Limited')/PurchaseOrderQuery?$filter={filter_clause}"
-    )
-
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json"
     }
 
-    response = requests.get(url, headers=headers)
+    # Try the main PurchaseOrderQuery
+    url_main = (
+        f"https://api.businesscentral.dynamics.com/v2.0/{tenant_id}/Production"
+        f"/ODataV4/Company('Stokes%20Seeds%20Limited')/PurchaseOrderQuery?$filter={filter_clause}"
+    )
+    response = requests.get(url_main, headers=headers)
     response.raise_for_status()
-
     data = [
         {"No": item["ItemNumber"], "Description": item["ItemDescription"]}
         for item in response.json().get("value", [])
         if item.get("ItemNumber")
     ]
+
+    # If no results, try the ArchivePurchaseOrderQuery
+    if not data:
+        url_archive = (
+            f"https://api.businesscentral.dynamics.com/v2.0/{tenant_id}/Production"
+            f"/ODataV4/Company('Stokes%20Seeds%20Limited')/ArchivePurchaseOrderQuery?$filter={filter_clause}"
+        )
+        response = requests.get(url_archive, headers=headers)
+        response.raise_for_status()
+        data = [
+            {"No": item["ItemNumber"], "Description": item["ItemDescription"]}
+            for item in response.json().get("value", [])
+            if item.get("ItemNumber")
+        ]
+
     _po_cache[po_number] = data
     return data
 

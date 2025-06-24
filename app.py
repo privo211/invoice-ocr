@@ -123,6 +123,36 @@ app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.secret_key = os.environ["SECRET_KEY"]
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+@app.route("/api/items")
+def api_items():
+    from vendor_extractors.sakata import load_all_items
+    return jsonify(load_all_items())
+
+@app.route("/bc-options")
+def bc_options():
+    po_raw = request.args.get("po", "").strip()
+    app.logger.debug(f"BC lookup called with raw po = {po_raw!r}")
+
+    if not po_raw:
+        return jsonify([])
+
+    m = re.search(r"\bPO[-\s]*(\d{5})\b", po_raw, re.IGNORECASE)
+    if not m:
+        app.logger.error("bc-options: could not parse a valid PO-##### from %r", po_raw)
+        return jsonify([])
+
+    po = f"PO-{m.group(1)}"
+    app.logger.debug(f"bc-options: using normalized po = {po}")
+
+    try:
+        from vendor_extractors.sakata import get_po_items
+        opts = get_po_items(po, session.get("user_token"))
+    except Exception as e:
+        app.logger.error("bc-options lookup failed: %s", str(e))
+        return jsonify([{"No": "ERROR", "Description": str(e)}])
+
+    return jsonify(opts)
+
 # Treatments cache
 _treatments_cache = {}
 

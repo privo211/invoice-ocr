@@ -680,26 +680,34 @@
           const itemIdx = e.target.dataset.itemIdx;
           const lotIdx  = e.target.dataset.lotIdx;
           if (!po) return;
-          const res = await fetch(`/bc-options?po=${encodeURIComponent(po)}`);
-          if (!res.ok) throw new Error(await res.text());
-          const opts = await res.json();
+
           const select = document.querySelector(
-            `select[data-item-idx="${itemIdx}"][data-lot-idx="${lotIdx}"]`
+            `select[data-item-idx="${itemIdx}"][data-lot-idx="${lotIdx}"][data-field="BCItemNo"]`
           );
-          select.innerHTML = '';
-          opts.forEach(o => {
-            const optEl = document.createElement('option');
-            optEl.value       = o.No;
-            optEl.textContent = `${o.No} — ${o.Description}`;
-            select.append(optEl);
-          });
-          const otherEl = document.createElement('option');
-          otherEl.value       = 'Other';
-          otherEl.textContent = 'Other';
-          select.append(otherEl);
-          handleBCChange(select);
+
+          try {
+            const res = await fetch(`/bc-options?po=${encodeURIComponent(po)}`);
+            if (!res.ok) throw new Error(await res.text());
+            
+            const opts = await res.json();
+            select.innerHTML = '';
+            opts.forEach(o => {
+              const optEl = document.createElement('option');
+              optEl.value       = o.No;
+              optEl.textContent = `${o.No} — ${o.Description}`;
+              select.append(optEl);
+            });
+            const otherEl = document.createElement('option');
+            otherEl.value       = 'Other';
+            otherEl.textContent = 'Other';
+            select.append(otherEl);
+            handleBCChange(select);
+          } catch (error) {
+            console.error('Failed to fetch BC items:', error);
+            select.innerHTML = '<option value="ERROR">Error loading items</option>';
+          }
         });
-      });
+    });
 
       /*function handleBCChange(sel) {
         const idx   = sel.dataset.itemIdx,
