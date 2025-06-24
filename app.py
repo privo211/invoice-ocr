@@ -4,7 +4,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 import re
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import msal
 from dotenv import load_dotenv
 from functools import wraps
@@ -15,16 +15,20 @@ import time
 import logging
 
 app = Flask(__name__)
+# Application setup
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config["MSAL_TOKEN_CACHES"] = {}
+app.secret_key = os.environ["SECRET_KEY"]
+app.permanent_session_lifetime = timedelta(hours=8)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Configure logging
 lot_counter = None
 logging.basicConfig(level=logging.INFO)
 app.logger.setLevel(logging.INFO)
-
-# Business Central connection settings
-BC_TENANT = "33b1b67a-786c-4b46-9372-c4e492d15cf1"
-BC_ENV = "SANDBOX-2025"
-BC_COMPANY = "Stokes%20Seeds%20Limited"
 
 # Load environment variables
 load_dotenv()
@@ -35,12 +39,41 @@ AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 REDIRECT_PATH = "/auth/callback"
 SCOPE_BC = ["https://api.businesscentral.dynamics.com/.default"]
 
-# MSAL configuration
-msal_app = msal.ConfidentialClientApplication(
-    client_id=CLIENT_ID,
-    client_credential=CLIENT_SECRET,
-    authority=AUTHORITY
-)
+# Business Central connection settings
+BC_TENANT = "33b1b67a-786c-4b46-9372-c4e492d15cf1"
+BC_ENV = "SANDBOX-2025"
+BC_COMPANY = "Stokes%20Seeds%20Limited"
+
+# --- MSAL Token Cache Helpers ---
+def load_cache():
+    """Load MSAL cache for this user from app.config, keyed by user_name."""
+    cache = msal.SerializableTokenCache()
+    user_name = session.get("user_name")
+    if user_name and user_name in app.config["MSAL_TOKEN_CACHES"]:
+        cache.deserialize(app.config["MSAL_TOKEN_CACHES"][user_name])
+    return cache
+
+def save_cache(cache):
+    """Save MSAL cache for this user into app.config, keyed by user_name."""
+    if cache.has_state_changed:
+        user_name = session.get("user_name")
+        if user_name:
+            app.config["MSAL_TOKEN_CACHES"][user_name] = cache.serialize()
+
+def build_msal_app(cache=None) -> msal.ConfidentialClientApplication:
+    return msal.ConfidentialClientApplication(
+        client_id=CLIENT_ID,
+        client_credential=CLIENT_SECRET,
+        authority=AUTHORITY,
+        token_cache=cache,
+    )
+
+# # MSAL configuration
+# msal_app = msal.ConfidentialClientApplication(
+#     client_id=CLIENT_ID,
+#     client_credential=CLIENT_SECRET,
+#     authority=AUTHORITY
+# )
 
 # Timing decorators
 def timed_func(label: str):
@@ -115,14 +148,6 @@ def fetch_start_counter(token: str = None):
         app.logger.error(f"Failed to fetch start counter: {e}")
         return 1
 
-# Application setup
-app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.secret_key = os.environ["SECRET_KEY"]
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
 @app.route("/api/items")
 def api_items():
     from vendor_extractors.sakata import load_all_items
@@ -163,6 +188,8 @@ def load_treatments(endpoint: str, token: str) -> list[str]:
     
     # Validate token
     if not token_is_valid(token):
+        cache = load_cache()
+        msal_app = build_msal_app(cache)
         app.logger.warning(f"Invalid token for endpoint {endpoint}, attempting refresh")
         accounts = msal_app.get_accounts()
         if accounts:
@@ -214,46 +241,6 @@ def _extract_hm_clause_file(path):
         app.logger.error(f"Error processing {path}: {e}")
         return os.path.basename(path), []
 
-# Authentication routes
-@app.route("/sign-in")
-def sign_in():
-    if session.get("user_token"):
-        return redirect(url_for("index"))
-    auth_url = msal_app.get_authorization_request_url(
-        scopes=SCOPE_BC,
-        redirect_uri=url_for("auth_callback", _external=True)
-    )
-    return redirect(auth_url)
-
-@app.route(REDIRECT_PATH)
-def auth_callback():
-    code = request.args.get("code")
-    if not code:
-        return "Authentication failed: No code received", 400
-    result = msal_app.acquire_token_by_authorization_code(
-        code=code,
-        scopes=SCOPE_BC,
-        redirect_uri=url_for("auth_callback", _external=True)
-    )
-    if "access_token" not in result:
-        app.logger.error(f"Auth error: {result.get('error_description')}")
-        return "Authentication failed", 400
-    session["user_token"] = result["access_token"]
-    session["user_name"] = result.get("id_token_claims", {}).get("name", "User")
-    return redirect(url_for("index"))
-
-@app.route("/sign-out")
-def sign_out():
-    session.pop("user_token", None)
-    session.pop("user_name", None)
-    return redirect(url_for("sign_in", _external=True))
-
-@app.route("/logout")
-def logout():
-    session.pop("user_token", None)
-    session.pop("user_name", None)
-    return render_template("logout.html")
-
 # Login required decorator
 def login_required(f):
     @wraps(f)
@@ -262,6 +249,82 @@ def login_required(f):
             return redirect(url_for("sign_in"))
         return f(*args, **kwargs)
     return wrapper
+
+# Authentication routes
+# @app.route("/sign-in")
+# def sign_in():
+#     if session.get("user_token"):
+#         return redirect(url_for("index"))
+#     auth_url = msal_app.get_authorization_request_url(
+#         scopes=SCOPE_BC,
+#         redirect_uri=url_for("auth_callback", _external=True)
+#     )
+#     return redirect(auth_url)
+@app.route("/sign-in")
+def sign_in():
+    if session.get("user_token") and token_is_valid(session.get("user_token")):
+        return redirect(url_for("index"))
+
+    cache = load_cache()
+    msal_app = build_msal_app(cache)
+    auth_url = msal_app.get_authorization_request_url(
+        scopes=SCOPE_BC,
+        redirect_uri=url_for("auth_callback", _external=True)
+    )
+    save_cache(cache)
+    return redirect(auth_url)
+
+@app.route(REDIRECT_PATH)
+def auth_callback():
+    
+    if session.get("user_token"):
+        app.logger.debug("User already signed in, skipping callback.")
+        return redirect(url_for("index"))
+    
+    code = request.args.get("code")
+    if not code:
+        return "Authentication failed: No code received", 400
+    
+    cache = load_cache()
+    msal_app = build_msal_app(cache)
+    
+    result = msal_app.acquire_token_by_authorization_code(
+        code=code,
+        scopes=SCOPE_BC,
+        redirect_uri=url_for("auth_callback", _external=True)
+    )
+    if "access_token" not in result:
+        app.logger.error(f"Auth error: {result.get('error_description')}")
+        return "Authentication failed", 400
+    
+    session.permanent = True
+    session["user_token"] = result["access_token"]
+    session["user_name"] = result.get("id_token_claims", {}).get("name", "User")
+    save_cache(cache)
+    
+    return redirect(url_for("index"))
+
+@app.route("/sign-out")
+def sign_out():
+    user_name = session.get("user_name")
+    if user_name and user_name in app.config["MSAL_TOKEN_CACHES"]:
+        app.config["MSAL_TOKEN_CACHES"].pop(user_name, None)
+    session.clear()
+    return redirect(url_for("sign_in", _external=True))
+
+@app.route("/logout")
+def logout():
+    # session.pop("user_token", None)
+    # session.pop("user_name", None)
+    #return render_template("logout.html")
+    user_name = session.get("user_name")
+    if user_name and user_name in app.config["MSAL_TOKEN_CACHES"]:
+        app.config["MSAL_TOKEN_CACHES"].pop(user_name, None)
+    session.clear()
+    return render_template("logout.html")
+
+
+
 
 # Main route
 @app.route("/", methods=["GET", "POST"])
@@ -362,6 +425,8 @@ def create_lot():
     global lot_counter
     
     # Silent MSAL refresh on every create_lot call
+    cache = load_cache()
+    msal_app = build_msal_app(cache)
     accounts = msal_app.get_accounts()
     if accounts:
         result = msal_app.acquire_token_silent(
@@ -371,6 +436,7 @@ def create_lot():
         if "access_token" in result:
             session["user_token"] = result["access_token"]
             app.logger.info("Token refreshed successfully")
+            save_cache(cache)
         else:
             app.logger.error("Silent token refresh failed: %s", result.get("error_description", "No details"))
             session.pop("user_token", None)
