@@ -13,6 +13,7 @@ from vendor_extractors.sakata import extract_sakata_data, load_package_descripti
 from vendor_extractors.hm_clause import extract_hm_clause_data
 import time
 import logging
+import psycopg2
 
 app = Flask(__name__)
 # Application setup
@@ -20,7 +21,6 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["MSAL_TOKEN_CACHES"] = {}
 app.secret_key = os.environ["SECRET_KEY"]
 app.permanent_session_lifetime = timedelta(hours=8)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -29,6 +29,14 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 lot_counter = None
 logging.basicConfig(level=logging.INFO)
 app.logger.setLevel(logging.INFO)
+
+# ---- POSTGRES MSAL CACHE CONFIG ----
+DB_CONFIG = {
+    'host': 'localhost',
+    'database': 'invoice_ocr',
+    'user': 'priyanshu',
+    'password': 'reorg0211',
+}
 
 # Load environment variables
 load_dotenv()
@@ -44,21 +52,53 @@ BC_TENANT = "33b1b67a-786c-4b46-9372-c4e492d15cf1"
 BC_ENV = "SANDBOX-2025"
 BC_COMPANY = "Stokes%20Seeds%20Limited"
 
-# --- MSAL Token Cache Helpers ---
 def load_cache():
-    """Load MSAL cache for this user from app.config, keyed by user_name."""
+    """Load MSAL cache for this user from PostgreSQL."""
     cache = msal.SerializableTokenCache()
     user_name = session.get("user_name")
-    if user_name and user_name in app.config["MSAL_TOKEN_CACHES"]:
-        cache.deserialize(app.config["MSAL_TOKEN_CACHES"][user_name])
+    if user_name:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT token_cache_data 
+            FROM msal_token_cache 
+            WHERE user_name = %s
+        """, (user_name,))
+        row = cur.fetchone()
+        if row:
+            cache.deserialize(row[0])
+        cur.close()
+        conn.close()
     return cache
 
 def save_cache(cache):
-    """Save MSAL cache for this user into app.config, keyed by user_name."""
+    """Save MSAL cache for this user to PostgreSQL."""
     if cache.has_state_changed:
         user_name = session.get("user_name")
         if user_name:
-            app.config["MSAL_TOKEN_CACHES"][user_name] = cache.serialize()
+            conn = psycopg2.connect(**DB_CONFIG)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO msal_token_cache (user_name, token_cache_data, updated_at) 
+                VALUES (%s, %s, %s) 
+                ON CONFLICT (user_name) 
+                DO UPDATE SET token_cache_data = EXCLUDED.token_cache_data,
+                              updated_at = EXCLUDED.updated_at
+            """, (user_name, cache.serialize(), datetime.now()))
+            conn.commit()
+            cur.close()
+            conn.close()
+
+def clear_cache():
+    """Clear MSAL Token Cache for this user."""
+    user_name = session.get("user_name")
+    if user_name:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM msal_token_cache WHERE user_name = %s", (user_name,))
+        conn.commit()
+        cur.close()
+        conn.close()
 
 def build_msal_app(cache=None) -> msal.ConfidentialClientApplication:
     return msal.ConfidentialClientApplication(
@@ -307,8 +347,7 @@ def auth_callback():
 @app.route("/sign-out")
 def sign_out():
     user_name = session.get("user_name")
-    if user_name and user_name in app.config["MSAL_TOKEN_CACHES"]:
-        app.config["MSAL_TOKEN_CACHES"].pop(user_name, None)
+    clear_cache()
     session.clear()
     return redirect(url_for("sign_in", _external=True))
 
@@ -318,8 +357,7 @@ def logout():
     # session.pop("user_name", None)
     #return render_template("logout.html")
     user_name = session.get("user_name")
-    if user_name and user_name in app.config["MSAL_TOKEN_CACHES"]:
-        app.config["MSAL_TOKEN_CACHES"].pop(user_name, None)
+    clear_cache()
     session.clear()
     return render_template("logout.html")
 
