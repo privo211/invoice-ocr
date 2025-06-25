@@ -524,8 +524,8 @@ def create_lot():
     purity     = parse_decimal(data.get("Purity"))
     inert      = parse_decimal(data.get("Inert"))
     usd_cost_val = parse_decimal(data.get("USD_Actual_Cost_$"))
-    pkg_qty_dec_val = parse_decimal(data.get("Pkg_Qty"))
-    pkg_qty_val = int(pkg_qty_dec_val) if pkg_qty_dec_val is not None else None
+    #pkg_qty_dec_val = parse_decimal(data.get("Pkg_Qty"))
+    #pkg_qty_val = int(pkg_qty_dec_val) if pkg_qty_dec_val is not None else None
 
     raw_date = data.get("CurrentGermDate", "").strip()
     germ_date_iso = (
@@ -555,7 +555,7 @@ def create_lot():
         "TMG_Purity":                  purity,
         "TMG_Inert":                   inert,
         "TMG_Treated":                 treated,
-        "TMG_PackageQty":              pkg_qty_val,
+        #"TMG_PackageQty":              pkg_qty_val,
         "TMG_USD_Actual_Cost":         usd_cost_val,
         "TMG_PackageDesc":             pkg_desc_val
     }

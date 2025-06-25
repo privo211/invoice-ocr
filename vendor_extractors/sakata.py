@@ -483,14 +483,14 @@ def extract_invoice_from_pdf(pdf_path: str, fallback_po: str = "", token: str = 
             # (3) TotalPrice was already computed via regex → stored in `total_price`
             usd_actual_cost = None
             if (pkg_qty not in (None, 0)) and (shipped not in (None, 0)) and (total_price not in (None, 0)):
-                usd_actual_cost = round(total_price / (shipped * pkg_qty), 2)
+                usd_actual_cost = round(total_price / (shipped * pkg_qty), 4) #round up to 4 decimals
                 
             best_pkg_desc = find_best_package_description(desc)
        
             current = {
                 "VendorItemNumber": item_no,
                 "VendorDescription": desc,
-                "Pkg_Qty": pkg_qty,
+                #"Pkg_Qty": pkg_qty,
                 "QtyShipped": shipped,
                 "USD_Actual_Cost_$": usd_actual_cost,
                 "PackageDescription": best_pkg_desc,
@@ -597,7 +597,7 @@ def extract_sakata_data(pdf_paths: List[str]) -> List[Dict]:
                 lot = parse_lot_block(raw)
                 
                 # ─── COPY parent’s Pkg + USD Cost + PackageDescription fields into each lot ───
-                lot["Pkg_Qty"]            = itm.get("Pkg_Qty")
+                #lot["Pkg_Qty"]            = itm.get("Pkg_Qty")
                 lot["USD_Actual_Cost_$"]  = itm.get("USD_Actual_Cost_$")
                 lot["PackageDescription"]  = itm.get("PackageDescription")
                 
