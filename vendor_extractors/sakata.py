@@ -7,6 +7,14 @@ from difflib import get_close_matches
 import time
 import logging
 from functools import wraps
+from dotenv import load_dotenv
+
+load_dotenv()
+BC_TENANT  = os.getenv("AZURE_TENANT_ID")
+BC_ENV      = "Production"
+BC_COMPANY = os.getenv("BC_COMPANY")
+CLIENT_ID     = os.getenv("AZURE_CLIENT_ID")
+CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
 
 # Use the root logger (or a named logger) instead of app.logger
 logger = logging.getLogger("invoice-ocr")
@@ -24,21 +32,13 @@ def timed_func(label: str):
         return wrapper
     return decorator
 
-
-# BC connection settings
-BC_TENANT  = os.getenv("AZURE_TENANT_ID")
-BC_ENV      = "Production"
-BC_COMPANY = "Stokes%20Seeds%20Limited"
-
-# Load from environment (.env)
-CLIENT_ID     = os.getenv("AZURE_CLIENT_ID")
-CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
-
 class PurityData(TypedDict):
     PureSeed: Union[float, str]
     Inert: Union[float, str]
     OtherCrop: Union[float, str]
     Weed: Union[float, str]
+    GrowerGerm: Union[float, None]
+    GrowerGermDate: Union[str, None]
     
 def get_bc_token(client_id, client_secret, tenant_id):
     token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
@@ -310,6 +310,8 @@ def parse_lot_block(raw_text: str) -> Dict:
             "GermDate":      germ_date,
             "SeedCount":     seed_count,
             "SeedSize":      seed_size,
+            "GrowerGerm":    None,
+            "GrowerGermDate": None,
             "Purity":        purity,
             "OriginCountry": bc_origin,
             "SproutCount":   sprout,
@@ -347,13 +349,18 @@ def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
             lot_no = segments[i].strip()
             block = segments[i+1]
             lines = [l.strip() for l in block.splitlines() if l.strip()]
+            
+            # Extract Date Test Completed
+            date_completed = None
+            for k in range(len(lines)):
+                if re.search(r"^Date\s+Test\s+Completed\s*:", lines[k], re.IGNORECASE):
+                    if k + 1 < len(lines):
+                        date_str = lines[k + 1].strip()
+                        if re.match(r"\d{1,2}/\d{1,2}/\d{4}", date_str):
+                            date_completed = date_str
+                    break
 
             # find the “Weed %” header
-            # header_idx = next(
-            #     (j for j,l in enumerate(lines)
-            #          if re.search(r"Weed\s*%", l, re.IGNORECASE)),
-            #     None
-            # )
             header_idx = next(
                 (j for j, l in enumerate(lines)
                 if re.search(r"Weed\s*%", l, re.IGNORECASE) or re.search(r"Weed\s+Seed\s*%", l, re.IGNORECASE)),
@@ -365,38 +372,30 @@ def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
 
             # collect the next four floats (or “TR” → None)
             vals = []
-            # for ln in lines[header_idx+1:]:
-            #     for tok in re.split(r"\s+", ln):
-            #         if re.fullmatch(r"TR", tok, re.IGNORECASE):
-            #             vals.append(None)
-            #         else:
-            #             m = re.fullmatch(r"(\d+\.\d+)", tok)
-            #             if m:
-            #                 vals.append(float(m.group(1)))
-            #         if len(vals) == 4:
-            #             break
-            #     if len(vals) == 4:
-            #         break
             for ln in lines[header_idx+1:]:
                 tokens = re.split(r"\s+", ln)
                 for tok in tokens:
                     if re.fullmatch(r"(TR|-TR-)", tok, re.IGNORECASE):
                         vals.append("TR") 
-                    elif re.fullmatch(r"\d+\.\d+", tok):
-                        vals.append(float(tok))
-                    if len(vals) == 4:
+                    # elif re.fullmatch(r"\d+\.\d+", tok):
+                    #     vals.append(float(tok))
+                    elif re.fullmatch(r"\d+(?:\.\d+)?", tok):
+                        vals.append(tok)
+                    if len(vals) == 5:
                         break
-                if len(vals) == 4:
+                if len(vals) == 5:
                     break
-            if len(vals) < 4:
+            if len(vals) < 5:
                 continue
 
-            pure, inert, other, weed = vals
+            pure, inert, other, weed, grower_germ = vals
             report_map[lot_no] = {
                 "PureSeed":  pure,
                 "Inert":     inert,
                 "OtherCrop": other,
-                "Weed":      weed
+                "Weed":      weed,
+                "GrowerGerm": grower_germ,
+                "GrowerGermDate": date_completed
             }
 
     return report_map

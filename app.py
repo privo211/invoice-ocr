@@ -40,17 +40,14 @@ DB_CONFIG = {
 
 # Load environment variables
 load_dotenv()
-TENANT_ID = os.environ["AZURE_TENANT_ID"]
+BC_TENANT = os.environ["AZURE_TENANT_ID"]
+BC_COMPANY = os.environ["BC_COMPANY"]
+BC_ENV = os.environ["BC_ENV"]
 CLIENT_ID = os.environ["AZURE_CLIENT_ID"]
 CLIENT_SECRET = os.environ["AZURE_CLIENT_SECRET"]
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
+AUTHORITY = f"https://login.microsoftonline.com/{BC_TENANT}"
 REDIRECT_PATH = "/auth/callback"
 SCOPE_BC = ["https://api.businesscentral.dynamics.com/.default"]
-
-# Business Central connection settings
-BC_TENANT = "33b1b67a-786c-4b46-9372-c4e492d15cf1"
-BC_ENV = "SANDBOX-2025"
-BC_COMPANY = "Stokes%20Seeds%20Limited"
 
 def load_cache():
     """Load MSAL cache for this user from PostgreSQL."""
@@ -362,8 +359,6 @@ def logout():
     return render_template("logout.html")
 
 
-
-
 # Main route
 @app.route("/", methods=["GET", "POST"])
 @login_required
@@ -522,15 +517,23 @@ def create_lot():
     seed_count = parse_decimal(data.get("SeedCount"))
     germ_pct   = data.get("CurrentGerm", "").strip()
     purity     = parse_decimal(data.get("Purity"))
+    pure       = parse_decimal(data.get("PureSeeds"))
     inert      = parse_decimal(data.get("Inert"))
+    grower_germ= parse_decimal(data.get("GrowerGerm", ""))
     usd_cost_val = parse_decimal(data.get("USD_Actual_Cost_$"))
     #pkg_qty_dec_val = parse_decimal(data.get("Pkg_Qty"))
     #pkg_qty_val = int(pkg_qty_dec_val) if pkg_qty_dec_val is not None else None
 
     raw_date = data.get("CurrentGermDate", "").strip()
+    raw_grower_date = data.get("GrowerGermDate", "").strip()
+    
     germ_date_iso = (
         datetime.strptime(raw_date, "%m/%d/%Y").date().isoformat()
         if raw_date else None
+    )
+    grower_germ_date_iso = (
+        datetime.strptime(raw_grower_date, "%m/%d/%Y").date().isoformat()
+        if raw_grower_date else None
     )
 
     treated = "Yes" if td1 and td1.lower() != "untreated" else "No"
@@ -550,6 +553,8 @@ def create_lot():
         "TMG_Treatment_Description_2": td2,
         "TMG_Seed_Size":               seed_size,
         "TMG_Seed_Count":              seed_count,
+        "TMG_Grower_Germ":             grower_germ,
+        "TMG_Grower_Germination_Date": grower_germ_date_iso,
         "TMG_Current_Germ":            germ_pct,
         "TMG_Germ_Date":               germ_date_iso,
         "TMG_Purity":                  purity,
