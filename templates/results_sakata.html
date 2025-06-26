@@ -740,12 +740,24 @@
         input.style.display = sel.value === 'Other' ? 'block' : 'none';
       }*/
 
-      document.querySelectorAll('.lookup-btn').forEach(btn => {
+      /*document.querySelectorAll('.lookup-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const modalEl = document.querySelector(btn.getAttribute('data-bs-target'));
           modalEl.dataset.targetId = btn.getAttribute('data-target-id');
         });
+      });*/
+
+      document.querySelectorAll('.lookup-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const modalEl = document.querySelector(btn.getAttribute('data-bs-target'));
+          const targetId = btn.getAttribute('data-target-id');
+          modalEl.dataset.targetId = targetId;
+
+          // 1. Uncheck all boxes
+          modalEl.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
+        });
       });
+
 
       document.querySelectorAll('.lookup-ok').forEach(ok => {
         ok.addEventListener('click', () => {
