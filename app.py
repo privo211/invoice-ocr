@@ -516,8 +516,8 @@ def create_lot():
 
     seed_count = parse_decimal(data.get("SeedCount"))
     germ_pct   = data.get("CurrentGerm", "").strip()
-    purity     = parse_decimal(data.get("Purity"))
-    pure       = parse_decimal(data.get("PureSeeds"))
+    #purity     = parse_decimal(data.get("Purity"))
+    pure       = parse_decimal(data.get("Purity"))
     inert      = parse_decimal(data.get("Inert"))
     grower_germ= parse_decimal(data.get("GrowerGerm", ""))
     usd_cost_val = parse_decimal(data.get("USD_Actual_Cost_$"))
@@ -557,7 +557,7 @@ def create_lot():
         "TMG_GrowerGermDate":          grower_germ_date_iso,
         "TMG_Current_Germ":            germ_pct,
         "TMG_Germ_Date":               germ_date_iso,
-        "TMG_Purity":                  purity,
+        "TMG_Purity":                  pure,
         "TMG_Inert":                   inert,
         "TMG_Treated":                 treated,
         #"TMG_PackageQty":              pkg_qty_val,

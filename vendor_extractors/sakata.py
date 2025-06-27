@@ -33,7 +33,7 @@ def timed_func(label: str):
     return decorator
 
 class PurityData(TypedDict):
-    PureSeed: Union[float, str]
+    Purity: Union[float, str]
     Inert: Union[float, str]
     OtherCrop: Union[float, str]
     Weed: Union[float, str]
@@ -312,7 +312,7 @@ def parse_lot_block(raw_text: str) -> Dict:
             "SeedSize":      seed_size,
             "GrowerGerm":    None,
             "GrowerGermDate": None,
-            "Purity":        purity,
+            "Purity":        None,
             "OriginCountry": bc_origin,
             "SproutCount":   sprout,
             # item-level PO now handled separately
@@ -327,7 +327,7 @@ def parse_lot_block(raw_text: str) -> Dict:
 def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
     """
     Pulls “Purity Analysis” sections out of any PDF in the folder
-    and returns a map lot_no → { PureSeed, Inert, OtherCrop, Weed }.
+    and returns a map lot_no → { Purity, Inert, OtherCrop, Weed }.
     """
     report_map: Dict[str, Dict[str, float]] = {}
     for fn in os.listdir(folder):
@@ -376,7 +376,7 @@ def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
                 tokens = re.split(r"\s+", ln)
                 for tok in tokens:
                     if re.fullmatch(r"(TR|-TR-)", tok, re.IGNORECASE):
-                        vals.append("TR") 
+                        vals.append("0.0") 
                     # elif re.fullmatch(r"\d+\.\d+", tok):
                     #     vals.append(float(tok))
                     elif re.fullmatch(r"\d+(?:\.\d+)?", tok):
@@ -390,7 +390,7 @@ def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
 
             pure, inert, other, weed, grower_germ = vals
             report_map[lot_no] = {
-                "PureSeed":  pure,
+                "Purity":  pure,
                 "Inert":     inert,
                 "OtherCrop": other,
                 "Weed":      weed,

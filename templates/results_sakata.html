@@ -80,6 +80,13 @@
       margin-bottom: 1rem;
       line-height: 1.2;
     }
+    .analysis-header {
+      color: var(--primary-color);
+      font-weight: 650;
+      padding-top: .5rem;
+      margin-bottom: 1rem;
+      line-height: 1.2;
+    }
     dt {
       color: var(--text-color);
       padding-top: .5rem;
@@ -256,7 +263,7 @@
             Select / Deselect All Lots
           </label>
         </div> -->
-        <h3>📄 {{ filename }} — Vendor Invoice No.: {{ item_list[0].Lots[0].InvoiceNumber }}</h3>
+        <h3>📄 {{ filename }} - Vendor Invoice No.: {{ item_list[0].Lots[0].InvoiceNumber }}</h3>
         <div class="row row-cols-1 row-cols-md-2 g-4">
           {% for item in item_list %}
             {% set item_idx = loop.index0 %}
@@ -274,7 +281,7 @@
                     />
                   </div>  -->
                   <div class="item-header">
-                    {{ item.VendorItemNumber }} — {{ item.VendorDescription }}
+                    {{ item.VendorItemNumber }} - {{ item.VendorDescription }}
                   </div>
                   <dl class="row">
                     <dt class="col-sm-4">Vendor Lot No.</dt>
@@ -376,6 +383,20 @@
                       </div>
                     </dd>
 
+                    <dt class="col-sm-4">Sprout Count</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="SproutCount" contenteditable="true">
+                        {{ lot.SproutCount }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Origin Country</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="OriginCountry" contenteditable="true">
+                        {{ lot.OriginCountry }}
+                      </div>
+                    </dd>
+
                     <dt class="col-sm-4">Package Description</dt>
                     <dd class="col-sm-8">
                       <select
@@ -403,20 +424,6 @@
                       </div>
                     </dd>-->
 
-                    <dt class="col-sm-4">USD Actual Cost $</dt>
-                    <dd class="col-sm-8">
-                      <div class="field-box" data-field="USD_Actual_Cost_$" contenteditable="true">
-                        {{ lot["USD_Actual_Cost_$"] or "" }}
-                      </div>
-                    </dd>
-
-                    <dt class="col-sm-4">Total Price</dt>
-                    <dd class="col-sm-8">
-                      <div class="field-box" data-field="TotalPrice" contenteditable="true">
-                        {{ item.TotalPrice }}
-                      </div>
-                    </dd>
-
                     <dt class="col-sm-4">Current Germ</dt>
                     <dd class="col-sm-8">
                       <div class="field-box" data-field="CurrentGerm" contenteditable="true">
@@ -431,6 +438,13 @@
                       </div>
                     </dd>
 
+                    <dt class="col-sm-4">Seed Size</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="SeedSize" contenteditable="true">
+                        {{ lot.SeedSize }}
+                      </div>
+                    </dd>
+
                     <dt class="col-sm-4">Seed Count</dt>
                     <dd class="col-sm-8">
                       <div class="field-box" data-field="SeedCount" contenteditable="true">
@@ -438,12 +452,21 @@
                       </div>
                     </dd>
 
-                    <dt class="col-sm-4">Seed Size</dt>
+                    <dt class="col-sm-4">Total Price</dt>
                     <dd class="col-sm-8">
-                      <div class="field-box" data-field="SeedSize" contenteditable="true">
-                        {{ lot.SeedSize }}
+                      <div class="field-box" data-field="TotalPrice" contenteditable="true">
+                        {{ item.TotalPrice }}
                       </div>
                     </dd>
+
+                    <dt class="col-sm-4">USD Actual Cost $</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="USD_Actual_Cost_$" contenteditable="true">
+                        {{ lot["USD_Actual_Cost_$"] or "" }}
+                      </div>
+                    </dd>
+
+                    <div class="analysis-header">Seed Analysis Report Data:</div>
 
                     <dt class="col-sm-4">Grower Germ</dt>
                     <dd class="col-sm-8">
@@ -466,20 +489,6 @@
                       </div>
                     </dd>
 
-                    <dt class="col-sm-4">Origin Country</dt>
-                    <dd class="col-sm-8">
-                      <div class="field-box" data-field="OriginCountry" contenteditable="true">
-                        {{ lot.OriginCountry }}
-                      </div>
-                    </dd>
-
-                    <dt class="col-sm-4">Sprout Count</dt>
-                    <dd class="col-sm-8">
-                      <div class="field-box" data-field="SproutCount" contenteditable="true">
-                        {{ lot.SproutCount }}
-                      </div>
-                    </dd>
-
                     <dt class="col-sm-4">Inert</dt>
                     <dd class="col-sm-8">
                       <div class="field-box" data-field="Inert" contenteditable="true">
@@ -487,12 +496,12 @@
                       </div>
                     </dd>
 
-                    <dt class="col-sm-4">Weed</dt>
+                    <!--<dt class="col-sm-4">Weed</dt>
                     <dd class="col-sm-8">
                       <div class="field-box" data-field="Weed" contenteditable="true">
                         {{ lot.Weed }}
                       </div>
-                    </dd>
+                    </dd>-->
 
                   </dl>
                 </div>
