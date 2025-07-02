@@ -889,7 +889,7 @@
 
           const json = await res.json();
           if (json.status === 'success') {
-            alert(`✅ Created Lot ${json.lotNo}`);
+            alert(`✅ Created Lot for Vendor Lot No.:${data.VendorLotNo} and Item No.:(${data.BCItemNo})`);
           } else {
             alert(`❌ Error: ${json.message}`);
           }

@@ -26,7 +26,7 @@ app.permanent_session_lifetime = timedelta(hours=8)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Configure logging
-lot_counter = None
+#lot_counter = None
 logging.basicConfig(level=logging.INFO)
 app.logger.setLevel(logging.INFO)
 
@@ -160,31 +160,6 @@ def token_is_valid(access_token: str) -> bool:
     except requests.exceptions.RequestException:
         return False
 
-# Fetch start counter with fallback
-@timed_func("fetch_start_counter")
-def fetch_start_counter(token: str = None):
-    try:
-        url = (
-            f"https://api.businesscentral.dynamics.com/v2.0/"
-            f"{BC_TENANT}/{BC_ENV}/ODataV4/"
-            f"Company('{BC_COMPANY}')/Lot_No_Information_Card_Excel"
-            "?$filter=startswith(Lot_No,'V-INV-AUTO-TEST-')"
-            "&$orderby=Lot_No desc"
-            "&$top=1"
-        )
-        from vendor_extractors.sakata import token as bc_token
-        auth_token = token if token else bc_token
-        resp = timed_get(url, headers={"Authorization": f"Bearer {auth_token}"})
-        resp.raise_for_status()
-        vals = resp.json().get('value', [])
-        if not vals:
-            return 1
-        match = re.match(r"V-INV-AUTO-TEST-(\d+)", vals[0]["Lot_No"])
-        return int(match.group(1)) + 1 if match else 1
-    except Exception as e:
-        app.logger.error(f"Failed to fetch start counter: {e}")
-        return 1
-
 @app.route("/api/items")
 def api_items():
     from vendor_extractors.sakata import load_all_items
@@ -287,16 +262,6 @@ def login_required(f):
         return f(*args, **kwargs)
     return wrapper
 
-# Authentication routes
-# @app.route("/sign-in")
-# def sign_in():
-#     if session.get("user_token"):
-#         return redirect(url_for("index"))
-#     auth_url = msal_app.get_authorization_request_url(
-#         scopes=SCOPE_BC,
-#         redirect_uri=url_for("auth_callback", _external=True)
-#     )
-#     return redirect(auth_url)
 @app.route("/sign-in")
 def sign_in():
     if session.get("user_token") and token_is_valid(session.get("user_token")):
@@ -455,7 +420,9 @@ def index():
 @login_required
 @timed_func("create_lot")
 def create_lot():
-    global lot_counter
+    # global lot_counter
+    
+    
     
     # Silent MSAL refresh on every create_lot call
     cache = load_cache()
@@ -498,14 +465,6 @@ def create_lot():
             
     raw_sprout = data.get("SproutCount", "").strip()
 
-    # Initialize lot_counter if not set
-    if lot_counter is None:
-        lot_counter = fetch_start_counter(session.get("user_token"))
-
-    # Generate new Lot No. with zero-padding
-    lot_no = f"V-INV-AUTO-TEST-{lot_counter:03d}"
-    lot_counter += 1
-
     # Null-guard all inputs
     item_no     = str(data.get("BCItemNo", "")).strip() or None
     vendor_lot  = str(data.get("VendorLotNo", "")).strip() or None
@@ -543,6 +502,8 @@ def create_lot():
     td2 = td2_text or None
     
     pkg_desc_val = data.get("PackageDescription")
+    
+    lot_no = 'AUTO'
 
     raw_payload = {
         "Item_No":                     item_no,
@@ -585,7 +546,7 @@ def create_lot():
     try:
         resp = timed_post(bc_url, json=payload, headers=headers)
         resp.raise_for_status()
-        return jsonify({"status": "success", "lotNo": lot_no})
+        return jsonify({"status": "success"})
     except requests.exceptions.HTTPError as e:
         app.logger.error("HTTP error creating lot: %d - %s", e.response.status_code, e.response.text)
         if e.response.status_code == 401:
