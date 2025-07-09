@@ -195,11 +195,24 @@ def get_po_items(po_number, token):
     )
     response = requests.get(url_main, headers=headers)
     response.raise_for_status()
-    data = [
-        {"No": item["ItemNumber"], "Description": item["ItemDescription"]}
-        for item in response.json().get("value", [])
-        if item.get("ItemNumber")
-    ]
+    data = []
+    seen = set()
+
+    for item in response.json().get("value", []):
+        no = item.get("ItemNumber")
+        if not no or no in seen:
+            continue
+        seen.add(no)
+        data.append({
+            "No": no,
+            "Description": item.get("ItemDescription", "")
+        })
+
+    # data = [
+    #     {"No": item["ItemNumber"], "Description": item["ItemDescription"]}
+    #     for item in response.json().get("value", [])
+    #     if item.get("ItemNumber")
+    # ]
 
     # If no results, try the ArchivePurchaseOrderQuery
     if not data:
@@ -209,11 +222,23 @@ def get_po_items(po_number, token):
         )
         response = requests.get(url_archive, headers=headers)
         response.raise_for_status()
-        data = [
-            {"No": item["ItemNumber"], "Description": item["ItemDescription"]}
-            for item in response.json().get("value", [])
-            if item.get("ItemNumber")
-        ]
+        data = []
+        seen = set()
+
+        for item in response.json().get("value", []):
+            no = item.get("ItemNumber")
+            if not no or no in seen:
+                continue
+            seen.add(no)
+            data.append({
+                "No": no,
+                "Description": item.get("ItemDescription", "")
+            })
+        # data = [
+        #     {"No": item["ItemNumber"], "Description": item["ItemDescription"]}
+        #     for item in response.json().get("value", [])
+        #     if item.get("ItemNumber")
+        # ]
 
     _po_cache[po_number] = data
     return data

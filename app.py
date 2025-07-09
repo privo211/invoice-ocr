@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from functools import wraps
 from multiprocessing import Pool, cpu_count
 from vendor_extractors.sakata import extract_sakata_data, load_package_descriptions, get_po_items
-from vendor_extractors.hm_clause import extract_hm_clause_data
+from vendor_extractors.hm_clause import extract_hm_clause_data, find_best_hm_clause_package_description
 import time
 import logging
 import psycopg2
@@ -391,19 +391,72 @@ def index():
             )
 
         elif vendor == "hm_clause":
-            grouped = {}
+            # grouped = {}
+            # with Pool(processes=cpu_count()) as pool:
+            #     results = pool.map(_extract_hm_clause_file, pdf_paths)
+
+            # for filename, items in results:
+            #     if items:
+            #         grouped[filename] = items
+            #     try:
+            #         os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+            #     except Exception as e:
+            #         app.logger.error(f"Could not delete {filename}: {e}")
+
+            # return render_template("results_hm_clause.html", items=grouped)
+            # 1. Load shared data from BC first
+            pkg_descs = load_package_descriptions(user_token)
+            treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
+            treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
+
+            # 2. Extract data from PDFs using multiprocessing
             with Pool(processes=cpu_count()) as pool:
                 results = pool.map(_extract_hm_clause_file, pdf_paths)
 
+            # 3. Group results and create a flat list for processing
+            final_grouped_results = {}
+            all_items_flat = []
             for filename, items in results:
                 if items:
-                    grouped[filename] = items
+                    final_grouped_results[filename] = items
+                    all_items_flat.extend(items)
+                # Clean up uploaded file
                 try:
                     os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
                 except Exception as e:
                     app.logger.error(f"Could not delete {filename}: {e}")
-
-            return render_template("results_hm_clause.html", items=grouped)
+            
+            # 4. Fetch all PO data at once
+            all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
+            po_items_for_all = []
+            if all_pos:
+                try:
+                    # Re-use the get_po_items function from the sakata extractor
+                    po_items_for_all = get_po_items("|".join(all_pos), user_token)
+                except Exception as e:
+                    app.logger.error(f"Failed to fetch PO items for HM Clause: {e}")
+                    po_items_for_all = [{"No": "ERROR", "Description": str(e)}]
+            
+            # 5. Enrich each item with PO options and package description
+            for item in all_items_flat:
+                # Add BCOptions if the item has a PO (matches Sakata logic)
+                if item.get("PurchaseOrder"):
+                    item["BCOptions"] = po_items_for_all
+                else:
+                    item["BCOptions"] = []
+                
+                # Find and add the best package description using HM Clause specific logic
+                vendor_desc = item.get("VendorItemDescription", "")
+                item["PackageDescription"] = find_best_hm_clause_package_description(vendor_desc, pkg_descs)
+            
+            # 6. Render the template with all necessary data
+            return render_template(
+                "results_hm_clause.html",
+                items=final_grouped_results,
+                treatments1=treatments1,
+                treatments2=treatments2,
+                pkg_descs=pkg_descs
+            )
 
         else:
             for path in pdf_paths:
