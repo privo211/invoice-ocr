@@ -2,10 +2,12 @@ import os
 import json
 import fitz  # PyMuPDF
 import re
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import requests
 from difflib import get_close_matches
 import time
+from collections import defaultdict
+item_usage_counter = defaultdict(int)
 
 AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
 AZURE_KEY = os.getenv("AZURE_KEY")
@@ -44,11 +46,6 @@ def extract_text_with_azure_ocr(pdf_path: str) -> List[str]:
                     if content:
                         lines.append(content)
                 lines.append("--- PAGE BREAK ---")
-
-            # # Save exact copy to .azure.txt
-            # txt_path = os.path.splitext(pdf_path)[0] + "_azureocr.txt"
-            # with open(txt_path, "w", encoding="utf-8") as f:
-            #     f.write("\n".join(lines))
 
             return lines
 
@@ -181,7 +178,7 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
         if "Germ" not in current:
             m_g  = re.search(r"Germ:\s*(\d+\.\d+)", line)
             if m_g:
-                current["Germ"] = float(m_g.group(1))
+                current["Germ"] = int(float(m_g.group(1)))
 
         # GermDate
         if "GermDate" not in current:
@@ -253,7 +250,7 @@ def extract_purity_analysis_reports(input_folder: str) -> Dict[str, Dict]:
                 # Grower Germ: extract the number immediately after "% Comments:"
                 match = re.search(r"%\s*Comments:\s*(?:[A-Za-z]+\s+)*(\d{2,3})\b", text)
                 if match:
-                    purity_data[batch_key]["GrowerGerm"] = float(match.group(1))
+                    purity_data[batch_key]["GrowerGerm"] = int(float(match.group(1)))
 
     return purity_data
 
@@ -274,182 +271,55 @@ def enrich_invoice_items_with_purity(items: List[Dict], purity_data: Dict[str, D
 
     return items
 
-# def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
-#     """
-#     Extracts structured item-level invoice data from an HM Clause invoice PDF.
-#     """
-#     doc = fitz.open(pdf_path)
-#     all_blocks = []
-#     line_items = []
-#     vendor_invoice_no = None
+def extract_discounts(blocks: List) -> List[Tuple[str, float]]:
+    discounts = []
+    prev_discount = None  # Track last discount to avoid duplicates
     
-#     # collect & sort all text blocks
-#     for page in doc:
-#         blocks = page.get_text("blocks")
-#         if not blocks or not any(b[4].strip() for b in blocks):
-#             ocr_lines = extract_text_with_azure_ocr(pdf_path)
-#             return extract_items_from_ocr_lines(ocr_lines)
-#         all_blocks.extend(sorted(blocks, key=lambda b: (b[1], b[0])))
-        
-#     # Extract Invoice No. from blocks
-#     for block in all_blocks:
-#         text = block[4].strip()
-#         m_invoice = re.search(r"Invoice No\.\s*(\d{8})", text, re.IGNORECASE)
-#         if m_invoice:
-#             vendor_invoice_no = m_invoice.group(1)
-#             break
-        
-#     # Extract Purchase Order No. from blocks
-#     text = ""
-#     for block in all_blocks:
-#         text += block[4].strip() + "\n"
-        
-#     po_number = None
+    for i, b in enumerate(blocks):
+        block_text = b[4].strip()
+        if "discount" in block_text.lower():
 
-#     # Try primary pattern first
-#     m_po = re.search(r"Customer PO No\.\s*(\d+)", text, re.IGNORECASE)
-#     if m_po:
-#         po_number = f"PO-{m_po.group(1)}"
-#     else:
-#         # Fallback to a secondary pattern if primary fails
-#         m_po = re.search(r"Customer PO No\.\s*.*?(\d{5})", text, re.IGNORECASE)
-#         if m_po:
-#             po_number = f"PO-{m_po.group(1)}"
+            discount_amount = None
+            item_number = None
 
-            
+            # Find discount amount (backward)
+            for j in range(i - 1, max(i - 6, -1), -1):
+                prev_text = blocks[j][4].strip()
+                for match in re.finditer(r"-[\d,]+\.\d{2}", prev_text):
+                    if "/KS" not in prev_text[match.start():match.end()+5]:
+                        discount_amount = abs(float(match.group().replace(",", "")))
+                        break
+                if discount_amount:
+                    break
 
-#     for i, b in enumerate(all_blocks):
-#         text = b[4].strip()
-#         if not re.fullmatch(r"[A-Z]\d{5}", text):
-#             continue
+            # Find associated item number (backward first)
+            for j in range(i - 1, max(i - 6, -1), -1):
+                prev_text = blocks[j][4].strip()
+                m = re.match(r"^(\d{6})\b", prev_text)
+                if m:
+                    item_number = m.group(1)
+                    break
 
-#         # ─ init every per-item var ───────────────────────────────────────────
-#         vendor_batch_lot   = text
-#         vendor_item_number = None
-#         desc_part1         = ""
-#         desc_part2         = None   # <-- new
-#         vendor_product_lot = None
-#         origin_country     = None
-#         unit_price         = None
-#         product_form       = None
-#         treatment          = None
-#         germ               = None
-#         germ_date          = None
-#         seed_count         = None
-#         purity             = None
-#         seed_size          = None
+            # Add discount if valid and not duplicate
+            if item_number and discount_amount:
+                current_discount = (item_number, discount_amount)
+                if current_discount != prev_discount:  # Avoid consecutive duplicates
+                    discounts.append(current_discount)
+                    prev_discount = current_discount
 
-#         # wider window around the batch-lot
-#         start = max(0, i - 15)
-#         end   = min(len(all_blocks), i + 15)
-#         window = all_blocks[start:end]
-        
-        
-
-#         for block in window:
-#             block_text = block[4].strip()
-
-#             # always overwrite, drop any "if not X" guards
-#             m = re.match(r"^(\d{6})\s+(.+)", block_text)
-#             if m:
-#                 vendor_item_number = m.group(1)
-#                 desc_part1         = m.group(2).strip()
-
-#             m = re.search(r"\bPL\d{6}\b", block_text)
-#             if m:
-#                 vendor_product_lot = m.group()
-
-#             m = re.search(r"Country of origin:\s*([A-Z]{2})", block_text)
-#             if m:
-#                 origin_country = m.group(1)
-
-#             # m = re.search(r"\d{1,3}(?:,\d{3})*(?:\.\d{4})?/KS", block_text)
-#             # if m:
-#             #     unit_price = m.group()
-               
-#             m = re.search(r"\d{1,3}(?:,\d{3})*(?:\.\d+)?\s*/\s*KS", block_text, re.IGNORECASE)
-#             if m:
-#                 unit_price = m.group().replace(" ", "")
-#                 # print(f"Processing lot {vendor_product_lot}")
-#                 # print(f"Unit Price found: {unit_price}")
-
-
-#             m = re.search(r"Product Form:\s*(\w+)", block_text)
-#             if m:
-#                 product_form = m.group(1)
-
-#             m = re.search(r"Treatment:\s*(.+)", block_text)
-#             if m:
-#                 treatment = m.group(1).strip()
-
-#             m = re.search(r"Germ:\s*(\d+\.\d+)", block_text)
-#             if m:
-#                 germ = float(m.group(1))
-
-#             m = re.search(r"Germ Date:\s*(\d{2}/\d{2}/\d{2})", block_text)
-#             if m:
-#                 germ_date = m.group(1)
-
-#             if "Purity:" in block_text:
-#                 m = re.search(r"Seed Count:\s*([\d,]+)", block_text)
-#                 if m:
-#                     seed_count = int(m.group(1).replace(",", ""))
-
-#             m = re.search(r"Purity:\s*(\d+\.\d+)", block_text)
-#             if m:
-#                 purity = float(m.group(1))
-
-#             m = re.search(r"Seed Size:\s*([\w\.]+)", block_text)
-#             if m:
-#                 seed_size = m.group(1)
-
-#             # ─ pull out the second half of the description ────────────────
-#             if desc_part1 and block_text.startswith("Flc."):
-#                 part2 = re.sub(r"HM.*$", "", block_text.replace("Flc.", "")).strip()
-#                 desc_part2 = part2
-
-#         # only append if we actually found a number
-#         if vendor_item_number:
-#             full_desc = f"{desc_part1} {desc_part2}" if desc_part2 else desc_part1
-#             vendor_description = full_desc.strip()
-            
-#             line_items.append({
-#                 "VendorInvoiceNo":       vendor_invoice_no,
-#                 "PurchaseOrder":         po_number,
-#                 "VendorItemNumber":      vendor_item_number,
-#                 "VendorItemDescription": vendor_description,
-#                 "VendorBatchLot":        vendor_batch_lot,
-#                 "VendorProductLot":      vendor_product_lot,
-#                 "OriginCountry":         origin_country,
-#                 "UnitPrice":             unit_price,
-#                 "ProductForm":           product_form,
-#                 "Treatment":             treatment,
-#                 "Germ":                  germ,
-#                 "GermDate":              germ_date,
-#                 "SeedCount":             seed_count,
-#                 "Purity":                purity,
-#                 "SeedSize":              seed_size
-#             })
-#             print(f"Item: {line_items}")
-
-#     return line_items
+    return discounts
 
 def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
-    """
-    Extracts structured item-level invoice data from an HM Clause invoice PDF.
-    """
+    item_usage_counter.clear()
     doc = fitz.open(pdf_path)
     all_blocks = []
-    line_items = []
     vendor_invoice_no = None
     po_number = None
-    
-    # collect & sort all text blocks
+
+    # Collect & sort blocks
     for page in doc:
         page_text = page.get_text("text").strip()
-        # Skip pages that start with or contain the specified text (case-insensitive)
-        if page_text.lower().startswith("limitation of warranty and liability") or \
-           "limitation of warranty and liability" in page_text.lower():
+        if "limitation of warranty and liability" in page_text.lower():
             continue
         blocks = page.get_text("blocks")
         if not blocks or not any(b[4].strip() for b in blocks):
@@ -458,14 +328,14 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
         all_blocks.extend(sorted(blocks, key=lambda b: (b[1], b[0])))
         
     # Extract Invoice No. from blocks
-    for block in all_blocks[:30]:
+    for block in all_blocks:
         text = block[4].strip()
         m_invoice = re.search(r"Invoice No\.\s*(\d{8})", text, re.IGNORECASE)
         if m_invoice:
             vendor_invoice_no = m_invoice.group(1)
             break
-            
-        # Extract Purchase Order No. from blocks
+        
+    # Extract Purchase Order No. from blocks
     text = ""
     for block in all_blocks:
         
@@ -482,60 +352,33 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
                 po_number = f"PO-{m_po.group(1)}"
         if po_number:
             break
-    
-    # --- New variables to hold the *current* item's data ---
+
+    # --- Extract discounts FIRST ---
+    discount_amounts = extract_discounts(all_blocks)
+    discounts = []  # This will be the [(item_num, discount)] list we'll build
+
+    print("\nDISCOUNTS BEFORE MATCHING:", discounts)
+
+    line_items = []
     current_item_data = {}
     desc_part1 = ""
-    price_index = 0
-    upcharge_index = 0
-    discount_index = 0
-    quantity_index = 0
 
     def flush_item():
-        """Helper to append the current item to line_items and reset."""
         nonlocal current_item_data, desc_part1
         if "VendorBatchLot" in current_item_data and "VendorItemNumber" in current_item_data:
-            if "VendorItemDescription" not in current_item_data and desc_part1:
-                current_item_data["VendorItemDescription"] = desc_part1
-                
-            #if "TotalPrice" in current_item_data and "TotalQuantity" in current_item_data:
-            total_price = current_item_data.get("TotalPrice", 0.0)
-            total_upcharge = current_item_data.get("TotalUpcharge", 0.0)
-            total_discount = current_item_data.get("TotalDiscount", 0.0)
-            total_quantity = current_item_data.get("TotalQuantity", 0)
-            
-            # Ensure TotalUpcharge and TotalDiscount are treated as floats
-            total_upcharge = float(total_upcharge) if total_upcharge is not None else 0.0
-            total_discount = float(total_discount) if total_discount is not None else 0.0
-            
-            if total_quantity > 0:
-                current_item_data["USD_Actual_Cost_$"] = round(
-                    (total_price + total_upcharge - total_discount) / total_quantity, 4
-                )
-            else:
-                current_item_data["USD_Actual_Cost_$"] = None # Cannot calculate if quantity is zero    
-            
-            # # Compute USDActualCost if we got UnitPrice
-            # if "UnitPrice" in current_item_data:
-            #     up = current_item_data.get("UnitPrice", 0.0)
-            #     uc = float(current_item_data["Upcharge"]) if "Upcharge" in current_item_data else 0.0
-            #     dc = float(current_item_data["Discount"]) if "Discount" in current_item_data else 0.0
-
-            #     current_item_data["USD_Actual_Cost_$"] = round(up + uc - dc, 4)
-                    
             line_items.append({
                 "VendorInvoiceNo":       vendor_invoice_no,
                 "PurchaseOrder":         po_number,
                 "VendorItemNumber":      current_item_data.get("VendorItemNumber"),
-                "VendorItemDescription": current_item_data.get("VendorItemDescription", "").strip(),
+                "VendorItemDescription": current_item_data.get("VendorItemDescription", "").strip() or desc_part1,
                 "VendorBatchLot":        current_item_data.get("VendorBatchLot"),
                 "VendorProductLot":      current_item_data.get("VendorProductLot"),
                 "OriginCountry":         current_item_data.get("OriginCountry"),
                 "TotalPrice":            current_item_data.get("TotalPrice"),
                 "TotalUpcharge":         current_item_data.get("TotalUpcharge"),
-                "TotalDiscount":         current_item_data.get("TotalDiscount"),
+                "TotalDiscount":         None,  # matched later
                 "TotalQuantity":         current_item_data.get("TotalQuantity"),
-                "USD_Actual_Cost_$":     current_item_data.get("USD_Actual_Cost_$"),
+                "USD_Actual_Cost_$":     None,  # computed later
                 "ProductForm":           current_item_data.get("ProductForm"),
                 "Treatment":             current_item_data.get("Treatment"),
                 "Germ":                  current_item_data.get("Germ"),
@@ -543,175 +386,154 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
                 "SeedCount":             current_item_data.get("SeedCount"),
                 "Purity":                current_item_data.get("Purity"),
                 "SeedSize":              current_item_data.get("SeedSize"),
-                # purity‐analysis fields will get filled later
-                "PureSeed":     None,
-                "OtherCropSeed":None,
-                "InertMatter":  None,
-                "WeedSeed":     None
+                "PureSeed":              None,
+                "OtherCropSeed":         None,
+                "InertMatter":           None,
+                "WeedSeed":              None
             })
-        current_item_data = {} # Reset for the next item
-        desc_part1 = "" # Reset description part 1 as it's per-item
+            print(f"FLUSHED ITEM → VendorItemNumber: {current_item_data.get('VendorItemNumber')}, Batch: {current_item_data.get('VendorBatchLot')}")
+        current_item_data = {}
+        desc_part1 = ""
         
-    
-    prev_block = ""
-    next_block_text = ""
-    for i, b in enumerate(all_blocks):
-        if i + 1 < len(all_blocks):
-            next_block_text = all_blocks[i + 1][4].strip()
+    def is_disqualified(block_idx: int, all_blocks: List) -> bool:
+        block_text = all_blocks[block_idx][4].strip().lower()
+
+        disqualifiers = ["cust no.", "cust no", "freight charges", "freight"]
+
+        # Check current block text itself
+        if any(term in block_text for term in disqualifiers):
+            return True
+
+        # Check nearby lines (before and after)
+        nearby_texts = [
+            all_blocks[j][4].strip().lower()
+            for j in range(max(0, block_idx - 2), min(len(all_blocks), block_idx + 3))
+            if j != block_idx
+        ]
+        return any(any(term in text for term in disqualifiers) for text in nearby_texts)
+
+
+
+    # Parse all blocks
+    for b in all_blocks:
         block_text = b[4].strip()
         print(block_text)
 
-        # ─ New Item Trigger: VendorBatchLot ──────────────────────────────
-        m_batch_lot = re.fullmatch(r"[A-Z]\d{5}", block_text)
-        if m_batch_lot:
-            # If we've started collecting data for an item, flush it first
+        if re.fullmatch(r"[A-Z]\d{5}", block_text):  # Batch Lot
             if current_item_data:
                 flush_item()
-
-            current_item_data["VendorBatchLot"] = m_batch_lot.group()
-            # Reset flags for new item
-            looking_for_total_price = False
-            looking_for_total_upcharge = False
-            looking_for_total_discount = False
-            continue # Move to next block to find details for this new item
-
-        # Only process blocks if we are currently building an item
-        if not current_item_data:
+            current_item_data["VendorBatchLot"] = block_text
             continue
 
-        # --- Extract other details for the current item ---
-
-        # VendorItemNumber and first part of description
+        if not current_item_data:
+            continue
+        
         m = re.match(r"^(\d{6})\s+(.+)", block_text)
         if m:
+            if is_disqualified(all_blocks.index(b), all_blocks):
+                print(f"[SKIP] {block_text} near disqualifying context — not a VendorItemNumber")
+                continue
             current_item_data["VendorItemNumber"] = m.group(1)
             desc_part1 = m.group(2).strip()
             continue
 
-        # Bare 6-digit SKU (if description is on a separate line)
         if re.fullmatch(r"\d{6}", block_text):
+            if is_disqualified(all_blocks.index(b), all_blocks):
+                print(f"[SKIP] {block_text} near disqualifying context — not a VendorItemNumber")
+                continue
             current_item_data["VendorItemNumber"] = block_text
-            desc_part1 = ""  # wait for desc on next line
+            desc_part1 = ""
             continue
 
-        # Second part of description ("Flc." line)
         if desc_part1 and block_text.startswith("Flc."):
             part2 = re.sub(r"HM.*$", "", block_text.replace("Flc.", "")).strip()
-            full_desc = f"{desc_part1} {part2}".strip()
-            current_item_data["VendorItemDescription"] = full_desc
+            current_item_data["VendorItemDescription"] = f"{desc_part1} {part2}"
             continue
 
-        # Fallback: if we have desc_part1 but no Flc. or second half
-        if desc_part1 and "VendorItemDescription" not in current_item_data:
+        if "VendorItemDescription" not in current_item_data and desc_part1:
             current_item_data["VendorItemDescription"] = desc_part1
+            
+        # Financials
+        if "TotalPrice" not in current_item_data:
+            m_price = re.search(r"(?<!-)(\d[\d,]*\.\d{2})\s+N", block_text)
+            if m_price:
+                current_item_data["TotalPrice"] = float(m_price.group(1).replace(",", ""))
+        
+        if "TotalUpcharge" not in current_item_data:
+            m_upcharge = re.search(r"(\d[\d,]*\.\d{2})\s+Y", block_text)
+            if m_upcharge:
+                current_item_data["TotalUpcharge"] = float(m_upcharge.group(1).replace(",", ""))
 
-        # VendorProductLot
-        m_pl = re.search(r"\bPL\d{6}\b", block_text)
-        if m_pl and "VendorProductLot" not in current_item_data:
-            current_item_data["VendorProductLot"] = m_pl.group()
+        if "TotalQuantity" not in current_item_data:
+            m_qty = re.search(r"(\d+)\s*KS\b", block_text)
+            if m_qty:
+                qty = int(m_qty.group(1))
+                if qty > 0:
+                    current_item_data["TotalQuantity"] = qty
 
-        # OriginCountry
+        # Other attributes
+        if not current_item_data.get("VendorProductLot"):
+            m_pl = re.search(r"\bPL\d{6}\b", block_text)
+            if m_pl:
+                current_item_data["VendorProductLot"] = m_pl.group()
         m_oc = re.search(r"Country of origin:\s*([A-Z]{2})", block_text)
-        if m_oc and "OriginCountry" not in current_item_data:
-            current_item_data["OriginCountry"] = m_oc.group(1).strip()
-            
-        # # Upcharge: Only capture if we're inside an item block
-        # if current_item_data and "Upcharge" not in current_item_data and "upcharge" in block_text.lower():
-        #     # Try previous, current, and next lines for the value
-        #     for candidate in [prev_block, block_text, next_block_text]:
-        #         m_upc = re.search(r"(\d+\.\d{4})", candidate)
-        #         if m_upc:
-        #             current_item_data["Upcharge"] = float(m_upc.group(1))
-        #             break
-
-        # # Discount: Same idea
-        # if current_item_data and "Discount" not in current_item_data and "discount" in block_text.lower():
-        #     m_disc = re.search(r"(-?\d+\.\d{4})(?:\s*/?\s*KS)?", block_text)
-        #     if m_disc:
-        #         current_item_data["Discount"] = abs(float(m_disc.group(1)))  # make it positive for calculation
-
-
-        # # UnitPrice (Updated regex and logic)
-        # m_up = re.search(r"(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*/\s*KS", block_text, re.IGNORECASE)
-        # if m_up and "UnitPrice" not in current_item_data:
-        #     current_item_data["UnitPrice"] = float(m_up.group(1))
-
-        # ProductForm
+        if m_oc:
+            current_item_data["OriginCountry"] = m_oc.group(1)
         m_pf = re.search(r"Product Form:\s*(\w+)", block_text)
-        if m_pf and "ProductForm" not in current_item_data:
+        if m_pf:
             current_item_data["ProductForm"] = m_pf.group(1)
-
-        # Treatment
         m_tr = re.search(r"Treatment:\s*(.+)", block_text)
-        if m_tr and "Treatment" not in current_item_data:
+        if m_tr:
             current_item_data["Treatment"] = m_tr.group(1).strip()
-
-        # Germ
-        m_g  = re.search(r"Germ:\s*(\d+\.\d+)", block_text)
-        if m_g and "Germ" not in current_item_data:
-            current_item_data["Germ"] = float(m_g.group(1))
-
-        # GermDate
+        m_g = re.search(r"Germ:\s*(\d+\.\d+)", block_text)
+        if m_g:
+            current_item_data["Germ"] = int(float((m_g.group(1))))
         m_gd = re.search(r"Germ Date:\s*(\d{2}/\d{2}/\d{2})", block_text)
-        if m_gd and "GermDate" not in current_item_data:
+        if m_gd:
             current_item_data["GermDate"] = m_gd.group(1)
-
-        # SeedCount
-        if "Purity:" in block_text and "SeedCount" not in current_item_data: # Often on the same line as purity
-            m_sc = re.search(r"Seed Count:\s*([\d,]+)", block_text)
-            if m_sc:
-                current_item_data["SeedCount"] = int(m_sc.group(1).replace(",", ""))
-
-        # Purity
+        m_sc = re.search(r"Seed Count:\s*([\d,]+)", block_text)
+        if m_sc:
+            current_item_data["SeedCount"] = int(m_sc.group(1).replace(",", ""))
         m_pr = re.search(r"Purity:\s*(\d+\.\d+)", block_text)
-        if m_pr and "Purity" not in current_item_data:
+        if m_pr:
             current_item_data["Purity"] = float(m_pr.group(1))
-
-        # SeedSize
         m_sz = re.search(r"Seed Size:\s*([\w\.]+)", block_text)
-        if m_sz and "SeedSize" not in current_item_data:
+        if m_sz:
             current_item_data["SeedSize"] = m_sz.group(1)
-            
-        # --- Extraction of Total Price, Upcharge, Discount, Quantity ---
-        # We look for a 2-decimal float followed by an "N" (for Total Price/Discount) or "Y" (for Upcharge)
-        # and then the quantity.
 
-        # Total Quantity: Look for non-zero integer with "KS" or " KS" at the end (not /KS)
-        # It's usually near the Amount and N/Y indicator.
-        m_qty = re.search(r"(\d+)\s*(?:KS)", block_text)
-        if m_qty and "TotalQuantity" not in current_item_data:
-            qty_str = m_qty.group(1)
-            # Ensure it's not part of a unit price, e.g., "56.8710/KS"
-            if "/KS" not in block_text:
-                current_item_data["TotalQuantity"] = int(qty_str)
-                # print(f"Found TotalQuantity: {current_item_data['TotalQuantity']} in block: {block_text}")
-
-
-        # Look for Total Price / Upcharge / Discount based on the line immediately following the numerical value
-        # This assumes the amount and its N/Y indicator are on consecutive blocks or lines within a block
-        m_value = re.search(r"(-?\d+\.\d{2})", block_text) # Matches 2 decimal places exactly
-        if m_value:
-            value = float(m_value.group(1))
-            
-            # Check the next block's text for 'N' or 'Y'
-            next_block_text = ""
-            if i + 1 < len(all_blocks):
-                next_block_text = all_blocks[i+1][4].strip().upper()
-            
-            if "N" in next_block_text:
-                if value >= 0 and "TotalPrice" not in current_item_data:
-                    current_item_data["TotalPrice"] = value
-                elif value < 0 and "TotalDiscount" not in current_item_data:
-                    current_item_data["TotalDiscount"] = abs(value) # Store as positive
-            elif "Y" in next_block_text and "TotalUpcharge" not in current_item_data:
-                current_item_data["TotalUpcharge"] = value
-            
-        #prev_block = block_text
-
-    # --- After the loop, flush the last collected item ---
     flush_item()
     
+    # Maintain a per-item occurrence counter
+    item_counter = defaultdict(int)
+    discounts_by_item = defaultdict(list)
+
+    for item_num, amount in discount_amounts:
+        discounts_by_item[item_num].append(amount)
+
+    for item in line_items:
+        item_num = item.get("VendorItemNumber")
+        
+        # Get current occurrence index for this item
+        occurrence_idx = item_counter[item_num]
+        item_counter[item_num] += 1
+        
+        # Assign discount if available for this occurrence
+        if occurrence_idx < len(discounts_by_item[item_num]):
+            item["TotalDiscount"] = discounts_by_item[item_num][occurrence_idx]
+        else:
+            item["TotalDiscount"] = None  # fallback
+
+
+
+        # Calculate actual cost
+        tp = item.get("TotalPrice") or 0.0
+        tu = item.get("TotalUpcharge") or 0.0
+        td = item["TotalDiscount"] or 0.0
+        qty = item.get("TotalQuantity") or 0
+        item["USD_Actual_Cost_$"] = round(((tp + tu - td) / qty), 4) if qty > 0 else None
+
     return line_items
+
 
 def extract_hm_clause_data(pdf_path: str) -> List[Dict]:
     folder = os.path.dirname(pdf_path)

@@ -889,11 +889,14 @@
 
           const json = await res.json();
           if (json.status === 'success') {
+            card.style.border = '2px solid green';
             alert(`✅ Created Lot for Vendor Lot No.:${data.VendorLotNo} and Item No.:(${data.BCItemNo})`);
           } else {
+            card.style.border = '2px solid red';
             alert(`❌ Error: ${json.message}`);
           }
         } catch (err) {
+          card.style.border = '2px solid red';
           alert(`❌ Network error: ${err.message}`);
         }
       }

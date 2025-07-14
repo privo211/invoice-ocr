@@ -321,7 +321,7 @@
   <div class="header container-fluid">
     <div class="d-flex align-items-center">
       <img id="stokes-logo" src="{{ url_for('static', filename='stokes_logo_rect.png') }}" alt="Stokes Logo" style="max-height: 50px; margin-right: 1rem;">
-      <h2 class="m-0">HM Clause: Extracted Invoice Data (DEV)</h2>
+      <h2 class="m-0">HM Clause: Extracted Invoice Data</h2>
     </div>
     <div class="auth-section">
       <button id="theme-toggle" class="btn-theme me-2">Dark Mode</button>
@@ -423,14 +423,14 @@
 
                   <dt class="col-sm-4">Vendor Lot No.</dt>
                   <dd class="col-sm-8">
-                    <div class="field-box" data-field="VendorProductLot" contenteditable="true">
+                    <div class="field-box" data-field="VendorLotNo" contenteditable="true">
                       {{ item.VendorProductLot }}
                     </div>
                   </dd>
                   
                   <dt class="col-sm-4">Vendor Batch No.</dt>
                   <dd class="col-sm-8">
-                    <div class="field-box" data-field="VendorBatchLot" contenteditable="true">{{ item.VendorBatchLot or '' }}</div>
+                    <div class="field-box" data-field="VendorBatchNo" contenteditable="true">{{ item.VendorBatchLot or '' }}</div>
                   </dd>
                   
                   <dt class="col-sm-4">Country of Origin</dt>
@@ -720,7 +720,12 @@
       //if (!proceed) return;
 
       for (const card of cards) {
+        // Prompt user
+        const name = card.querySelector('.item-header')?.textContent.trim();
+        if (!confirm(`Create this lot?\n\n${name}`)) continue;
+
         let bcItemNo = getFieldValue(card, 'BCItemNo');
+
         if (bcItemNo === 'Other') {
           const itemIdx = card.dataset.itemIdx;
           const manualInput = document.getElementById(`bc-input-${itemIdx}`);
@@ -729,17 +734,27 @@
 
         const data = {
           BCItemNo:           bcItemNo,
-          VendorLotNo:        getFieldValue(card, 'VendorBatchLot'),
-          OriginCountry:      getFieldValue(card, 'OriginCountry'),
           TreatmentsDescription:  getFieldValue(card, 'TreatmentsDescription'),
           TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
-          SeedSize:           getFieldValue(card, 'SeedSize'),
-          SeedCount:          getFieldValue(card, 'SeedCount'),
+          VendorLotNo:        getFieldValue(card, 'VendorLotNo'),
+          VendorBatchLot:   getFieldValue(card, 'VendorBatchNo'),
+          OriginCountry:      getFieldValue(card, 'OriginCountry'),
           CurrentGerm:        getFieldValue(card, 'Germ'),
           CurrentGermDate:    getFieldValue(card, 'GermDate'),
+          SeedSize:           getFieldValue(card, 'SeedSize'),
+          SeedCount:          getFieldValue(card, 'SeedCount'),
+          USD_Actual_Cost_$: getFieldValue(card, 'USD_Actual_Cost_$'),
+          GrowerGerm:        getFieldValue(card, 'GrowerGerm'),
+          GrowerGermDate:    getFieldValue(card, 'GrowerGermDate'),
           Purity:             getFieldValue(card, 'Purity'),
           Inert:              getFieldValue(card, 'Inert'),
           PackageDescription: getFieldValue(card, 'PackageDescription'),
+          VendorItemNumber: getFieldValue(card, 'VendorItemNumber'),
+          VendorDescription: getFieldValue(card, 'VendorDescription'),
+          TotalQuantity:     getFieldValue(card, 'TotalQuantity'),
+          TotalPrice:        getFieldValue(card, 'TotalPrice'),
+          TotalUpcharge:     getFieldValue(card, 'TotalUpcharge'),
+          TotalDiscount:     getFieldValue(card, 'TotalDiscount')
         };
         
         if (!data.BCItemNo || !data.VendorLotNo) {

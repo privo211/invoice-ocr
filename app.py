@@ -439,6 +439,7 @@ def index():
             
             # 5. Enrich each item with PO options and package description
             for item in all_items_flat:
+                print(f"FINAL ITEM {item['VendorItemNumber']}: TotalDiscount = {item.get('TotalDiscount')}")
                 # Add BCOptions if the item has a PO (matches Sakata logic)
                 if item.get("PurchaseOrder"):
                     item["BCOptions"] = po_items_for_all
@@ -473,10 +474,7 @@ def index():
 @login_required
 @timed_func("create_lot")
 def create_lot():
-    # global lot_counter
-    
-    
-    
+
     # Silent MSAL refresh on every create_lot call
     cache = load_cache()
     msal_app = build_msal_app(cache)
@@ -502,7 +500,7 @@ def create_lot():
         return redirect(url_for("sign_in"))
     
     data = request.get_json()
-    
+    print(f"Received data for lot creation: {data}")
     def parse_decimal(val):
         s = str(val or "").strip()
         if not s or s.lower() == "none":
@@ -521,6 +519,7 @@ def create_lot():
     # Null-guard all inputs
     item_no     = str(data.get("BCItemNo", "")).strip() or None
     vendor_lot  = str(data.get("VendorLotNo", "")).strip() or None
+    vendor_batch = str(data.get("VendorBatchLot", "")).strip() or None
     country     = str(data.get("OriginCountry", "")).strip() or None
     td1         = str(data.get("TreatmentsDescription", "")).strip() or None
     td2_text    = str(data.get("TreatmentsDescription2", "")).strip() or None
@@ -539,14 +538,26 @@ def create_lot():
     raw_date = data.get("CurrentGermDate", "").strip()
     raw_grower_date = data.get("GrowerGermDate", "").strip()
     
-    germ_date_iso = (
-        datetime.strptime(raw_date, "%m/%d/%Y").date().isoformat()
-        if raw_date else None
-    )
-    grower_germ_date_iso = (
-        datetime.strptime(raw_grower_date, "%m/%d/%Y").date().isoformat()
-        if raw_grower_date else None
-    )
+    def normalize_date(raw):
+        try:
+            if re.match(r"\d{2}/\d{2}/\d{2}$", raw):  # e.g., 04/22/25
+                raw = re.sub(r"/(\d{2})$", lambda m: f"/20{m.group(1)}", raw)
+            return datetime.strptime(raw, "%m/%d/%Y").date().isoformat()
+        except Exception:
+            return None
+
+    germ_date_iso = normalize_date(raw_date)
+    grower_germ_date_iso = normalize_date(raw_grower_date)
+
+    
+    # germ_date_iso = (
+    #     datetime.strptime(raw_date, "%m/%d/%Y").date().isoformat()
+    #     if raw_date else None
+    # )
+    # grower_germ_date_iso = (
+    #     datetime.strptime(raw_grower_date, "%m/%d/%Y").date().isoformat()
+    #     if raw_grower_date else None
+    # )
 
     treated = "Yes" if td1 and td1.lower() != "untreated" else "No"
     
@@ -562,6 +573,7 @@ def create_lot():
         "Item_No":                     item_no,
         "Lot_No":                      lot_no,
         "TMG_Vendor_Lot_No":           vendor_lot,
+        "TMG_Vendor_Batch_No":         vendor_batch,
         "TMG_Country_Of_Origin":       country,
         "TMG_Treatment_Description":   td1,
         "TMG_Treatment_Description_2": td2,
