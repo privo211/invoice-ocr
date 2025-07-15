@@ -53,6 +53,59 @@ def extract_text_with_azure_ocr(pdf_path: str) -> List[str]:
             raise RuntimeError("OCR analysis failed")
     raise TimeoutError("OCR timed out")
 
+def extract_discounts_from_ocr_lines(lines: List[str]) -> Dict[str, List[float]]:
+    """
+    Extracts a mapping from VendorItemNumber to a list of discount amounts.
+    """
+    discounts_by_item = defaultdict(list)
+    prev_discount = None
+
+    for i, line in enumerate(lines):
+        # Detect regular discount line
+        if "discount" in line.lower():
+            discount_amount = None
+            item_number = None
+
+            for j in range(i - 1, max(i - 6, -1), -1):
+                m = re.search(r"-[\d,]+\.\d{2}", lines[j])
+                if m:
+                    discount_amount = abs(float(m.group().replace(",", "")))
+                    break
+
+            for j in range(i - 1, max(i - 6, -1), -1):
+                m = re.match(r"^(\d{6})\b", lines[j])
+                if m:
+                    item_number = m.group(1)
+                    break
+
+            if item_number and discount_amount:
+                current = (item_number, discount_amount)
+                if current != prev_discount:
+                    discounts_by_item[item_number].append(discount_amount)
+                    prev_discount = current
+
+        # Detect Discount-Pack Size special case
+        if "discount-pack size" in line.lower():
+            # Look backward for VendorItemNumber
+            item_number = None
+            for j in range(i - 1, max(i - 6, -1), -1):
+                m = re.match(r"^(\d{6})\b", lines[j])
+                if m:
+                    item_number = m.group(1)
+                    break
+
+            # Look forward for discount value
+            for j in range(i + 1, min(i + 6, len(lines))):
+                discount_line = lines[j].strip()
+                m_disc = re.search(r"-([\d,]+\.\d{2})\s+N", discount_line)
+                if m_disc and item_number:
+                    discount_value = float(m_disc.group(1).replace(",", ""))
+                    discounts_by_item[item_number].append(discount_value)
+                    print(f"FOUND PACK SIZE DISCOUNT: {discount_value} for item {item_number}")
+                    break
+
+    return discounts_by_item
+
 def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
     """
     Parses Azure-OCR lines into the same per-item dicts that the searchable-PDF logic produces.
@@ -63,7 +116,8 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
     desc_part1 = ""
     vendor_invoice_no = None
     po_number = None
-    
+    discounts_by_item = extract_discounts_from_ocr_lines(lines)
+
     # Extract Invoice No. (8-digit number after "Invoice No.")
     for line in lines:
         m_invoice = re.search(r"Invoice No\.\s*(\d{8})", line, re.IGNORECASE)
@@ -89,7 +143,11 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
                 "VendorBatchLot":        current.get("VendorBatchLot"),
                 "VendorProductLot":      current.get("VendorProductLot"),
                 "OriginCountry":         current.get("OriginCountry"),
-                "Discount":              current.get("Discount"),
+                "TotalPrice":            current.get("TotalPrice"),
+                "TotalUpcharge":         current.get("TotalUpcharge"),
+                "TotalDiscount":         None,  # matched later
+                "TotalQuantity":         current.get("TotalQuantity"),
+                "USD_Actual_Cost_$":     None,  # computed later
                 "ProductForm":           current.get("ProductForm"),
                 "Treatment":             current.get("Treatment"),
                 "Germ":                  current.get("Germ"),
@@ -107,6 +165,7 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
 
     for i, raw in enumerate(lines):
         line = raw.strip()
+        print(line)
         
         # — new item trigger: 6 digits + inline description — must go first
         m2 = re.match(r"^(\d{6})\s+(.+)$", line)
@@ -203,9 +262,66 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
             m_sz = re.search(r"Seed Size:\s*([\w\.]+)", line)
             if m_sz:
                 current["SeedSize"] = m_sz.group(1)
+                
+        # Financials
+        if "TotalPrice" not in current:
+            m_price = re.search(r"(?<!-)(\d[\d,]*\.\d{2})\s+N", line)
+            if m_price:
+                current["TotalPrice"] = float(m_price.group(1).replace(",", ""))
+        
+        if "TotalUpcharge" not in current:
+            # Check upcharge on the current line
+            m_upcharge = re.search(r"(\d[\d,]*\.\d{2})\s+Y", line)
+            if m_upcharge:
+                current["TotalUpcharge"] = float(m_upcharge.group(1).replace(",", ""))
+            else:
+                # If not found, check if next line is just "Y"
+                if i + 1 < len(lines) and lines[i + 1].strip() == "Y":
+                    m_val = re.search(r"(\d[\d,]*\.\d{2})", line)
+                    if m_val:
+                        current["TotalUpcharge"] = float(m_val.group(1).replace(",", ""))
+                # If not found, check if previous line is just ">"
+                elif i > 0 and lines[i - 1].strip() == ">" and re.search(r"\d[\d,]*\.\d{2}", line):
+                    m_val = re.search(r"\d[\d,]*\.\d{2}", line)
+                    if m_val:
+                        current["TotalUpcharge"] = float(m_val.group(0).replace(",", ""))
+
+        if "TotalQuantity" not in current:
+            m_qty = re.search(r"(\d+)\s*KS\b", line)
+            if m_qty:
+                qty = int(m_qty.group(1))
+                if qty > 0:
+                    current["TotalQuantity"] = qty
 
     # flush the final item
     flush_item()
+    
+    # Assign discounts
+    item_counter = defaultdict(int)
+    for item in line_items:
+        item_num = item.get("VendorItemNumber")
+        if not item_num:
+            continue
+
+        occurrence_idx = item_counter[item_num]
+        item_counter[item_num] += 1
+
+        if occurrence_idx < len(discounts_by_item[item_num]):
+            item["TotalDiscount"] = discounts_by_item[item_num][occurrence_idx]
+        else:
+            item["TotalDiscount"] = None
+
+    
+    # Final cost calculation
+    for item in line_items:
+        tp = item.get("TotalPrice") or 0.0
+        tu = item.get("TotalUpcharge") or 0.0
+        td = item.get("TotalDiscount") or 0.0
+        qty = item.get("TotalQuantity")
+        if qty is None:
+            qty = 0
+        item["USD_Actual_Cost_$"] = round(((tp + tu - td) / qty), 4) if qty > 0 else None
+
     return line_items
 
 def extract_purity_analysis_reports(input_folder: str) -> Dict[str, Dict]:
@@ -277,6 +393,7 @@ def extract_discounts(blocks: List) -> List[Tuple[str, float]]:
     for i, b in enumerate(blocks):
         block_text = b[4].strip()
         print(block_text)
+        
         if "discount" in block_text.lower():
 
             discount_amount = None
@@ -357,7 +474,7 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
     discount_amounts = extract_discounts(all_blocks)
     discounts = []  # This will be the [(item_num, discount)] list we'll build
 
-    print("\nDISCOUNTS BEFORE MATCHING:", discounts)
+    # print("\nDISCOUNTS BEFORE MATCHING:", discounts)
 
     line_items = []
     current_item_data = {}
@@ -391,7 +508,7 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
                 "InertMatter":           None,
                 "WeedSeed":              None
             })
-            print(f"FLUSHED ITEM → VendorItemNumber: {current_item_data.get('VendorItemNumber')}, Batch: {current_item_data.get('VendorBatchLot')}, Seed Count: {current_item_data.get('SeedCount')}")
+            #print(f"FLUSHED ITEM → VendorItemNumber: {current_item_data.get('VendorItemNumber')}, Batch: {current_item_data.get('VendorBatchLot')}, Seed Count: {current_item_data.get('SeedCount')}")
         current_item_data = {}
         desc_part1 = ""
         
@@ -430,7 +547,7 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
         m = re.match(r"^(\d{6})\s+(.+)", block_text)
         if m:
             if is_disqualified(all_blocks.index(b), all_blocks):
-                print(f"[SKIP] {block_text} near disqualifying context — not a VendorItemNumber")
+                #print(f"[SKIP] {block_text} near disqualifying context — not a VendorItemNumber")
                 continue
             current_item_data["VendorItemNumber"] = m.group(1)
             desc_part1 = m.group(2).strip()
@@ -438,7 +555,7 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
 
         if re.fullmatch(r"\d{6}", block_text):
             if is_disqualified(all_blocks.index(b), all_blocks):
-                print(f"[SKIP] {block_text} near disqualifying context — not a VendorItemNumber")
+                #print(f"[SKIP] {block_text} near disqualifying context — not a VendorItemNumber")
                 continue
             current_item_data["VendorItemNumber"] = block_text
             desc_part1 = ""
