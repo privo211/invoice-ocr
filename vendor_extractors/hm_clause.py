@@ -227,7 +227,6 @@ def extract_purity_analysis_reports(input_folder: str) -> Dict[str, Dict]:
 
             text = text.replace('\n', ' ')
             text = re.sub(r'\s{2,}', ' ', text)
-            #print(text)
 
             match_pure = re.search(r"Pure Seed:\s*(\d+\.\d+)\s*%", text)
             match_other = re.search(r"Other Crop Seed\s*:\s*(\d+\.\d+)\s*%", text)
@@ -277,6 +276,7 @@ def extract_discounts(blocks: List) -> List[Tuple[str, float]]:
     
     for i, b in enumerate(blocks):
         block_text = b[4].strip()
+        print(block_text)
         if "discount" in block_text.lower():
 
             discount_amount = None
@@ -391,7 +391,7 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
                 "InertMatter":           None,
                 "WeedSeed":              None
             })
-            print(f"FLUSHED ITEM → VendorItemNumber: {current_item_data.get('VendorItemNumber')}, Batch: {current_item_data.get('VendorBatchLot')}")
+            print(f"FLUSHED ITEM → VendorItemNumber: {current_item_data.get('VendorItemNumber')}, Batch: {current_item_data.get('VendorBatchLot')}, Seed Count: {current_item_data.get('SeedCount')}")
         current_item_data = {}
         desc_part1 = ""
         
@@ -417,7 +417,6 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
     # Parse all blocks
     for b in all_blocks:
         block_text = b[4].strip()
-        print(block_text)
 
         if re.fullmatch(r"[A-Z]\d{5}", block_text):  # Batch Lot
             if current_item_data:
@@ -476,27 +475,36 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
             m_pl = re.search(r"\bPL\d{6}\b", block_text)
             if m_pl:
                 current_item_data["VendorProductLot"] = m_pl.group()
+                
         m_oc = re.search(r"Country of origin:\s*([A-Z]{2})", block_text)
         if m_oc:
             current_item_data["OriginCountry"] = m_oc.group(1)
+            
         m_pf = re.search(r"Product Form:\s*(\w+)", block_text)
         if m_pf:
             current_item_data["ProductForm"] = m_pf.group(1)
+            
         m_tr = re.search(r"Treatment:\s*(.+)", block_text)
         if m_tr:
             current_item_data["Treatment"] = m_tr.group(1).strip()
+            
         m_g = re.search(r"Germ:\s*(\d+\.\d+)", block_text)
         if m_g:
             current_item_data["Germ"] = int(float((m_g.group(1))))
+            
         m_gd = re.search(r"Germ Date:\s*(\d{2}/\d{2}/\d{2})", block_text)
         if m_gd:
             current_item_data["GermDate"] = m_gd.group(1)
-        m_sc = re.search(r"Seed Count:\s*([\d,]+)", block_text)
+        
+        m_sc = re.search(r"(?<!Approx\.\s)Seed Count:\s*(\d+)", block_text)
         if m_sc:
-            current_item_data["SeedCount"] = int(m_sc.group(1).replace(",", ""))
+            current_item_data["SeedCount"] = int(m_sc.group(1))
+
+
         m_pr = re.search(r"Purity:\s*(\d+\.\d+)", block_text)
         if m_pr:
             current_item_data["Purity"] = float(m_pr.group(1))
+            
         m_sz = re.search(r"Seed Size:\s*([\w\.]+)", block_text)
         if m_sz:
             current_item_data["SeedSize"] = m_sz.group(1)
@@ -522,8 +530,6 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
             item["TotalDiscount"] = discounts_by_item[item_num][occurrence_idx]
         else:
             item["TotalDiscount"] = None  # fallback
-
-
 
         # Calculate actual cost
         tp = item.get("TotalPrice") or 0.0

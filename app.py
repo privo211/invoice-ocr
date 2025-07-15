@@ -549,16 +549,6 @@ def create_lot():
     germ_date_iso = normalize_date(raw_date)
     grower_germ_date_iso = normalize_date(raw_grower_date)
 
-    
-    # germ_date_iso = (
-    #     datetime.strptime(raw_date, "%m/%d/%Y").date().isoformat()
-    #     if raw_date else None
-    # )
-    # grower_germ_date_iso = (
-    #     datetime.strptime(raw_grower_date, "%m/%d/%Y").date().isoformat()
-    #     if raw_grower_date else None
-    # )
-
     treated = "Yes" if td1 and td1.lower() != "untreated" else "No"
     
     if raw_sprout:
