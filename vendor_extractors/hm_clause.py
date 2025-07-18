@@ -529,8 +529,6 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
         ]
         return any(any(term in text for term in disqualifiers) for text in nearby_texts)
 
-
-
     # Parse all blocks
     for b in all_blocks:
         block_text = b[4].strip()

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>HM Clause: Extracted Invoice Data</title>
+  <title>Seminis: Extracted Invoice Data</title>
   <link
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
     rel="stylesheet"
@@ -236,7 +236,7 @@
   <div class="header container-fluid">
     <div class="d-flex align-items-center">
       <img id="stokes-logo" src="{{ url_for('static', filename='stokes_logo_rect.png') }}" alt="Stokes Logo" style="max-height: 50px; margin-right: 1rem;">
-      <h2 class="m-0">HM Clause: Extracted Invoice Data</h2>
+      <h2 class="m-0">Seminis: Extracted Invoice Data (BETA)</h2>
     </div>
     <div class="auth-section">
       <button id="theme-toggle" class="btn-theme me-2">Dark Mode</button>
@@ -253,13 +253,13 @@
   <div class="container">
     {% if items %}
       {% for filename, item_list in items.items() %}
-        <h3>📄 {{ filename }} - Vendor Invoice No.: {{ item_list[0].VendorInvoiceNo or 'N/A' }}</h3>
+        <h3>📄 {{ filename }}   -   Vendor Invoice No.: {{ item_list[0].VendorInvoiceNo or 'N/A' }}</h3>
         <div class="row row-cols-1 row-cols-md-2 g-4">
           {% for item in item_list %}
             {% set item_idx = loop.index0 %}
             <div class="col">
               <div class="card h-100 p-3" data-item-idx="{{ item_idx }}">
-                <div class="item-header">{{ item.VendorItemNumber }} – {{ item.VendorItemDescription }}</div>
+                <div class="item-header">{{ item.VendorItemDescription }}</div>
                 <dl class="row">
                   <dt class="col-sm-4">Search Purchase Order</dt>
                   <dd class="col-sm-8">
@@ -285,14 +285,7 @@
                   <dt class="col-sm-4">Vendor Treatment</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="Treatment" contenteditable="true">
-                      {{ item.Treatment }}
-                    </div>
-                  </dd>
-                  
-                  <dt class="col-sm-4">Vendor Product Form</dt>
-                  <dd class="col-sm-8">
-                    <div class="field-box" data-field="ProductForm" contenteditable="true">
-                      {{ item.ProductForm }}
+                      {{ item.Treatment or '' }}
                     </div>
                   </dd>
 
@@ -339,13 +332,13 @@
                   <dt class="col-sm-4">Vendor Lot No.</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="VendorLotNo" contenteditable="true">
-                      {{ item.VendorProductLot }}
+                      {{ item.VendorLot or '' }}
                     </div>
                   </dd>
                   
                   <dt class="col-sm-4">Vendor Batch No.</dt>
                   <dd class="col-sm-8">
-                    <div class="field-box" data-field="VendorBatchNo" contenteditable="true">{{ item.VendorBatchLot or '' }}</div>
+                    <div class="field-box" data-field="VendorBatchNo" contenteditable="true">{{ item.VendorBatch or '' }}</div>
                   </dd>
                   
                   <dt class="col-sm-4">Country of Origin</dt>
@@ -360,56 +353,18 @@
                       {% for desc in pkg_descs %}<option value="{{ desc }}" {% if item.PackageDescription == desc %}selected{% endif %}>{{ desc }}</option>{% endfor %}
                     </select>
                   </dd>
-                  
-                  <dt class="col-sm-4">Current Germ</dt>
-                  <dd class="col-sm-8">
-                    <div class="field-box" data-field="Germ" contenteditable="true">{{ item.Germ or '' }}</div>
-                  </dd>
-                  
-                  <dt class="col-sm-4">Current Germ Date</dt>
-                  <dd class="col-sm-8">
-                    <div class="field-box" data-field="GermDate" contenteditable="true">{{ item.GermDate or '' }}</div>
-                  </dd>
 
-                  <dt class="col-sm-4">Seed Size</dt>
+                  <dt class="col-sm-4">Total Price</dt>
                   <dd class="col-sm-8">
-                    <div class="field-box" data-field="SeedSize" contenteditable="true">
-                      {{ item.SeedSize }}
-                    </div>
-                  </dd>
-
-                  <dt class="col-sm-4">Seed Count</dt>
-                  <dd class="col-sm-8">
-                    <div class="field-box" data-field="SeedCount" contenteditable="true">
-                      {{ item.SeedCount }}
+                    <div class="field-box" data-field="TotalPrice" contenteditable="true">
+                      {{ item.TotalPrice or '' }}
                     </div>
                   </dd>
 
                   <dt class="col-sm-4">Total Quantity</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="TotalQuantity" contenteditable="true">
-                      {{ item.TotalQuantity }}
-                    </div>
-                  </dd>
-
-                  <dt class="col-sm-4">Total Price</dt>
-                  <dd class="col-sm-8">
-                    <div class="field-box" data-field="TotalPrice" contenteditable="true">
-                      {{ item.TotalPrice }}
-                    </div>
-                  </dd>
-
-                  <dt class="col-sm-4">Total Upcharge</dt>
-                  <dd class="col-sm-8">
-                    <div class="field-box" data-field="TotalUpcharge" contenteditable="true">
-                      {{ item.TotalUpcharge }}
-                    </div>
-                  </dd>
-
-                  <dt class="col-sm-4">Total Discount</dt>
-                  <dd class="col-sm-8">
-                    <div class="field-box" data-field="TotalDiscount" contenteditable="true">
-                      {{ item.TotalDiscount }}
+                      {{ item.TotalQuantity or '' }}
                     </div>
                   </dd>
 
@@ -420,25 +375,44 @@
                     </div>
                   </dd>
 
+                  <div class="analysis-header mt-2">Packing List Data:</div>
+
+                  <dt class="col-sm-4">Current Germ</dt>
+                  <dd class="col-sm-8">
+                    <div class="field-box" data-field="Germ" contenteditable="true">{{ item.PackingGerm or '' }}</div>
+                  </dd>
+                  
+                  <dt class="col-sm-4">Current Germ Date</dt>
+                  <dd class="col-sm-8">
+                    <div class="field-box" data-field="GermDate" contenteditable="true">{{ item.PackingGermDate or '' }}</div>
+                  </dd>
+
+                  <dt class="col-sm-4">Seed Count</dt>
+                  <dd class="col-sm-8">
+                    <div class="field-box" data-field="SeedCount" contenteditable="true">
+                      {{ item.SeedCountPerLB or '' }}
+                    </div>
+                  </dd>
+
                   <div class="analysis-header mt-2">Seed Analysis Report Data:</div>
                   
                   <dt class="col-sm-4">Grower Germ</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="GrowerGerm" contenteditable="true">
-                      {{ item.GrowerGerm }}
+                      {{ item.Germ or '' }}
                     </div>
                   </dd>
 
                   <dt class="col-sm-4">Grower Germ Date</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="GrowerGermDate" contenteditable="true">
-                      {{ item.GrowerGermDate }}
+                      {{ item.GermDate or '' }}
                     </div>
                   </dd>
 
                   <dt class="col-sm-4">Purity</dt>
                   <dd class="col-sm-8">
-                    <div class="field-box" data-field="Purity" contenteditable="true">{{ item.PureSeed or '' }}</div>
+                    <div class="field-box" data-field="Purity" contenteditable="true">{{ item.Purity or '' }}</div>
                   </dd>
                 
                   <dt class="col-sm-4">Inert</dt>
@@ -577,11 +551,6 @@
             otherEl.value = 'Other';
             otherEl.textContent = 'Other';
             select.append(otherEl);
-            
-            //opts.forEach(o => {
-              //select.options.add(new Option(`${o.No} — ${o.Description}`, o.No));
-            //});
-            //select.options.add(new Option('Other', 'Other'));
 
             toggleManualBcInput(select);
 
@@ -630,11 +599,8 @@
       const cards = document.querySelectorAll('.card');
       if (cards.length === 0) return alert("No items found to create.");
       
-      //const proceed = confirm(`This will attempt to create ${cards.length} lot(s) in Business Central. Continue?`);
-      //if (!proceed) return;
-
       for (const card of cards) {
-        // Prompt user
+        // Prompt user to confirm creation for each lot
         const name = card.querySelector('.item-header')?.textContent.trim();
         if (!confirm(`Create this lot?\n\n${name}`)) continue;
 
@@ -647,28 +613,23 @@
         }
 
         const data = {
-          BCItemNo:           bcItemNo,
+          BCItemNo:               bcItemNo,
           TreatmentsDescription:  getFieldValue(card, 'TreatmentsDescription'),
           TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
-          VendorLotNo:        getFieldValue(card, 'VendorLotNo'),
-          VendorBatchLot:   getFieldValue(card, 'VendorBatchNo'),
-          OriginCountry:      getFieldValue(card, 'OriginCountry'),
-          CurrentGerm:        getFieldValue(card, 'Germ'),
-          CurrentGermDate:    getFieldValue(card, 'GermDate'),
-          SeedSize:           getFieldValue(card, 'SeedSize'),
-          SeedCount:          getFieldValue(card, 'SeedCount'),
-          USD_Actual_Cost_$: getFieldValue(card, 'USD_Actual_Cost_$'),
-          GrowerGerm:        getFieldValue(card, 'GrowerGerm'),
-          GrowerGermDate:    getFieldValue(card, 'GrowerGermDate'),
-          Purity:             getFieldValue(card, 'Purity'),
-          Inert:              getFieldValue(card, 'Inert'),
-          PackageDescription: getFieldValue(card, 'PackageDescription'),
-          VendorItemNumber: getFieldValue(card, 'VendorItemNumber'),
-          VendorDescription: getFieldValue(card, 'VendorDescription'),
-          TotalQuantity:     getFieldValue(card, 'TotalQuantity'),
-          TotalPrice:        getFieldValue(card, 'TotalPrice'),
-          TotalUpcharge:     getFieldValue(card, 'TotalUpcharge'),
-          TotalDiscount:     getFieldValue(card, 'TotalDiscount')
+          VendorLotNo:            getFieldValue(card, 'VendorLotNo'),
+          VendorBatchLot:         getFieldValue(card, 'VendorBatchNo'),
+          OriginCountry:          getFieldValue(card, 'OriginCountry'),
+          CurrentGerm:            getFieldValue(card, 'Germ'),
+          CurrentGermDate:        getFieldValue(card, 'GermDate'),
+          SeedCount:              getFieldValue(card, 'SeedCount'),
+          USD_Actual_Cost_$:      getFieldValue(card, 'USD_Actual_Cost_$'),
+          GrowerGerm:             getFieldValue(card, 'GrowerGerm'),
+          GrowerGermDate:         getFieldValue(card, 'GrowerGermDate'),
+          Purity:                 getFieldValue(card, 'Purity'),
+          Inert:                  getFieldValue(card, 'Inert'),
+          PackageDescription:     getFieldValue(card, 'PackageDescription'),
+          TotalQuantity:          getFieldValue(card, 'TotalQuantity'),
+          TotalPrice:             getFieldValue(card, 'TotalPrice')
         };
         
         if (!data.BCItemNo || !data.VendorLotNo) {

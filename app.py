@@ -11,6 +11,7 @@ from functools import wraps
 from multiprocessing import Pool, cpu_count
 from vendor_extractors.sakata import extract_sakata_data, load_package_descriptions, get_po_items
 from vendor_extractors.hm_clause import extract_hm_clause_data, find_best_hm_clause_package_description
+from vendor_extractors.seminis import extract_seminis_invoice_data, find_best_seminis_package_description
 import time
 import logging
 import psycopg2
@@ -26,7 +27,6 @@ app.permanent_session_lifetime = timedelta(hours=8)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Configure logging
-#lot_counter = None
 logging.basicConfig(level=logging.INFO)
 app.logger.setLevel(logging.INFO)
 
@@ -104,13 +104,6 @@ def build_msal_app(cache=None) -> msal.ConfidentialClientApplication:
         authority=AUTHORITY,
         token_cache=cache,
     )
-
-# # MSAL configuration
-# msal_app = msal.ConfidentialClientApplication(
-#     client_id=CLIENT_ID,
-#     client_credential=CLIENT_SECRET,
-#     authority=AUTHORITY
-# )
 
 # Timing decorators
 def timed_func(label: str):
@@ -253,6 +246,14 @@ def _extract_hm_clause_file(path):
         app.logger.error(f"Error processing {path}: {e}")
         return os.path.basename(path), []
 
+def _extract_seminis_file(path):
+    try:
+        # The Seminis extractor manages its own sub-files, so it just needs the main path
+        return os.path.basename(path), extract_seminis_invoice_data(path)
+    except Exception as e:
+        app.logger.error(f"Error processing {path}: {e}")
+        return os.path.basename(path), []
+    
 # Login required decorator
 def login_required(f):
     @wraps(f)
@@ -315,9 +316,6 @@ def sign_out():
 
 @app.route("/logout")
 def logout():
-    # session.pop("user_token", None)
-    # session.pop("user_name", None)
-    #return render_template("logout.html")
     user_name = session.get("user_name")
     clear_cache()
     session.clear()
@@ -391,19 +389,6 @@ def index():
             )
 
         elif vendor == "hm_clause":
-            # grouped = {}
-            # with Pool(processes=cpu_count()) as pool:
-            #     results = pool.map(_extract_hm_clause_file, pdf_paths)
-
-            # for filename, items in results:
-            #     if items:
-            #         grouped[filename] = items
-            #     try:
-            #         os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-            #     except Exception as e:
-            #         app.logger.error(f"Could not delete {filename}: {e}")
-
-            # return render_template("results_hm_clause.html", items=grouped)
             # 1. Load shared data from BC first
             pkg_descs = load_package_descriptions(user_token)
             treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
@@ -453,6 +438,66 @@ def index():
             # 6. Render the template with all necessary data
             return render_template(
                 "results_hm_clause.html",
+                items=final_grouped_results,
+                treatments1=treatments1,
+                treatments2=treatments2,
+                pkg_descs=pkg_descs
+            )   
+
+        elif vendor == "seminis":
+            # 1. Load shared data from BC first
+            pkg_descs = load_package_descriptions(user_token)
+            treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
+            treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
+
+            # 2. Extract data from PDFs using multiprocessing
+            main_invoice_paths = [p for p in pdf_paths if "packing" not in p.lower() and "l_" not in p.lower()]
+
+            with Pool(processes=cpu_count()) as pool:
+                results = pool.map(_extract_seminis_file, main_invoice_paths)
+
+            # 3. Group results and create a flat list for processing
+            final_grouped_results = {}
+            all_items_flat = []
+            for filename, items in results:
+                if items:
+                    final_grouped_results[filename] = items
+                    all_items_flat.extend(items)
+                # Clean up all uploaded files associated with this vendor
+                try:
+                    # Construct paths for potential related files to delete them
+                    folder = app.config["UPLOAD_FOLDER"]
+                    for f in os.listdir(folder):
+                        file_path = os.path.join(folder, f)
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                except Exception as e:
+                    app.logger.error(f"Could not delete files for {filename}: {e}")
+
+            # 4. Fetch all PO data at once
+            all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
+            po_items_for_all = []
+            if all_pos:
+                try:
+                    po_items_for_all = get_po_items("|".join(all_pos), user_token)
+                except Exception as e:
+                    app.logger.error(f"Failed to fetch PO items for Seminis: {e}")
+                    po_items_for_all = [{"No": "ERROR", "Description": str(e)}]
+
+            # 5. Enrich each item with PO options
+            for item in all_items_flat:
+                if item.get("PurchaseOrder"):
+                    item["BCOptions"] = po_items_for_all
+                else:
+                    item["BCOptions"] = []
+                    
+            # 6. Find and add the best package description using HM Clause specific logic
+                vendor_desc = item.get("VendorItemDescription", "")
+                item["PackageDescription"] = find_best_seminis_package_description(vendor_desc, pkg_descs)
+
+            # 7. Render the template with all necessary data
+            return render_template(
+                "results_seminis.html",
                 items=final_grouped_results,
                 treatments1=treatments1,
                 treatments2=treatments2,

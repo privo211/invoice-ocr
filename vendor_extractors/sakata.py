@@ -16,7 +16,6 @@ BC_COMPANY = os.getenv("BC_COMPANY")
 CLIENT_ID     = os.getenv("AZURE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
 
-# Use the root logger (or a named logger) instead of app.logger
 logger = logging.getLogger("invoice-ocr")
 logger.setLevel(logging.INFO)
 
@@ -35,8 +34,8 @@ def timed_func(label: str):
 class PurityData(TypedDict):
     Purity: Union[float, str]
     Inert: Union[float, str]
-    OtherCrop: Union[float, str]
-    Weed: Union[float, str]
+    #OtherCrop: Union[float, str]
+    #Weed: Union[float, str]
     GrowerGerm: Union[float, None]
     GrowerGermDate: Union[str, None]
     
@@ -72,7 +71,7 @@ def load_all_items(force: bool = False) -> list[dict]:
 
     base_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/Production/ODataV4/"
+        f"{BC_TENANT}/{BC_ENV}/ODataV4/"
         f"Company('{BC_COMPANY}')/FilteredItems"
     )
 
@@ -104,7 +103,7 @@ def load_package_descriptions(token: str) -> list[str]:
 
     odata_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/Production/ODataV4/"
+        f"{BC_TENANT}/{BC_ENV}/ODataV4/"
         f"Company('{BC_COMPANY}')/Package_Descriptions_List_Excel"
     )
     headers = {
@@ -171,8 +170,6 @@ def get_po_items(po_number, token):
     if po_number in _po_cache:
         return _po_cache[po_number]
 
-    tenant_id = "33b1b67a-786c-4b46-9372-c4e492d15cf1"
-
     # Split PO string if multiple are given
     po_numbers = [po.strip() for po in po_number.split("|") if po.strip()]
     if not po_numbers:
@@ -190,7 +187,7 @@ def get_po_items(po_number, token):
 
     # Try the main PurchaseOrderQuery
     url_main = (
-        f"https://api.businesscentral.dynamics.com/v2.0/{tenant_id}/Production"
+        f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV}"
         f"/ODataV4/Company('Stokes%20Seeds%20Limited')/PurchaseOrderQuery?$filter={filter_clause}"
     )
     response = requests.get(url_main, headers=headers)
@@ -208,16 +205,10 @@ def get_po_items(po_number, token):
             "Description": item.get("ItemDescription", "")
         })
 
-    # data = [
-    #     {"No": item["ItemNumber"], "Description": item["ItemDescription"]}
-    #     for item in response.json().get("value", [])
-    #     if item.get("ItemNumber")
-    # ]
-
     # If no results, try the ArchivePurchaseOrderQuery
     if not data:
         url_archive = (
-            f"https://api.businesscentral.dynamics.com/v2.0/{tenant_id}/Production"
+            f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV}"
             f"/ODataV4/Company('Stokes%20Seeds%20Limited')/ArchivePurchaseOrderQuery?$filter={filter_clause}"
         )
         response = requests.get(url_archive, headers=headers)
@@ -234,11 +225,6 @@ def get_po_items(po_number, token):
                 "No": no,
                 "Description": item.get("ItemDescription", "")
             })
-        # data = [
-        #     {"No": item["ItemNumber"], "Description": item["ItemDescription"]}
-        #     for item in response.json().get("value", [])
-        #     if item.get("ItemNumber")
-        # ]
 
     _po_cache[po_number] = data
     return data
@@ -341,9 +327,9 @@ def parse_lot_block(raw_text: str) -> Dict:
             "OriginCountry": bc_origin,
             "SproutCount":   sprout,
             # item-level PO now handled separately
-            "Inert":         None,
-            "OtherCrop":     None,
-            "Weed":          None
+            "Inert":         None#,
+            # "OtherCrop":     None,
+            # "Weed":          None
         }
     except Exception as e:
         return {"error": str(e), "raw": raw_text}
@@ -417,8 +403,8 @@ def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
             report_map[lot_no] = {
                 "Purity":  pure,
                 "Inert":     inert,
-                "OtherCrop": other,
-                "Weed":      weed,
+                # "OtherCrop": other,
+                # "Weed":      weed,
                 "GrowerGerm": grower_germ,
                 "GrowerGermDate": date_completed
             }
@@ -493,8 +479,6 @@ def extract_invoice_from_pdf(pdf_path: str, fallback_po: str = "", token: str = 
             if m_pkg:
                 pkg_qty = int(m_pkg.group(1))
             else:
-                # if you expect descriptions to always end in digits+M or digits+lb,
-                # this fallback probably won't trigger. You could raise or log instead.
                 pkg_qty = None
 
             # (2) Parse QtyShipped out of parts: after "EA" comes [Ordered, Shipped, UnitPrice, Disc%, TotalPrice]
@@ -600,7 +584,7 @@ def extract_sakata_data(pdf_paths: List[str]) -> List[Dict]:
     # 3) purity‐report map
     report_map = extract_seed_analysis_reports(os.path.dirname(first))
 
-    # fallback_po = ",".join(fallback) if fallback else ""
+    
     all_items: List[Dict] = []
     for path in pdf_paths:
         doc = fitz.open(path)
@@ -620,8 +604,7 @@ def extract_sakata_data(pdf_paths: List[str]) -> List[Dict]:
             for raw in itm["Lots"]:
                 lot = parse_lot_block(raw)
                 
-                # ─── COPY parent’s Pkg + USD Cost + PackageDescription fields into each lot ───
-                #lot["Pkg_Qty"]            = itm.get("Pkg_Qty")
+                # ─── COPY parent’s USD Cost + PackageDescription fields into each lot ───
                 lot["USD_Actual_Cost_$"]  = itm.get("USD_Actual_Cost_$")
                 lot["PackageDescription"]  = itm.get("PackageDescription")
                 
