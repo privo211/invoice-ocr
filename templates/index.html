@@ -1,29 +1,27 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
   <title>Vendor Invoice Processor</title>
   <!-- Roboto from Google Fonts -->
-  <link
-    href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap"
-    rel="stylesheet"
-  />
-  <link
-    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
-    rel="stylesheet"
-  />
-  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}" />
   <style>
     :root {
       --primary-color: #008bc4;
       --background-color: #f4f4f4;
       --text-color: #000000;
       --card-bg: #ffffff;
+      --dropzone-border: 2px dashed #008bc4;
+      --dropzone-hover: #006a9c;
     }
     body.dark-mode {
       --background-color: #1a1a1a;
       --text-color: #f0f0f0;
       --card-bg: #2a2a2a;
+      --dropzone-border: 2px dashed #008bc4;
+      --dropzone-hover: #cccccc;
     }
     body {
       margin: 0;
@@ -32,212 +30,199 @@
       background-color: var(--background-color);
       color: var(--text-color);
     }
-    .container {
-      width: 40%;
-      margin: 2rem auto;
-      padding: 2rem;
+    .main-card {
       background-color: var(--card-bg);
       border-radius: 8px;
       box-shadow: 0 0 12px rgba(0,0,0,0.15);
+      margin: 2rem auto;
+      padding: 2rem;
+      max-width: 800px;
+      width: 100%;
     }
-    .logo-container img {
-      max-height: 60px;
-      display: block;
-      margin: 1rem auto 3rem;
+    @media (max-width: 600px) {
+      .main-card {
+        padding: 1rem 0.5rem;
+        margin: 1rem 0.25rem;
+        max-width: 98vw;
+      }
     }
-    .header {
-      position: relative;
-      margin-top: 1rem;
-      margin-bottom: 2.5rem;
-      padding: 0 3rem;
+    /* Dropzone Styles */
+    .dropzone {
+      border: var(--dropzone-border);
+      border-radius: 4px;
+      padding: 2rem;
+      margin-top: 0.5rem;
+      margin-bottom: 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.3s, background-color 0.3s;
+      background-color: var(--card-bg);
+      color: var(--text-color);
     }
+    .dropzone.dragover {
+      background-color: var(--dropzone-hover);
+      opacity: 0.1;
+    }
+    .dropzone p {
+      margin: 0;
+      font-size: 1rem;
+    }
+    /* File info */
+    .file-info {
+      margin-top: 0.5rem;
+      font-size: 0.95rem;
+      color: var(--text-color);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    
+    .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap; width: 100%; gap: 1rem; margin-bottom: 2rem; }
+    .header img { height: 60px; width: auto; display: block; flex-shrink: 0; }
+    .header h2 { flex: 1 1 0; min-width: 0; margin: 0; text-align: center; color: var(--primary-color); font-size: 1.5rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #theme-toggle { flex-shrink: 0; height: 40px; background: var(--primary-color); color: white; border: none; padding: 0 1rem; border-radius: 4px; font-size: 1rem; cursor: pointer; font-weight: 500; display: flex; align-items: center; justify-content: center; }
+    @media (max-width: 600px) { .header { flex-direction: column; flex-wrap: wrap; align-items: stretch; text-align: center; gap: 0.6rem; } .header h2 { font-size: 1.2rem; white-space: normal; text-overflow: clip; } #theme-toggle { width: 100%; margin-top: 0.2rem; } .header img { margin: 0 auto; } }
+    form { width: 100%; }
+    label { display: block; margin-top: 1.25rem; font-weight: 500; color: var(--primary-color); font-size: 1.05rem; }
+    select, input[type="submit"] { width: 100%; padding: 0.8rem; margin-top: 0.5rem; border-radius: 4px; border: 1px solid #ccc; background-color: var(--background-color); color: var(--text-color); font-size: 1rem; font-weight: 500; }
+    input[type="submit"] { background-color: var(--primary-color); color: white; border: none; cursor: pointer; margin-top: 2rem; font-size: 1.1rem; font-weight: 500; }
+    .auth-btn { background: var(--primary-color); color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; font-size: 0.95rem; font-weight: 500; text-decoration: none; margin-right: 0.5rem; margin-bottom: 0.75rem; display: inline-block; }
+    .auth-btn:hover, #theme-toggle:hover, input[type="submit"]:hover { opacity: 0.85; }
+    pre { white-space: pre-wrap; word-break: break-word; font-size: 90%; }
 
-    /*
-    .header {
+    .auth-status-bar {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 1.5rem;
+      margin-bottom: 1rem;
+      gap: 1rem;
+      flex-wrap: nowrap;
     }
-    */
-    h2 {
-      font-size: 1.5rem;
-      margin: 0;
-      color: var(--primary-color);
-    }
-    #theme-toggle {
-      background: var(--primary-color);
-      color: white;
-      border: none;
-      padding: 0.5rem 1rem;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 1rem;
+
+    .auth-status-bar .left {
       font-weight: 500;
+      white-space: nowrap;
     }
-    form {
-      width: 100%;
-    }
-    label {
-      display: block;
-      margin-top: 1.5rem;
-      font-weight: 500;
-      color: var(--primary-color);
-      font-size: 1.1rem;
-    }
-    upload-label {
-      margin-top: 1.5rem;
-    }
-    select, input[type="submit"] {
-      width: 100%;
-      padding: 0.8rem;
-      margin-top: 0.5rem;
-      border-radius: 4px;
-      border: 1px solid #ccc;
-      background-color: var(--background-color);
-      color: var(--text-color);
-      font-size: 1rem;
-      font-weight: 500;
-    }
-    input[type="submit"] {
-      background-color: var(--primary-color);
-      color: white;
-      border: none;
-      cursor: pointer;
-      margin-top: 2rem;
-      font-size: 1.1rem;
-      font-weight: 500;
-    }
-    .custom-file-input {
+
+    .auth-status-bar .right {
       display: flex;
       align-items: center;
-      gap: 1rem;
+      gap: 0.5rem;
+      white-space: nowrap;
     }
-    .upload-btn {
-      background-color: var(--primary-color);
-      color: white;
-      padding: 0.6rem 1rem;
-      border-radius: 4px;
-      cursor: pointer;
-      font-weight: 500;
-      font-size: 1rem;
-      position: relative;
-      overflow: hidden;
-      display: inline-block;
-    }
-    .upload-btn input[type="file"] {
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      opacity: 0;
-      cursor: pointer;
-    }
-    .file-info {
-      flex: 1;
-      white-space: pre-wrap;
-      font-size: 1rem;
-      color: var(--text-color);
-      line-height: 1.4;
+
+    .auth-status-bar .auth-btn.small-btn {
+      font-size: 0.85rem;
+      padding: 4px 10px;
       margin: 0;
     }
-    #theme-toggle:hover,
-    .upload-btn:hover,
-    input[type="submit"]:hover {
-      opacity: 0.85;
+    /*
+    .small-btn {
+      font-size: 0.85rem;
+      padding: 6px 10px;
     }
-    .auth-btn {
-      background: var(--primary-color);
-      color: white;
-      border: none;
-      padding: 0.5rem 1rem ;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 0.9rem;
-      font-weight: 500;
-      text-decoration: none;
-      margin-right: 0.5rem;
-    }
-    .auth-btn:hover {
-      opacity: 0.85;
-    }
+
+    .auth-status-bar .auth-btn {
+      margin-left: 10px;
+    }*/
   </style>
 </head>
 <body>
-  <div class="container">
+  <div class="container d-flex flex-column align-items-center justify-content-center">
+    <div class="main-card w-100">
+      <div class="header">
+        <img id="stokes-logo" src="{{ url_for('static', filename='stokes_logo_rect.png') }}" alt="Logo" />
+        <h2>Vendor Invoice Processor</h2>
+        <button id="theme-toggle">Dark Mode</button>
+      </div>
 
-    <div class="header position-relative text-center">
-      <img id="stokes-logo"
-          src="{{ url_for('static', filename='stokes_logo_rect.png') }}"
-          alt="Logo"
-          style="max-height: 60px; position: absolute; left: 0; top: 50%; transform: translateY(-50%);">
-      <h2 class="m-0">Vendor Invoice Processor</h2>
-      <button id="theme-toggle"
-              class="position-absolute"
-              style="right: 0; top: 50%; transform: translateY(-50%);">
-        Dark Mode
-      </button>
-    </div>
+      <!--{% if not session.get("user_token") %}
+        <p><strong>Status:</strong> Not signed in</p>
+        <a class="auth-btn" href="{{ url_for('sign_in') }}">Sign In with Microsoft</a>
+      {% else %}
+        <p><strong>Status:</strong> Signed in</p>
+        <p>Hello, {{ session.user_name }}!</p>
+        <a class="auth-btn" href="{{ url_for('logout') }}">Sign Out</a>
+        <form id="extract-form" action="/" method="post" enctype="multipart/form-data">
+          <label for="vendor">Select Vendor:</label>
+          <select name="vendor" id="vendor">
+            <option value="sakata">Sakata</option>
+            <option value="hm_clause">HM Clause</option>
+            <option value="seminis">Seminis</option>
+            <option value="nunhems">Nunhems (coming soon)</option>
+          </select>
 
+          <label for="dropzone">Upload Invoices and related PDF(s):</label>
+          <div id="dropzone" class="dropzone">
+            <p>Drag & Drop PDF files here, or click to select</p>
+            <input type="file" name="pdfs" id="pdfs" multiple accept="application/pdf" style="display:none;" />
+          </div>
+          <div class="file-info" id="file-info">No files chosen (max. 25 MB)</div>
 
+          <input type="submit" value="Extract Data" />
+        </form>
+      {% endif %}-->
 
-    {# ── Check for signed-in user ── #}
-    {% if not session.get("user_token") %}
-      <p><strong>Status:</strong> Not signed in</p>
-      <a class="auth-btn" href="{{ url_for('sign_in') }}">
-        Sign In with Microsoft
-      </a>
-    {% else %}
-      <p><strong>Status:</strong> Signed in as {{ session.user_name }}</p>
-      <a class="auth-btn" href="{{ url_for('logout') }}">
-        Sign Out
-      </a>
+      {% if not session.get("user_token") %}
+        <div class="auth-status-bar">
+          <p><strong>Status:</strong> Not signed in</p>
+          <a class="auth-btn" href="{{ url_for('sign_in') }}">Sign In with Microsoft</a>
+        </div>
+      {% else %}
+        <!--<div class="auth-status-bar">
+          <p class="left"><strong>Hello, {{ session.user_name }}!</strong></p>
+          <div class="right">
+            <p><strong>Status:</strong> Signed in</p>
+            <a class="auth-btn small-btn" href="{{ url_for('logout') }}">Sign Out</a>
+          </div>
+        </div>-->
 
-      <!-- Existing form only visible once signed in -->
-      <form id="extract-form" action="/" method="post" enctype="multipart/form-data">
-        <label for="vendor">Select Vendor:</label>
-        <select name="vendor" id="vendor">
-          <option value="sakata">Sakata</option>
-          <option value="hm_clause">HM Clause</option>
-          <option value="seminis">Seminis</option>
-          <option value="nunhems">Nunhems (coming soon)</option>
-        </select>
-
-        <label class="upload-label" for="pdfs">Upload Invoices and related PDF(s):</label>
-        <div class="custom-file-input">
-          <label class="upload-btn">
-            Select PDF files
-            <input type="file" name="pdfs" id="pdfs" multiple>
-          </label>
-          <div class="file-info" id="file-name">No files chosen (max. 25 MB)</div>
+        <div class="auth-status-bar">
+          <div class="left">Hello, {{ session.user_name }}!</div>
+          <div class="right">
+            <span>Status: Signed in</span>
+            <a class="auth-btn small-btn" href="{{ url_for('logout') }}">Sign Out</a>
+          </div>
         </div>
 
-        <input type="submit" value="Extract Data">
-      </form>
-    {% endif %}
+        <form id="extract-form" action="/" method="post" enctype="multipart/form-data">
+          <label for="vendor">Select Vendor:</label>
+          <select name="vendor" id="vendor">
+            <option value="sakata">Sakata</option>
+            <option value="hm_clause">HM Clause</option>
+            <option value="seminis">Seminis</option>
+            <option value="nunhems">Nunhems (coming soon)</option>
+          </select>
 
-    {# Optionally show last‐result message if exists #}
-    {% if session.get("last_result") %}
-      <h4>Last Result:</h4>
-      <pre>{{ session.last_result }}</pre>
-    {% endif %}
+          <label for="dropzone">Upload Invoices and related PDF(s):</label>
+          <div id="dropzone" class="dropzone">
+            <p>Drag & Drop PDF files here, or click to select</p>
+            <input type="file" name="pdfs" id="pdfs" multiple accept="application/pdf" style="display:none;" />
+          </div>
+          <div class="file-info" id="file-info">No files chosen (max. 25 MB)</div>
+
+          <input type="submit" value="Extract Data" />
+        </form>
+      {% endif %}
+
+      {% if session.get("last_result") %}
+        <h4>Last Result:</h4>
+        <pre>{{ session.last_result }}</pre>
+      {% endif %}
+    </div>
   </div>
 
-  <!-- Loading overlay-->
-  <div
-    id="loading-overlay"
-    class="position-fixed top-0 start-0 w-100 h-100 justify-content-center align-items-center bg-dark bg-opacity-50"
-    style="z-index: 1050; display: none;"
-  >
+  <!-- Loading overlay -->
+  <div id="loading-overlay" class="position-fixed top-0 start-0 w-100 h-100 justify-content-center align-items-center bg-dark bg-opacity-50" style="z-index: 1050; display: none;">
     <div class="spinner-border text-light" role="status">
       <span class="visually-hidden">Loading…</span>
     </div>
   </div>
 
-  <script>
-    // ——— Dark/Light toggle + logo switch ———
+  <!--<script>
+    // Dark/Light toggle + logo switch
     const toggleButton = document.getElementById('theme-toggle');
-    const body         = document.body;
-    const logo         = document.getElementById('stokes-logo');
+    const body = document.body;
+    const logo = document.getElementById('stokes-logo');
 
     function updateLogoTheme(isDark) {
       if (!logo) return;
@@ -246,13 +231,11 @@
         : "{{ url_for('static', filename='stokes_logo_rect.png') }}";
     }
 
-    // Apply stored theme on load
     if (localStorage.getItem('theme') === 'dark-mode') {
       body.classList.add('dark-mode');
       toggleButton.textContent = 'Light Mode';
       updateLogoTheme(true);
     }
-
     toggleButton.addEventListener('click', () => {
       const dark = body.classList.toggle('dark-mode');
       toggleButton.textContent = dark ? 'Light Mode' : 'Dark Mode';
@@ -260,34 +243,172 @@
       updateLogoTheme(dark);
     });
 
-
-    // ——— File-input change listener ———
+    // Maintain a DataTransfer for accumulated files
+    const dropzone = document.getElementById('dropzone');
     const pdfInput = document.getElementById('pdfs');
-    const fileNameDisplay = document.getElementById('file-name');
+    const fileInfo = document.getElementById('file-info');
+    const dataTransfer = new DataTransfer();
 
-    if (pdfInput && fileNameDisplay) {
-      pdfInput.addEventListener('change', function () {
-        const files = Array.from(this.files);
-        fileNameDisplay.textContent = files.length
-          ? `${files.length} file(s):\n${files.map(f => f.name).join('\n')}`
-          : 'No files chosen';
-      });
+    // Click to open file dialog
+    dropzone.addEventListener('click', () => pdfInput.click());
+
+    // Highlight dropzone on drag events
+    ['dragenter', 'dragover'].forEach(evt => dropzone.addEventListener(evt, e => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.add('dragover');
+    }));
+    ['dragleave', 'drop'].forEach(evt => dropzone.addEventListener(evt, e => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.remove('dragover');
+    }));
+
+    // Handle dropped files
+    dropzone.addEventListener('drop', e => {
+      const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+      files.forEach(file => dataTransfer.items.add(file));
+      pdfInput.files = dataTransfer.files;
+      updateFileInfo(Array.from(dataTransfer.files));
+    });
+
+    // Handle manual file selection
+    pdfInput.addEventListener('change', function () {
+      Array.from(this.files).forEach(file => dataTransfer.items.add(file));
+      pdfInput.files = dataTransfer.files;
+      updateFileInfo(Array.from(dataTransfer.files));
+    });
+
+    function updateFileInfo(files) {
+      fileInfo.textContent = files.length
+        ? `${files.length} file(s):\n${files.map(f => f.name).join('\n')}`
+        : 'No files chosen (max. 25 MB)';
     }
 
-    
-  </script>
-  
-  <script>
-    const form    = document.getElementById('extract-form');
+    // Show loading overlay on form submit
+    const form = document.getElementById('extract-form');
     const overlay = document.getElementById('loading-overlay');
     if (form && overlay) {
-      form.addEventListener('submit', function() {
+      form.addEventListener('submit', function () {
         overlay.style.display = 'flex';
         overlay.classList.add('d-flex');
       });
     }
-  </script>
+  </script>-->
 
+  <script>
+    // Theme toggle
+    const toggleButton = document.getElementById('theme-toggle');
+    const body = document.body;
+    const logo = document.getElementById('stokes-logo');
+
+    function updateLogoTheme(isDark) {
+      if (!logo) return;
+      logo.src = isDark
+        ? "{{ url_for('static', filename='stokes_logo_rect_white.png') }}"
+        : "{{ url_for('static', filename='stokes_logo_rect.png') }}";
+    }
+
+    if (localStorage.getItem('theme') === 'dark-mode') {
+      body.classList.add('dark-mode');
+      toggleButton.textContent = 'Light Mode';
+      updateLogoTheme(true);
+    }
+    toggleButton.addEventListener('click', () => {
+      const dark = body.classList.toggle('dark-mode');
+      toggleButton.textContent = dark ? 'Light Mode' : 'Dark Mode';
+      localStorage.setItem('theme', dark ? 'dark-mode' : 'light-mode');
+      updateLogoTheme(dark);
+    });
+
+    // Dropzone & PDF handling
+    const dropzone = document.getElementById('dropzone');
+    const pdfInput = document.getElementById('pdfs');
+    const fileInfo = document.getElementById('file-info');
+    const dataTransfer = new DataTransfer();
+
+    // Click opens file selector
+    dropzone.addEventListener('click', () => pdfInput.click());
+
+    // Highlight during drag
+    ['dragenter', 'dragover'].forEach(evt =>
+      dropzone.addEventListener(evt, e => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+      })
+    );
+    ['dragleave', 'drop'].forEach(evt =>
+      dropzone.addEventListener(evt, e => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+      })
+    );
+
+    // Prevent duplicates by name+size
+    function isDuplicate(file) {
+      return Array.from(dataTransfer.files).some(existing =>
+        existing.name === file.name && existing.size === file.size
+      );
+    }
+
+    // Handle drop
+    dropzone.addEventListener('drop', e => {
+      const files = Array.from(e.dataTransfer.files).filter(f =>
+        f.type === 'application/pdf' && !isDuplicate(f)
+      );
+      files.forEach(file => dataTransfer.items.add(file));
+      pdfInput.files = dataTransfer.files;
+      updateFileInfo(Array.from(dataTransfer.files));
+    });
+
+    // Handle manual selection
+    pdfInput.addEventListener('change', function () {
+      Array.from(this.files).forEach(file => {
+        if (file.type === 'application/pdf' && !isDuplicate(file)) {
+          dataTransfer.items.add(file);
+        }
+      });
+      pdfInput.files = dataTransfer.files;
+      updateFileInfo(Array.from(dataTransfer.files));
+    });
+
+    function updateFileInfo() {
+      const files = Array.from(dataTransfer.files);
+      if (files.length) {
+        fileInfo.textContent = `${files.length} file(s):\n${files.map(f => f.name).join('\n')}`;
+        clearBtn.style.display = 'block';  // Show button
+      } else {
+        fileInfo.textContent = 'No files chosen (max. 25 MB)';
+        clearBtn.style.display = 'none';   // Hide button
+      }
+    }
+
+    // Form submit loading overlay
+    const form = document.getElementById('extract-form');
+    const overlay = document.getElementById('loading-overlay');
+    if (form && overlay) {
+      form.addEventListener('submit', () => {
+        overlay.style.display = 'flex';
+        overlay.classList.add('d-flex');
+      });
+    }
+
+    // ✅ Add reset button below dropzone
+    const clearBtn = document.createElement('button');
+    clearBtn.textContent = 'Clear Files';
+    clearBtn.type = 'button';
+    clearBtn.style.cssText = 'margin-top: 0.5rem; display: none;';
+    clearBtn.className = 'btn btn-outline-danger btn-sm';
+
+    dropzone.insertAdjacentElement('afterend', clearBtn);
+
+    clearBtn.addEventListener('click', () => {
+      dataTransfer.items.clear();
+      pdfInput.value = '';
+      pdfInput.files = dataTransfer.files;
+      updateFileInfo();
+    });
+  </script>
 
 </body>
 </html>

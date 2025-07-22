@@ -242,7 +242,7 @@
       <button id="theme-toggle" class="btn-theme me-2">Dark Mode</button>
       <a href="/" class="btn-back me-2">Go Back</a>
       {% if session.get("user_name") %}
-        <span style="color: var(--text-color); margin-right: 0.5rem;">{{ session.user_name }}</span>
+        <span style="color: var(--text-color); margin-right: 0.5rem;">Hi, {{ session.user_name }}</span>
         <a href="{{ url_for('logout') }}" class="btn-auth">Sign Out</a>
       {% else %}
         <a href="{{ url_for('sign_in') }}" class="btn-auth">Sign In</a>
