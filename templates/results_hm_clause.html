@@ -487,6 +487,23 @@
   </div>
   {% endfor %}
 
+  <div class="modal fade" id="lot-selection-modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
+      <div class="modal-content p-3">
+        <h4>Select Lots to Create</h4>
+        <div class="select-all-container">
+          <input type="checkbox" id="select-all-lots" checked />
+          <label for="select-all-lots">Select/Deselect All</label>
+        </div>
+        <ul class="list-unstyled mb-3" id="lot-selection-list"></ul>
+        <div class="text-end">
+          <button type="button" class="lookup-ok" id="confirm-lot-creation-btn">Create Selected Lots</button>
+          <button type="button" class="lookup-cancel" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <script>
     let bcItemsCache = null;
@@ -626,7 +643,7 @@
       return el.tagName === 'INPUT' || el.tagName === 'SELECT' ? el.value.trim() : el.textContent.trim();
     }
 
-    document.getElementById('create-lots-btn')?.addEventListener('click', async () => {
+    /*document.getElementById('create-lots-btn')?.addEventListener('click', async () => {
       const cards = document.querySelectorAll('.card');
       if (cards.length === 0) return alert("No items found to create.");
       
@@ -702,7 +719,116 @@
           alert(`❌ Network error for Vendor Lot ${data.VendorLotNo}:\n${err.message}`);
         }
       }
+    });*/
+
+    // When "Create Lots" button is clicked, show the selection modal
+    document.getElementById('create-lots-btn')?.addEventListener('click', () => {
+      const cards = document.querySelectorAll('.card');
+      if (cards.length === 0) return alert("No items found to create.");
+
+      const listElement = document.getElementById('lot-selection-list');
+      listElement.innerHTML = '';
+
+      cards.forEach((card, idx) => {
+        const name = card.querySelector('.item-header')?.textContent.trim() || 'Unnamed Item';
+        card.dataset.itemIdx = idx;
+
+        const listItem = document.createElement('li');
+        listItem.innerHTML = `
+          <label>
+            <input type="checkbox" class="lot-item-checkbox" data-item-idx="${idx}" checked />
+            ${name}
+          </label>`;
+        listElement.appendChild(listItem);
+      });
+
+      // Ensure "Select All" is checked and all checkboxes are pre-checked
+      document.getElementById('select-all-lots').checked = true;
+      document.querySelectorAll('.lot-item-checkbox').forEach(cb => cb.checked = true);
+
+      new bootstrap.Modal(document.getElementById('lot-selection-modal')).show();
     });
+
+    document.getElementById('select-all-lots')?.addEventListener('change', function (e) {
+      document.querySelectorAll('.lot-item-checkbox').forEach(cb => cb.checked = e.target.checked);
+    });
+
+    document.getElementById('confirm-lot-creation-btn')?.addEventListener('click', async () => {
+      const selectedCheckboxes = document.querySelectorAll('.lot-item-checkbox:checked');
+      if (selectedCheckboxes.length === 0) return alert("Please select at least one lot.");
+
+      bootstrap.Modal.getInstance(document.getElementById('lot-selection-modal')).hide();
+
+      for (const cb of selectedCheckboxes) {
+        const idx = cb.dataset.itemIdx;
+        const card = document.querySelector(`.card[data-item-idx="${idx}"]`);
+
+        let bcItemNo = getFieldValue(card, 'BCItemNo');
+        if (bcItemNo === 'Other') {
+          const manualInput = document.getElementById(`bc-input-${idx}`);
+          bcItemNo = manualInput?.value.trim();
+        }
+
+        const data = {
+          BCItemNo: bcItemNo,
+          TreatmentsDescription: getFieldValue(card, 'TreatmentsDescription'),
+          TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
+          VendorLotNo: getFieldValue(card, 'VendorLotNo'),
+          VendorBatchLot: getFieldValue(card, 'VendorBatchNo'),
+          OriginCountry: getFieldValue(card, 'OriginCountry'),
+          CurrentGerm: getFieldValue(card, 'Germ'),
+          CurrentGermDate: getFieldValue(card, 'GermDate'),
+          SeedSize: getFieldValue(card, 'SeedSize'),
+          SeedCount: getFieldValue(card, 'SeedCount'),
+          USD_Actual_Cost_$: getFieldValue(card, 'USD_Actual_Cost_$'),
+          GrowerGerm: getFieldValue(card, 'GrowerGerm'),
+          GrowerGermDate: getFieldValue(card, 'GrowerGermDate'),
+          Purity: getFieldValue(card, 'Purity'),
+          Inert: getFieldValue(card, 'Inert'),
+          PackageDescription: getFieldValue(card, 'PackageDescription'),
+          VendorItemNumber: getFieldValue(card, 'VendorItemNumber'),
+          VendorDescription: getFieldValue(card, 'VendorDescription'),
+          TotalQuantity: getFieldValue(card, 'TotalQuantity'),
+          TotalPrice: getFieldValue(card, 'TotalPrice'),
+          TotalUpcharge: getFieldValue(card, 'TotalUpcharge'),
+          TotalDiscount: getFieldValue(card, 'TotalDiscount')
+        };
+
+        if (!data.BCItemNo || !data.VendorLotNo) {
+          alert(`Skipping item. Missing BC Item No. or Vendor Lot No. for:\n${card.querySelector('.item-header')?.textContent.trim()}`);
+          continue;
+        }
+
+        try {
+          const res = await fetch('/create-lot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+          });
+
+          if (res.redirected || res.status === 401) {
+            alert('Your session has expired. Please sign in again.');
+            window.location.href = '/sign_in';
+            return;
+          }
+
+          const json = await res.json();
+          if (res.ok && json.status === 'success') {
+            card.style.border = '2px solid green';
+            alert(`✅ Successfully created Lot for Vendor Lot: ${data.VendorLotNo}`);
+          } else {
+            card.style.border = '2px solid red';
+            alert(`❌ Error creating Lot for Vendor Lot ${data.VendorLotNo}:\n${json.message}`);
+          }
+        } catch (err) {
+          card.style.border = '2px solid red';
+          alert(`❌ Network error for Vendor Lot ${data.VendorLotNo}:\n${err.message}`);
+        }
+      }
+    });
+
+
+
   </script>
 </body>
 </html>

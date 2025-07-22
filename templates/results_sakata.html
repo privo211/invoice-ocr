@@ -257,12 +257,7 @@
   <div class="container">
     {% if items %}
       {% for filename, item_list in items.items() %}
-        <!-- <div class="select-all-container">
-          <input type="checkbox" id="select-all-lots" />
-          <label for="select-all-lots" style="font-weight:600;">
-            Select / Deselect All Lots
-          </label>
-        </div> -->
+        
         <h3>📄 {{ filename }} - Vendor Invoice No.: {{ item_list[0].Lots[0].InvoiceNumber }}</h3>
         <div class="row row-cols-1 row-cols-md-2 g-4">
           {% for item in item_list %}
@@ -271,15 +266,7 @@
               {% set lot_idx = loop.index0 %}
               <div class="col">
                 <div class="card h-100 p-3">
-                  <!--  <div>
-                    <input
-                      type="checkbox"
-                      class="form-check-input lot-checkbox"
-                      id="chk-{{ item_idx }}-{{ lot_idx }}"
-                      data-item-idx="{{ item_idx }}"
-                      data-lot-idx="{{ lot_idx }}"
-                    />
-                  </div>  -->
+                  
                   <div class="item-header">
                     {{ item.VendorItemNumber }} - {{ item.VendorDescription }}
                   </div>
@@ -417,13 +404,6 @@
                       </select>
                     </dd>
 
-                    <!--<dt class="col-sm-4">Package Quantity</dt>
-                    <dd class="col-sm-8">
-                      <div class="field-box" data-field="Pkg_Qty" contenteditable="true">
-                        {{ lot.Pkg_Qty or "" }}
-                      </div>
-                    </dd>-->
-
                     <dt class="col-sm-4">Current Germ</dt>
                     <dd class="col-sm-8">
                       <div class="field-box" data-field="CurrentGerm" contenteditable="true">
@@ -496,13 +476,6 @@
                       </div>
                     </dd>
 
-                    <!--<dt class="col-sm-4">Weed</dt>
-                    <dd class="col-sm-8">
-                      <div class="field-box" data-field="Weed" contenteditable="true">
-                        {{ lot.Weed }}
-                      </div>
-                    </dd>-->
-
                   </dl>
                 </div>
               </div>
@@ -547,86 +520,25 @@
   </div>
   {% endfor %}
 
-  
+  <div class="modal fade" id="lot-selection-modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
+      <div class="modal-content p-3">
+        <h4>Select Lots to Create</h4>
+        <div class="select-all-container">
+          <input type="checkbox" id="select-all-lots" checked/>
+          <label for="select-all-lots">Select/Deselect All</label>
+        </div>
+        <ul class="list-unstyled mb-3" id="lot-selection-list"></ul>
+        <div class="text-end">
+          <button type="button" class="lookup-ok" id="confirm-lot-creation-btn">Create Selected Lots</button>
+          <button type="button" class="lookup-cancel" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-  <!-- <script>
-    // Dark/Light toggle
-    const themeBtn = document.getElementById('theme-toggle');
-    themeBtn.addEventListener('click', () => {
-      const dark = document.body.classList.toggle('dark-mode');
-      themeBtn.textContent = dark ? 'Light Mode' : 'Dark Mode';
-      localStorage.setItem('theme', dark ? 'dark-mode' : '');
-    });
-    if (localStorage.getItem('theme') === 'dark-mode') {
-      document.body.classList.add('dark-mode');
-      themeBtn.textContent = 'Light Mode';
-    }
 
-    // Only one handleBCChange
-    function handleBCChange(sel) {
-      const idx   = sel.dataset.itemIdx,
-            lid   = sel.dataset.lotIdx,
-            input = document.getElementById(`bc-input-${idx}-${lid}`);
-      input.style.display = sel.value === 'Other' ? 'block' : 'none';
-    }
-
-    // On load, wire-up selects and PO blur
-    window.addEventListener('DOMContentLoaded', () => {
-      document.querySelectorAll('select[data-item-idx]').forEach(handleBCChange);
-      document.querySelectorAll('.po-field').forEach(div => {
-        div.addEventListener('blur', async e => {
-          const po      = e.target.textContent.trim();
-          const itemIdx = e.target.dataset.itemIdx;
-          const lotIdx  = e.target.dataset.lotIdx;
-          if (!po) return;
-          // fetch new BC options
-          const res = await fetch(`/bc-options?po=${encodeURIComponent(po)}`);
-          if (!res.ok) throw new Error(await res.text());
-          const opts = await res.json();
-          const select = document.querySelector(
-            `select[data-item-idx="${itemIdx}"][data-lot-idx="${lotIdx}"]`
-          );
-          select.innerHTML = '';
-          opts.forEach(o => {
-            const optEl = document.createElement('option');
-            optEl.value       = o.No;
-            optEl.textContent = `${o.No} — ${o.Description}`;
-            select.append(optEl);
-          });
-          const otherEl = document.createElement('option');
-          otherEl.value       = 'Other';
-          otherEl.textContent = 'Other';
-          select.append(otherEl);
-          handleBCChange(select);
-        });
-      });
-    });
-
-    // Re-wire the lookup buttons so they remember which input they target
-    document.querySelectorAll('.lookup-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const modalEl = document.querySelector(btn.getAttribute('data-bs-target'));
-        modalEl.dataset.targetId = btn.getAttribute('data-target-id');
-      });
-    });
-
-
-    // Lookup ok button hides modal
-    document.querySelectorAll('.lookup-ok').forEach(ok => {
-      ok.addEventListener('click', () => {
-        const modalId = ok.dataset.modalId;
-        const modalEl = document.getElementById(`lookup-modal-${modalId}`);
-        const targetId = modalEl.dataset.targetId;
-        const inp = document.getElementById(targetId);
-        const values = Array.from(
-          modalEl.querySelectorAll('input[type=checkbox]:checked')
-        ).map(cb => cb.value);
-        inp.value = values.join(', ');
-        bootstrap.Modal.getInstance(modalEl).hide();
-      });
-    });
-  </script> -->
   <script>
     let bcItemsCache = null;
 
@@ -742,20 +654,6 @@
         });
     });
 
-      /*function handleBCChange(sel) {
-        const idx   = sel.dataset.itemIdx,
-              lid   = sel.dataset.lotIdx,
-              input = document.getElementById(`bc-input-${idx}-${lid}`);
-        input.style.display = sel.value === 'Other' ? 'block' : 'none';
-      }*/
-
-      /*document.querySelectorAll('.lookup-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const modalEl = document.querySelector(btn.getAttribute('data-bs-target'));
-          modalEl.dataset.targetId = btn.getAttribute('data-target-id');
-        });
-      });*/
-
       document.querySelectorAll('.lookup-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const modalEl = document.querySelector(btn.getAttribute('data-bs-target'));
@@ -792,13 +690,7 @@
       return el.textContent.trim();
     }
 
-    // ─── “Select All” toggle logic ───
-    /*document.getElementById('select-all-lots')?.addEventListener('change', function() {
-      const checkboxes = document.querySelectorAll('.lot-checkbox');
-      checkboxes.forEach(cb => { cb.checked = this.checked; });
-    });*/
-
-    document.getElementById('create-lots-btn').addEventListener('click', async () => {
+    /*document.getElementById('create-lots-btn').addEventListener('click', async () => {
 
       const cards = document.querySelectorAll('.card');
       for (const card of cards) {
@@ -819,32 +711,6 @@
           const manualInput = document.getElementById(`bc-input-${itemIdx}-${lotIdx}`);
           bcItemNo = manualInput.value.trim();
         }
-
-      // 1) Gather all checked boxes
-     /* const checkedBoxes = document.querySelectorAll('.lot-checkbox:checked');
-      if (checkedBoxes.length === 0) {
-        alert("No lots were selected. Please check at least one checkbox.");
-        return;
-      }
-
-      // 2) For each checked box, find its card & send exactly one POST
-      for (const cb of checkedBoxes) {
-        const itemIdx = cb.dataset.itemIdx;
-        const lotIdx  = cb.dataset.lotIdx;
-        // Locate the nearest .card parent
-        const cardEl = cb.closest('.card');
-        if (!cardEl) continue;
-
-        // (Optional) per-card confirm:
-        // const name = cardEl.querySelector('.item-header')?.textContent.trim();
-        // if (!confirm(`Create this lot?\n\n${name}`)) continue;
-
-        // 3) Build the data object exactly as before
-        let bcItemNo = getFieldValue(cardEl, 'BCItemNo');
-        if (bcItemNo === 'Other') {
-          const manualInput = document.getElementById(`bc-input-${itemIdx}-${lotIdx}`);
-          bcItemNo = manualInput.value.trim();
-        }*/
 
         const data = {
           BCItemNo:           bcItemNo,
@@ -900,7 +766,105 @@
           alert(`❌ Network error: ${err.message}`);
         }
       }
+    });*/
+
+    // Open modal and populate list
+    document.getElementById('create-lots-btn')?.addEventListener('click', () => {
+      const cards = document.querySelectorAll('.card');
+      if (cards.length === 0) return alert("No items found to create.");
+
+      const listElement = document.getElementById('lot-selection-list');
+      listElement.innerHTML = '';
+
+      cards.forEach((card, idx) => {
+        const name = card.querySelector('.item-header')?.textContent.trim() || 'Unnamed Item';
+        card.dataset.itemIdx = idx; // ensure tracking
+        const listItem = document.createElement('li');
+        listItem.innerHTML = `
+          <label>
+            <input type="checkbox" class="lot-item-checkbox" data-item-idx="${idx}" checked />
+            ${name}
+          </label>`;
+        listElement.appendChild(listItem);
+      });
+
+      new bootstrap.Modal(document.getElementById('lot-selection-modal')).show();
     });
+
+    // Select/Deselect All
+    document.getElementById('select-all-lots')?.addEventListener('change', function (e) {
+      document.querySelectorAll('.lot-item-checkbox').forEach(cb => cb.checked = e.target.checked);
+    });
+
+    // Final confirmation click
+    document.getElementById('confirm-lot-creation-btn')?.addEventListener('click', async () => {
+      const selected = document.querySelectorAll('.lot-item-checkbox:checked');
+      if (selected.length === 0) return alert("No lots were selected. Please select at least one lot to create.");
+
+      bootstrap.Modal.getInstance(document.getElementById('lot-selection-modal')).hide();
+
+      for (const cb of selected) {
+        const idx = cb.dataset.itemIdx;
+        const card = document.querySelector(`.card[data-item-idx="${idx}"]`);
+
+        // Replace this with your current lot creation logic (read fields + POST to /create-lot)
+        // For example:
+        let bcItemNo = getFieldValue(card, 'BCItemNo');
+        if (bcItemNo === 'Other') {
+          const manualInput = document.getElementById(`bc-input-${idx}`);
+          bcItemNo = manualInput?.value.trim();
+        }
+
+        const data = {
+          BCItemNo: bcItemNo,
+          VendorLotNo: getFieldValue(card, 'VendorLotNo'),
+          OriginCountry: getFieldValue(card, 'OriginCountry'),
+          TreatmentsDescription: getFieldValue(card, 'TreatmentsDescription'),
+          TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
+          SeedSize: getFieldValue(card, 'SeedSize'),
+          SeedCount: getFieldValue(card, 'SeedCount'),
+          CurrentGerm: getFieldValue(card, 'CurrentGerm'),
+          CurrentGermDate: getFieldValue(card, 'CurrentGermDate'),
+          GrowerGerm: getFieldValue(card, 'GrowerGerm'),
+          GrowerGermDate: getFieldValue(card, 'GrowerGermDate'),
+          Purity: getFieldValue(card, 'Purity'),
+          Inert: getFieldValue(card, 'Inert'),
+          SproutCount: getFieldValue(card, 'SproutCount'),
+          Weed: getFieldValue(card, 'Weed'),
+          OtherCropSeed: getFieldValue(card, 'OtherCropSeed'),
+          VendorTreatmentName: getFieldValue(card, 'VendorTreatmentName'),
+          Pkg_Qty: getFieldValue(card, 'Pkg_Qty'),
+          USD_Actual_Cost_$: getFieldValue(card, 'USD_Actual_Cost_$'),
+          PackageDescription: getFieldValue(card, 'PackageDescription'),
+          TotalPrice: getFieldValue(card, 'TotalPrice'),
+          VendorItemNumber: getFieldValue(card, 'VendorItemNumber'),
+          VendorDescription: getFieldValue(card, 'VendorDescription')
+        };
+
+        try {
+          const res = await fetch('/create-lot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(data)
+          });
+
+          const json = await res.json();
+          if (res.ok && json.status === 'success') {
+            card.style.border = '2px solid green';
+          } else {
+            card.style.border = '2px solid red';
+            alert(`❌ Error for ${data.VendorLotNo}: ${json.message}`);
+          }
+        } catch (err) {
+          card.style.border = '2px solid red';
+          alert(`❌ Network error: ${err.message}`);
+        }
+      }
+
+      alert("✅ Done processing selected lots!");
+    });
+
   </script>
 </body>
 </html>

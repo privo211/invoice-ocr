@@ -40,36 +40,73 @@ def extract_text_with_azure_ocr(pdf_path: str) -> List[str]:
                 # Skip pages that are just legal notices
                 if page_text.lower().startswith("notice to purchaser") or "notice to purchaser" in page_text.lower():
                     continue
+                
 
                 for line in page["lines"]:
                     txt = line.get("content", "").strip()
                     if txt:
                         lines.append(txt)
                 lines.append("--- PAGE BREAK ---")
+                
+            print(lines)  # Debugging output
             return lines
+        
         if result.get("status") == "failed":
             raise RuntimeError("OCR analysis failed")
     raise TimeoutError("OCR timed out")
 
-def extract_text_with_fallback(pdf_path: str) -> List[str]:
-    """Extracts text from a PDF, using PyMuPDF first and falling back to Azure OCR if needed."""
-    lines = []
-    azure_lines = None
-    doc = fitz.open(pdf_path)
+# def extract_text_with_fallback(pdf_path: str) -> List[str]:
+#     """Extracts text from a PDF, using PyMuPDF first and falling back to Azure OCR if needed."""
+#     lines = []
+#     azure_lines = None
+#     doc = fitz.open(pdf_path)
 
+#     for page in doc:
+#         page_text = page.get_text()
+#         if "notice to purchaser" in page_text.lower():
+#             continue
+#         if page_text.strip():
+#             for ln in page_text.splitlines():
+#                 ln = ln.strip()
+#                 if ln:
+#                     lines.append(ln)
+#         else: # If a page is blank (likely a scanned image), use Azure OCR
+#             if azure_lines is None:
+#                 azure_lines = extract_text_with_azure_ocr(pdf_path)
+#             lines.extend(azure_lines)
+#     return lines
+
+def extract_text_with_fallback(pdf_path: str) -> List[str]:
+    """
+    Extracts text from a PDF, using PyMuPDF first. If any page is blank
+    (indicating a scanned document), it falls back to using Azure OCR for the entire document.
+    """
+    lines = []
+    is_scanned = False
+    try:
+        doc = fitz.open(pdf_path)
+    except fitz.errors.FitzError: # Handles corrupted/unsupported PDFs
+        # If the file can't be opened, go straight to OCR
+        return extract_text_with_azure_ocr(pdf_path)
+
+    # First, try to extract text with PyMuPDF and check if any page is empty
     for page in doc:
         page_text = page.get_text()
         if "notice to purchaser" in page_text.lower():
             continue
         if page_text.strip():
-            for ln in page_text.splitlines():
-                ln = ln.strip()
-                if ln:
-                    lines.append(ln)
-        else: # If a page is blank (likely a scanned image), use Azure OCR
-            if azure_lines is None:
-                azure_lines = extract_text_with_azure_ocr(pdf_path)
-            lines.extend(azure_lines)
+            lines.extend([ln.strip() for ln in page_text.splitlines() if ln.strip()])
+        else:
+            # If we find even one blank page, flag the whole document for OCR
+            is_scanned = True
+            break # No need to check other pages
+
+    # If the document was flagged as scanned (or if PyMuPDF extracted nothing),
+    # discard PyMuPDF's results and use Azure OCR for the whole document.
+    if is_scanned or not lines:
+        return extract_text_with_azure_ocr(pdf_path)
+    
+    # Otherwise, return the text successfully extracted by PyMuPDF
     return lines
 
 def extract_seminis_analysis_data(folder: str) -> Dict[str, Dict]:
@@ -79,7 +116,14 @@ def extract_seminis_analysis_data(folder: str) -> Dict[str, Dict]:
         if not fn.lower().endswith(".pdf") or "L_" not in fn:
             continue
         path = os.path.join(folder, fn)
-        text = "".join(page.get_text() for page in fitz.open(path))
+        
+        # Use the robust extraction function with OCR fallback
+        lines = extract_text_with_fallback(path)
+        if not lines: # Skip the file if no text could be extracted
+            continue
+        text = "\n".join(lines)
+        
+        #text = "".join(page.get_text() for page in fitz.open(path))
         norm = re.sub(r"\s{2,}", " ", text.replace("\n", " ").replace("\r", " "))
 
         m_lot = re.search(r"Lot Number[:\s]+(\d{9})", norm)
@@ -102,7 +146,13 @@ def extract_seminis_packing_data(folder: str) -> Dict[str, Dict]:
         if not fn.lower().endswith(".pdf") or "packing" not in fn.lower():
             continue
         path = os.path.join(folder, fn)
-        lines = [ln.strip() for ln in fitz.open(path).get_page_text(0).split("\n") if ln.strip()]
+        
+        # Use the robust extraction function with OCR fallback
+        lines = extract_text_with_fallback(path)
+        if not lines: # Skip the file if no text could be extracted
+            continue
+        
+        #lines = [ln.strip() for ln in fitz.open(path).get_page_text(0).split("\n") if ln.strip()]
         for i, line in enumerate(lines):
             if "TRT:" not in line:
                 continue

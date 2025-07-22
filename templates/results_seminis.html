@@ -236,7 +236,7 @@
   <div class="header container-fluid">
     <div class="d-flex align-items-center">
       <img id="stokes-logo" src="{{ url_for('static', filename='stokes_logo_rect.png') }}" alt="Stokes Logo" style="max-height: 50px; margin-right: 1rem;">
-      <h2 class="m-0">Seminis: Extracted Invoice Data (BETA)</h2>
+      <h2 class="m-0">Seminis: Extracted Invoice Data</h2>
     </div>
     <div class="auth-section">
       <button id="theme-toggle" class="btn-theme me-2">Dark Mode</button>
@@ -461,6 +461,26 @@
   </div>
   {% endfor %}
 
+  <div class="modal fade" id="lot-selection-modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
+      <div class="modal-content p-3">
+        <h4>Select Lots to Create</h4>
+        
+        <div class="select-all-container">
+            <input type="checkbox" id="select-all-lots" checked/>
+            <label for="select-all-lots">Select/Deselect All</label>
+        </div>
+
+        <ul class="list-unstyled mb-3" id="lot-selection-list"></ul>
+
+        <div class="text-end">
+          <button type="button" class="lookup-ok" id="confirm-lot-creation-btn">Create Selected Lots</button>
+          <button type="button" class="lookup-cancel" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <script>
     let bcItemsCache = null;
@@ -595,7 +615,7 @@
       return el.tagName === 'INPUT' || el.tagName === 'SELECT' ? el.value.trim() : el.textContent.trim();
     }
 
-    document.getElementById('create-lots-btn')?.addEventListener('click', async () => {
+    /*document.getElementById('create-lots-btn')?.addEventListener('click', async () => {
       const cards = document.querySelectorAll('.card');
       if (cards.length === 0) return alert("No items found to create.");
       
@@ -663,6 +683,117 @@
           alert(`❌ Network error for Vendor Lot ${data.VendorLotNo}:\n${err.message}`);
         }
       }
+    });*/
+    // Replace your existing 'create-lots-btn' event listener with all of this new code
+
+    document.getElementById('create-lots-btn')?.addEventListener('click', () => {
+      const cards = document.querySelectorAll('.card');
+      if (cards.length === 0) return alert("No items found to create.");
+
+      const listElement = document.getElementById('lot-selection-list');
+      listElement.innerHTML = ''; // Clear previous items
+
+      // Populate the modal with all lots from the page
+      cards.forEach(card => {
+        const name = card.querySelector('.item-header')?.textContent.trim() || 'Unnamed Item';
+        const itemIdx = card.dataset.itemIdx;
+
+        const listItem = document.createElement('li');
+        listItem.innerHTML = `
+          <label>
+            <input type="checkbox" class="lot-item-checkbox" data-item-idx="${itemIdx}" checked />
+            ${name}
+          </label>
+        `;
+        listElement.appendChild(listItem);
+      });
+      
+      // Show the modal
+      const lotSelectionModal = new bootstrap.Modal(document.getElementById('lot-selection-modal'));
+      lotSelectionModal.show();
+    });
+
+    // Add a new event listener for the "Select All" checkbox
+    document.getElementById('select-all-lots').addEventListener('change', function(e) {
+        document.querySelectorAll('#lot-selection-list .lot-item-checkbox').forEach(checkbox => {
+            checkbox.checked = e.target.checked;
+        });
+    });
+
+    // Add a new event listener for the final confirmation button inside the modal
+    document.getElementById('confirm-lot-creation-btn').addEventListener('click', async () => {
+      const selectedCheckboxes = document.querySelectorAll('#lot-selection-list .lot-item-checkbox:checked');
+      if (selectedCheckboxes.length === 0) {
+          alert("No lots were selected. Please select at least one lot to create.");
+          return;
+      }
+      
+      // Hide the modal before processing starts
+      const modalEl = document.getElementById('lot-selection-modal');
+      bootstrap.Modal.getInstance(modalEl).hide();
+
+      for (const checkbox of selectedCheckboxes) {
+        const itemIdx = checkbox.dataset.itemIdx;
+        const card = document.querySelector(`.card[data-item-idx="${itemIdx}"]`);
+        
+        // --- This is your original processing logic, now applied only to selected items ---
+        let bcItemNo = getFieldValue(card, 'BCItemNo');
+        if (bcItemNo === 'Other') {
+          const manualInput = document.getElementById(`bc-input-${itemIdx}`);
+          bcItemNo = manualInput.value.trim();
+        }
+
+        const data = {
+            BCItemNo:               bcItemNo,
+            TreatmentsDescription:  getFieldValue(card, 'TreatmentsDescription'),
+            TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
+            VendorLotNo:            getFieldValue(card, 'VendorLotNo'),
+            VendorBatchLot:         getFieldValue(card, 'VendorBatchNo'),
+            OriginCountry:          getFieldValue(card, 'OriginCountry'),
+            CurrentGerm:            getFieldValue(card, 'Germ'),
+            CurrentGermDate:        getFieldValue(card, 'GermDate'),
+            SeedCount:              getFieldValue(card, 'SeedCount'),
+            USD_Actual_Cost_$:      getFieldValue(card, 'USD_Actual_Cost_$'),
+            GrowerGerm:             getFieldValue(card, 'GrowerGerm'),
+            GrowerGermDate:         getFieldValue(card, 'GrowerGermDate'),
+            Purity:                 getFieldValue(card, 'Purity'),
+            Inert:                  getFieldValue(card, 'Inert'),
+            PackageDescription:     getFieldValue(card, 'PackageDescription'),
+            TotalQuantity:          getFieldValue(card, 'TotalQuantity'),
+            TotalPrice:             getFieldValue(card, 'TotalPrice')
+        };
+        
+        if (!data.BCItemNo || !data.VendorLotNo) {
+            alert(`Skipping item. Missing BC Item No. or Vendor Lot No. for card:\n${card.querySelector('.item-header').textContent.trim()}`);
+            continue;
+        }
+
+        try {
+            const res = await fetch('/create-lot', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify(data)
+            });
+
+            if (res.redirected || res.status === 401) {
+                alert('Your session has expired. Please sign in again.');
+                window.location.href = '/sign_in';
+                return;
+            }
+
+            const json = await res.json();
+            if (res.ok && json.status === 'success') {
+                card.style.border = '2px solid green';
+            } else {
+                card.style.border = '2px solid red';
+                alert(`❌ Error creating Lot for Vendor Lot ${data.VendorLotNo}:\n${json.message}`);
+            }
+        } catch (err) {
+            card.style.border = '2px solid red';
+            alert(`❌ Network error for Vendor Lot ${data.VendorLotNo}:\n${err.message}`);
+        }
+      }
+      alert("✅ Processing complete for all selected lots!");
     });
   </script>
 </body>
