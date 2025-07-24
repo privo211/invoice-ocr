@@ -5,6 +5,7 @@ import os
 import re
 import requests
 from datetime import datetime, timedelta
+from difflib import get_close_matches
 import msal
 from dotenv import load_dotenv
 from functools import wraps
@@ -152,6 +153,68 @@ def token_is_valid(access_token: str) -> bool:
         return resp.status_code == 200
     except requests.exceptions.RequestException:
         return False
+
+def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | None:
+    """
+    Finds the best BC Item Number by matching vendor description against BC options.
+    This version tokenizes strings to find the best match based on word overlap.
+    """
+    # ---- START: DEBUGGING PRINT STATEMENTS ----
+    print("\n" + "="*80)
+    print(f"DEBUG: Attempting to match Vendor Description:\n  '{vendor_desc}'")
+    # ---- END: DEBUGGING PRINT STATEMENTS ----
+
+    if not vendor_desc or not bc_options:
+        print("DEBUG: No vendor description or BC options provided. Returning None.")
+        print("="*80 + "\n")
+        return None
+
+    # Helper function to clean and split a string into a set of words
+    def clean_and_tokenize(text: str) -> set:
+        # Convert to lowercase, remove punctuation/special characters, and split into words
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', '', text)
+        return set(text.split())
+
+    vendor_words = clean_and_tokenize(vendor_desc)
+    
+    best_match_no = None
+    highest_score = 0
+
+    print(f"\nDEBUG: Vendor Words: {vendor_words}")
+    print("\nDEBUG: Evaluating BC Options...")
+
+    for option in bc_options:
+        bc_desc = option.get("Description", "")
+        if not bc_desc:
+            continue
+            
+        bc_words = clean_and_tokenize(bc_desc)
+        
+        # Calculate score based on the number of common words
+        common_words = vendor_words.intersection(bc_words)
+        score = len(common_words)
+        
+        print(f"  - Comparing with: '{bc_desc}'")
+        print(f"    - BC Words: {bc_words}")
+        print(f"    - Common Words: {common_words}")
+        print(f"    - Score: {score}")
+
+        # If this option has a better score, it becomes the new best match
+        if score > highest_score:
+            highest_score = score
+            best_match_no = option.get("No")
+            print(f"    - NEW BEST MATCH FOUND! (Item No: {best_match_no})")
+
+    # We require at least 1 words to match to be confident.
+    if highest_score >= 1:
+        print(f"\nDEBUG: SUCCESS! Final Best Match is Item No.: '{best_match_no}' with a score of {highest_score}")
+        print("="*80 + "\n")
+        return best_match_no
+
+    print(f"\nDEBUG: FAILED. No match with a high enough score was found (Highest score: {highest_score}).")
+    print("="*80 + "\n")
+    return None
 
 @app.route("/api/items")
 def api_items():
@@ -375,6 +438,10 @@ def index():
                             item["BCOptions"] = po_items  # Assign all PO items to each item with a matching PO
                         else:
                             item["BCOptions"] = []
+                            
+                        vendor_desc = item.get("VendorItemDescription", "")
+                        item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
+                        
                 except Exception as e:
                     app.logger.error(f"Failed to fetch PO items: {e}")
                     for item in all_items:
@@ -430,6 +497,9 @@ def index():
                     item["BCOptions"] = po_items_for_all
                 else:
                     item["BCOptions"] = []
+                    
+                vendor_desc = item.get("VendorItemDescription", "")
+                item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
                 
                 # Find and add the best package description using HM Clause specific logic
                 vendor_desc = item.get("VendorItemDescription", "")
@@ -491,7 +561,10 @@ def index():
                 else:
                     item["BCOptions"] = []
                     
-            # 6. Find and add the best package description using HM Clause specific logic
+                vendor_desc = item.get("VendorItemDescription", "")
+                item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
+                    
+                # 6. Find and add the best package description using HM Clause specific logic
                 vendor_desc = item.get("VendorItemDescription", "")
                 item["PackageDescription"] = find_best_seminis_package_description(vendor_desc, pkg_descs)
 

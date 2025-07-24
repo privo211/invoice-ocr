@@ -150,16 +150,18 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
                 "USD_Actual_Cost_$":     None,  # computed later
                 "ProductForm":           current.get("ProductForm"),
                 "Treatment":             current.get("Treatment"),
-                "Germ":                  current.get("Germ"),
-                "GermDate":              current.get("GermDate"),
+                # "Germ":                  current.get("Germ"),
+                # "GermDate":              current.get("GermDate"),
                 "SeedCount":             current.get("SeedCount"),
                 "Purity":                current.get("Purity"),
                 "SeedSize":              current.get("SeedSize"),
                 # purity‐analysis fields will get filled later
                 "PureSeed":     None,
-                "OtherCropSeed":None,
+                #"OtherCropSeed":None,
                 "InertMatter":  None,
-                "WeedSeed":     None
+                "Germ":         None,
+                "GermDate":     None
+                #"WeedSeed":     None
             })
         current.clear()
 
@@ -233,17 +235,17 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
             if m_tr:
                 current["Treatment"] = m_tr.group(1).strip()
 
-        # Germ
-        if "Germ" not in current:
-            m_g  = re.search(r"Germ:\s*(\d+\.\d+)", line)
-            if m_g:
-                current["Germ"] = int(float(m_g.group(1)))
+        # # Germ
+        # if "Germ" not in current:
+        #     m_g  = re.search(r"Germ:\s*(\d+\.\d+)", line)
+        #     if m_g:
+        #         current["Germ"] = int(float(m_g.group(1)))
 
-        # GermDate
-        if "GermDate" not in current:
-            m_gd = re.search(r"Germ Date:\s*(\d{2}/\d{2}/\d{2})", line)
-            if m_gd:
-                current["GermDate"] = m_gd.group(1)
+        # # GermDate
+        # if "GermDate" not in current:
+        #     m_gd = re.search(r"Germ Date:\s*(\d{2}/\d{2}/\d{2})", line)
+        #     if m_gd:
+        #         current["GermDate"] = m_gd.group(1)
 
         # SeedCount
         if "SeedCount" not in current:
@@ -329,7 +331,7 @@ def extract_purity_analysis_reports(input_folder: str) -> Dict[str, Dict]:
     Extracts purity analysis data from all seed analysis report PDFs in the folder.
     Returns a dictionary mapping batch lot prefixes (first 6 characters of filename) to purity data.
     """
-    purity_data = {}
+    purity_data = defaultdict(dict)
     if not input_folder or not os.path.isdir(input_folder):
         return {}
     for file in os.listdir(input_folder):
@@ -345,27 +347,47 @@ def extract_purity_analysis_reports(input_folder: str) -> Dict[str, Dict]:
             text = re.sub(r'\s{2,}', ' ', text)
 
             match_pure = re.search(r"Pure Seed:\s*(\d+\.\d+)\s*%", text)
-            match_other = re.search(r"Other Crop Seed\s*:\s*(\d+\.\d+)\s*%", text)
+            #match_other = re.search(r"Other Crop Seed\s*:\s*(\d+\.\d+)\s*%", text)
             match_inert = re.search(r"Inert Matter:\s*(\d+\.\d+)\s*%", text)
-            match_weed = re.search(r"Weed Seed\s*:\s*(\d+\.\d+)\s*%", text)
+            #match_weed = re.search(r"Weed Seed\s*:\s*(\d+\.\d+)\s*%", text)
 
-            if match_pure or match_other or match_inert or match_weed:
-                purity_data[batch_key] = {
-                    "PureSeed": float(match_pure.group(1)) if match_pure else None,
-                    "OtherCropSeed": float(match_other.group(1)) if match_other else None,
-                    "InertMatter": float(match_inert.group(1)) if match_inert else None,
-                    "WeedSeed": float(match_weed.group(1)) if match_weed else None
-                }
+            if match_pure  or match_inert:
+                
+                pure_seed = float(match_pure.group(1))
+                inert_matter = float(match_inert.group(1))
+                
+                if pure_seed != 100:
+                    purity_data[batch_key]["PureSeed"] = pure_seed
+                    purity_data[batch_key]["InertMatter"] = inert_matter
+                else:
+                    purity_data[batch_key]["PureSeed"] = 99.99
+                    purity_data[batch_key]["InertMatter"] = 0.01
+        
+                # purity_data[batch_key] = {
+                #     "PureSeed": float(match_pure.group(1)) if match_pure else None,
+                #     "InertMatter": float(match_inert.group(1)) if match_inert else None
+                    
+                    
+                #     #"OtherCropSeed": float(match_other.group(1)) if match_other else None,
+                #     #"WeedSeed": float(match_weed.group(1)) if match_weed else None
+                # }
                 
                 # Grower Germ Date: first date before "REPORT OF SEED ANALYSIS"
                 date_matches = re.findall(r"(\d{1,2}/\d{1,2}/\d{4})(?=.*?REPORT OF SEED ANALYSIS)", text, re.IGNORECASE)
                 if len(date_matches) >= 2:
                     purity_data[batch_key]["GrowerGermDate"] = date_matches[-1]
+                    purity_data[batch_key]["GermDate"] = date_matches[-1]
 
                 # Grower Germ: extract the number immediately after "% Comments:"
                 match = re.search(r"%\s*Comments:\s*(?:[A-Za-z]+\s+)*(\d{2,3})\b", text)
                 if match:
-                    purity_data[batch_key]["GrowerGerm"] = int(float(match.group(1)))
+                    germ = int(float(match.group(1)))
+                    purity_data[batch_key]["GrowerGerm"] = germ
+                    
+                    if germ != 100:
+                        purity_data[batch_key]["Germ"] = germ
+                    else:
+                        purity_data[batch_key]["Germ"] = 98
 
     return purity_data
 
@@ -378,11 +400,13 @@ def enrich_invoice_items_with_purity(items: List[Dict], purity_data: Dict[str, D
         key = batch_lot[:6]
         match = purity_data.get(key, {})
         item["PureSeed"] = match.get("PureSeed")
-        item["OtherCropSeed"] = match.get("OtherCropSeed")
+        #item["OtherCropSeed"] = match.get("OtherCropSeed")
         item["InertMatter"] = match.get("InertMatter")
-        item["WeedSeed"] = match.get("WeedSeed")
+        #item["WeedSeed"] = match.get("WeedSeed")
         item["GrowerGerm"] = match.get("GrowerGerm")
         item["GrowerGermDate"] = match.get("GrowerGermDate")
+        item["Germ"] = match.get("Germ")
+        item["GermDate"] = match.get("GermDate")
 
     return items
 
@@ -498,15 +522,17 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
                 "USD_Actual_Cost_$":     None,  # computed later
                 "ProductForm":           current_item_data.get("ProductForm"),
                 "Treatment":             current_item_data.get("Treatment"),
-                "Germ":                  current_item_data.get("Germ"),
-                "GermDate":              current_item_data.get("GermDate"),
+                # "Germ":                  current_item_data.get("Germ"),
+                # "GermDate":              current_item_data.get("GermDate"),
                 "SeedCount":             current_item_data.get("SeedCount"),
                 "Purity":                current_item_data.get("Purity"),
                 "SeedSize":              current_item_data.get("SeedSize"),
                 "PureSeed":              None,
-                "OtherCropSeed":         None,
+                #"OtherCropSeed":         None,
                 "InertMatter":           None,
-                "WeedSeed":              None
+                "Germ":                  None,
+                "GermDate":              None
+                #"WeedSeed":              None
             })
             #print(f"FLUSHED ITEM → VendorItemNumber: {current_item_data.get('VendorItemNumber')}, Batch: {current_item_data.get('VendorBatchLot')}, Seed Count: {current_item_data.get('SeedCount')}")
         current_item_data = {}
@@ -603,13 +629,13 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
         if m_tr:
             current_item_data["Treatment"] = m_tr.group(1).strip()
             
-        m_g = re.search(r"Germ:\s*(\d+\.\d+)", block_text)
-        if m_g:
-            current_item_data["Germ"] = int(float((m_g.group(1))))
+        # m_g = re.search(r"Germ:\s*(\d+\.\d+)", block_text)
+        # if m_g:
+        #     current_item_data["Germ"] = int(float((m_g.group(1))))
             
-        m_gd = re.search(r"Germ Date:\s*(\d{2}/\d{2}/\d{2})", block_text)
-        if m_gd:
-            current_item_data["GermDate"] = m_gd.group(1)
+        # m_gd = re.search(r"Germ Date:\s*(\d{2}/\d{2}/\d{2})", block_text)
+        # if m_gd:
+        #     current_item_data["GermDate"] = m_gd.group(1)
         
         m_sc = re.search(r"(?<!Approx\.\s)Seed Count:\s*(\d+)", block_text)
         if m_sc:

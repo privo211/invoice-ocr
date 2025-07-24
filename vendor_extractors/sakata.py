@@ -261,7 +261,17 @@ def parse_lot_block(raw_text: str) -> Dict:
         lot_no = parts[0].strip()
 
         # line 3: Current germ %
-        current_germ = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+        current_germ = None
+        germ_candidate = parts[2].isdigit()
+        
+        if len(parts) > 2:
+            if germ_candidate:
+                if int(parts[2]) != 100:
+                    current_germ = int(parts[2])
+                elif int(parts[2]) == 100:
+                    current_germ = 98
+        else: 
+            current_germ = None
 
         # line 4: GermDate + SeedCount
         germ_date, seed_count = None, None
@@ -400,6 +410,11 @@ def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
                 continue
 
             pure, inert, other, weed, grower_germ = vals
+            
+            if float(pure) == 100:
+                pure = 99.99
+                inert = 0.01
+                    
             report_map[lot_no] = {
                 "Purity":  pure,
                 "Inert":     inert,

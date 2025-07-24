@@ -271,12 +271,6 @@
                     {{ item.VendorItemNumber }} - {{ item.VendorDescription }}
                   </div>
                   <dl class="row">
-                    <dt class="col-sm-4">Vendor Lot No.</dt>
-                    <dd class="col-sm-8">
-                      <div class="field-box" data-field="VendorLotNo" contenteditable="true">
-                        {{ lot.VendorLotNo }}
-                      </div>
-                    </dd>
 
                     <dt class="col-sm-4">Search Purchase Order</dt>
                     <dd class="col-sm-8">
@@ -297,7 +291,7 @@
                         data-lot-idx="{{ lot_idx }}"
                         data-field="BCItemNo"
                       >
-                        {% for opt in item.BCOptions %}
+                        <!--{% for opt in item.BCOptions %}
                           <option value="{{ opt.No }}"
                                   {% if lot.BCItemNo == opt.No %}selected{% endif %}>
                             {{ opt.No }} — {{ opt.Description }}
@@ -306,7 +300,17 @@
                         <option value="Other"
                                 {% if lot.BCItemNo == 'Other' or item.BCOptions|length == 0 %}selected{% endif %}>
                           Other
-                        </option>
+                        </option>-->
+
+                        {% if not item.BCOptions %}<option value="">— Enter a PO to see options —</option>{% endif %}
+                        {% for opt in item.BCOptions %}
+                          <option value="{{ opt.No }}"
+                                  {% if item.SuggestedBCItemNo == opt.No %}selected{% endif %}>
+                            {{ opt.No }} — {{ opt.Description }}
+                          </option>
+                        {% endfor %}
+                        <option value="Other">Other</option>
+                        
                       </select>
 
                       <select
@@ -374,6 +378,13 @@
                     <dd class="col-sm-8">
                       <div class="field-box" data-field="SproutCount" contenteditable="true">
                         {{ lot.SproutCount }}
+                      </div>
+                    </dd>
+
+                    <dt class="col-sm-4">Vendor Lot No.</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="VendorLotNo" contenteditable="true">
+                        {{ lot.VendorLotNo }}
                       </div>
                     </dd>
 

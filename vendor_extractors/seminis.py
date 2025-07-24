@@ -131,12 +131,26 @@ def extract_seminis_analysis_data(folder: str) -> Dict[str, Dict]:
             continue
         lot = m_lot.group(1)
 
+        pure_match = re.search(r"Pure Seed\s*%\s*([\d.]+)", norm)
+        inert_match = re.search(r"Inert Matter\s*%\s*([\d.]+)", norm)
+        germ_match = re.search(r"Germination\s*%\s*([\d.]+)", norm)
+        date_match = re.search(r"Date Tested\s*([\d/]{8,10})", norm)
+
+        pure = float(pure_match.group(1)) if pure_match else None
+        inert = float(inert_match.group(1)) if inert_match else None
+
+        # Apply normalization: If PureSeed == 100, adjust values
+        if pure == 100.0:
+            pure = 99.99
+            inert = 0.01
+
         analysis[lot] = {
-            "PureSeed": float(re.search(r"Pure Seed\s*%\s*([\d.]+)", norm).group(1)) if re.search(r"Pure Seed\s*%\s*([\d.]+)", norm) else None,
-            "InertMatter": float(re.search(r"Inert Matter\s*%\s*([\d.]+)", norm).group(1)) if re.search(r"Inert Matter\s*%\s*([\d.]+)", norm) else None,
-            "Germ": int(float(re.search(r"Germination\s*%\s*([\d.]+)", norm).group(1))) if re.search(r"Germination\s*%\s*([\d.]+)", norm) else None,
-            "GermDate": re.search(r"Date Tested\s*([\d/]{8,10})", norm).group(1) if re.search(r"Date Tested\s*([\d/]{8,10})", norm) else None,
+            "PureSeed": pure,
+            "InertMatter": inert,
+            "Germ": int(float(germ_match.group(1))) if germ_match else None,
+            "GermDate": date_match.group(1) if date_match else None
         }
+        
     return analysis
 
 def extract_seminis_packing_data(folder: str) -> Dict[str, Dict]:
@@ -162,8 +176,11 @@ def extract_seminis_packing_data(folder: str) -> Dict[str, Dict]:
             seed_count = vendor_batch = germ = germ_date = None
             if (m := re.search(r"\d+\s*/\s*(\d+)", joined)): seed_count = int(m.group(1))
             if (m := re.search(r"\d{2}/\d{2}/\d{4}.*?\b(\d{10})\b", joined)): vendor_batch = m.group(1)
-            if (m := re.search(r"(\d{2,3})\s+(?=\d{2}/\d{2}/\d{4})", joined)): germ = int(m.group(1))
             if (m := re.search(r"(\d{2}/\d{2}/\d{4})", joined)): germ_date = m.group(1)
+            if (m := re.search(r"(\d{2,3})\s+(?=\d{2}/\d{2}/\d{4})", joined)) and int(m.group(1)) != 100: 
+                germ = int(m.group(1))
+            elif (m := re.search(r"(\d{2,3})\s+(?=\d{2}/\d{2}/\d{4})", joined)) and int(m.group(1)) == 100:
+                germ = 98 # Special case for 100% germination
 
             if vendor_batch:
                 packing_data[vendor_batch] = {
