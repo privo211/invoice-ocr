@@ -3,7 +3,6 @@
 <head>
   <meta charset="utf-8" />
   <title>Vendor Invoice Processor</title>
-  <!-- Roboto from Google Fonts -->
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}" />
@@ -115,15 +114,6 @@
       padding: 4px 10px;
       margin: 0;
     }
-    /*
-    .small-btn {
-      font-size: 0.85rem;
-      padding: 6px 10px;
-    }
-
-    .auth-status-bar .auth-btn {
-      margin-left: 10px;
-    }*/
   </style>
 </head>
 <body>
@@ -135,47 +125,12 @@
         <button id="theme-toggle">Dark Mode</button>
       </div>
 
-      <!--{% if not session.get("user_token") %}
-        <p><strong>Status:</strong> Not signed in</p>
-        <a class="auth-btn" href="{{ url_for('sign_in') }}">Sign In with Microsoft</a>
-      {% else %}
-        <p><strong>Status:</strong> Signed in</p>
-        <p>Hello, {{ session.user_name }}!</p>
-        <a class="auth-btn" href="{{ url_for('logout') }}">Sign Out</a>
-        <form id="extract-form" action="/" method="post" enctype="multipart/form-data">
-          <label for="vendor">Select Vendor:</label>
-          <select name="vendor" id="vendor">
-            <option value="sakata">Sakata</option>
-            <option value="hm_clause">HM Clause</option>
-            <option value="seminis">Seminis</option>
-            <option value="nunhems">Nunhems (coming soon)</option>
-          </select>
-
-          <label for="dropzone">Upload Invoices and related PDF(s):</label>
-          <div id="dropzone" class="dropzone">
-            <p>Drag & Drop PDF files here, or click to select</p>
-            <input type="file" name="pdfs" id="pdfs" multiple accept="application/pdf" style="display:none;" />
-          </div>
-          <div class="file-info" id="file-info">No files chosen (max. 25 MB)</div>
-
-          <input type="submit" value="Extract Data" />
-        </form>
-      {% endif %}-->
-
       {% if not session.get("user_token") %}
         <div class="auth-status-bar">
           <p><strong>Status:</strong> Not signed in</p>
           <a class="auth-btn" href="{{ url_for('sign_in') }}">Sign In with Microsoft</a>
         </div>
       {% else %}
-        <!--<div class="auth-status-bar">
-          <p class="left"><strong>Hello, {{ session.user_name }}!</strong></p>
-          <div class="right">
-            <p><strong>Status:</strong> Signed in</p>
-            <a class="auth-btn small-btn" href="{{ url_for('logout') }}">Sign Out</a>
-          </div>
-        </div>-->
-
         <div class="auth-status-bar">
           <div class="left">Hello, {{ session.user_name }}!</div>
           <div class="right">
@@ -190,7 +145,7 @@
             <option value="sakata">Sakata</option>
             <option value="hm_clause">HM Clause</option>
             <option value="seminis">Seminis</option>
-            <option value="nunhems">Nunhems (coming soon)</option>
+            <option value="nunhems">Nunhems</option>
           </select>
 
           <label for="dropzone">Upload Invoices and related PDF(s):</label>
@@ -211,90 +166,11 @@
     </div>
   </div>
 
-  <!-- Loading overlay -->
   <div id="loading-overlay" class="position-fixed top-0 start-0 w-100 h-100 justify-content-center align-items-center bg-dark bg-opacity-50" style="z-index: 1050; display: none;">
     <div class="spinner-border text-light" role="status">
       <span class="visually-hidden">Loading…</span>
     </div>
   </div>
-
-  <!--<script>
-    // Dark/Light toggle + logo switch
-    const toggleButton = document.getElementById('theme-toggle');
-    const body = document.body;
-    const logo = document.getElementById('stokes-logo');
-
-    function updateLogoTheme(isDark) {
-      if (!logo) return;
-      logo.src = isDark
-        ? "{{ url_for('static', filename='stokes_logo_rect_white.png') }}"
-        : "{{ url_for('static', filename='stokes_logo_rect.png') }}";
-    }
-
-    if (localStorage.getItem('theme') === 'dark-mode') {
-      body.classList.add('dark-mode');
-      toggleButton.textContent = 'Light Mode';
-      updateLogoTheme(true);
-    }
-    toggleButton.addEventListener('click', () => {
-      const dark = body.classList.toggle('dark-mode');
-      toggleButton.textContent = dark ? 'Light Mode' : 'Dark Mode';
-      localStorage.setItem('theme', dark ? 'dark-mode' : 'light-mode');
-      updateLogoTheme(dark);
-    });
-
-    // Maintain a DataTransfer for accumulated files
-    const dropzone = document.getElementById('dropzone');
-    const pdfInput = document.getElementById('pdfs');
-    const fileInfo = document.getElementById('file-info');
-    const dataTransfer = new DataTransfer();
-
-    // Click to open file dialog
-    dropzone.addEventListener('click', () => pdfInput.click());
-
-    // Highlight dropzone on drag events
-    ['dragenter', 'dragover'].forEach(evt => dropzone.addEventListener(evt, e => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropzone.classList.add('dragover');
-    }));
-    ['dragleave', 'drop'].forEach(evt => dropzone.addEventListener(evt, e => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropzone.classList.remove('dragover');
-    }));
-
-    // Handle dropped files
-    dropzone.addEventListener('drop', e => {
-      const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
-      files.forEach(file => dataTransfer.items.add(file));
-      pdfInput.files = dataTransfer.files;
-      updateFileInfo(Array.from(dataTransfer.files));
-    });
-
-    // Handle manual file selection
-    pdfInput.addEventListener('change', function () {
-      Array.from(this.files).forEach(file => dataTransfer.items.add(file));
-      pdfInput.files = dataTransfer.files;
-      updateFileInfo(Array.from(dataTransfer.files));
-    });
-
-    function updateFileInfo(files) {
-      fileInfo.textContent = files.length
-        ? `${files.length} file(s):\n${files.map(f => f.name).join('\n')}`
-        : 'No files chosen (max. 25 MB)';
-    }
-
-    // Show loading overlay on form submit
-    const form = document.getElementById('extract-form');
-    const overlay = document.getElementById('loading-overlay');
-    if (form && overlay) {
-      form.addEventListener('submit', function () {
-        overlay.style.display = 'flex';
-        overlay.classList.add('d-flex');
-      });
-    }
-  </script>-->
 
   <script>
     // Theme toggle
@@ -358,7 +234,7 @@
       );
       files.forEach(file => dataTransfer.items.add(file));
       pdfInput.files = dataTransfer.files;
-      updateFileInfo(Array.from(dataTransfer.files));
+      updateFileInfo();
     });
 
     // Handle manual selection
@@ -369,17 +245,18 @@
         }
       });
       pdfInput.files = dataTransfer.files;
-      updateFileInfo(Array.from(dataTransfer.files));
+      updateFileInfo();
     });
 
+    // Function to update the file list display and button visibility
     function updateFileInfo() {
       const files = Array.from(dataTransfer.files);
       if (files.length) {
         fileInfo.textContent = `${files.length} file(s):\n${files.map(f => f.name).join('\n')}`;
-        clearBtn.style.display = 'block';  // Show button
+        buttonContainer.style.display = 'flex'; // Show button container
       } else {
         fileInfo.textContent = 'No files chosen (max. 25 MB)';
-        clearBtn.style.display = 'none';   // Hide button
+        buttonContainer.style.display = 'none'; // Hide button container
       }
     }
 
@@ -393,20 +270,55 @@
       });
     }
 
-    // ✅ Add reset button below dropzone
+    // --- Create and manage Clear and Undo buttons ---
+    
+    // Create a container for the buttons
+    const buttonContainer = document.createElement('div');
+    buttonContainer.className = 'd-flex justify-content-end gap-2'; // Use flexbox for layout
+    buttonContainer.style.cssText = 'margin-top: 0.5rem; display: none;'; // Hidden by default
+
+    // Create the "Clear Files" button
     const clearBtn = document.createElement('button');
     clearBtn.textContent = 'Clear Files';
     clearBtn.type = 'button';
-    clearBtn.style.cssText = 'margin-top: 0.5rem; display: none;';
     clearBtn.className = 'btn btn-outline-danger btn-sm';
+    
+    // Create the "Undo" button
+    const undoBtn = document.createElement('button');
+    undoBtn.textContent = 'Undo';
+    undoBtn.type = 'button';
+    undoBtn.className = 'btn btn-outline-secondary btn-sm';
 
-    dropzone.insertAdjacentElement('afterend', clearBtn);
+    // Add buttons to the container
+    buttonContainer.appendChild(clearBtn);
+    buttonContainer.appendChild(undoBtn);
 
+    // Add the button container to the page, right after the dropzone
+    dropzone.insertAdjacentElement('afterend', buttonContainer);
+
+    // Event listener for "Clear Files"
     clearBtn.addEventListener('click', () => {
       dataTransfer.items.clear();
-      pdfInput.value = '';
+      pdfInput.value = ''; // Also clear the original input value
       pdfInput.files = dataTransfer.files;
       updateFileInfo();
+    });
+    
+    // Event listener for "Undo"
+    undoBtn.addEventListener('click', () => {
+        const currentFiles = Array.from(dataTransfer.files);
+        if (currentFiles.length === 0) return; // Nothing to undo
+
+        // Get all files except the last one
+        const filesToKeep = currentFiles.slice(0, -1);
+        
+        // Clear the current list and repopulate it
+        dataTransfer.items.clear();
+        filesToKeep.forEach(file => dataTransfer.items.add(file));
+
+        // Update the input element and the UI
+        pdfInput.files = dataTransfer.files;
+        updateFileInfo();
     });
   </script>
 

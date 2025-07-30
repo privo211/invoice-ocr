@@ -13,6 +13,7 @@ from multiprocessing import Pool, cpu_count
 from vendor_extractors.sakata import extract_sakata_data, load_package_descriptions, get_po_items
 from vendor_extractors.hm_clause import extract_hm_clause_data, find_best_hm_clause_package_description
 from vendor_extractors.seminis import extract_seminis_invoice_data, find_best_seminis_package_description
+from vendor_extractors.nunhems import extract_nunhems_invoice_data, find_best_nunhems_package_description
 import time
 import logging
 import psycopg2
@@ -317,6 +318,14 @@ def _extract_seminis_file(path):
         app.logger.error(f"Error processing {path}: {e}")
         return os.path.basename(path), []
     
+def _extract_nunhems_file(path):
+    try:
+        # The Nunhems extractor is designed to find its own related files in the same folder
+        return os.path.basename(path), extract_nunhems_invoice_data(path)
+    except Exception as e:
+        app.logger.error(f"Error processing {path} for Nunhems: {e}")
+        return os.path.basename(path), []
+    
 # Login required decorator
 def login_required(f):
     @wraps(f)
@@ -576,6 +585,64 @@ def index():
                 treatments2=treatments2,
                 pkg_descs=pkg_descs
             )
+            
+        elif vendor == "nunhems":
+            # 1. Load shared data from BC first
+            pkg_descs = load_package_descriptions(user_token)
+            treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
+            treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
+
+            # 2. Filter for main invoice files and extract data using multiprocessing
+            main_invoice_paths = [p for p in pdf_paths if not any(x in os.path.basename(p).lower() for x in ["nal", "basf", "packing", "ship"])]
+            
+            with Pool(processes=cpu_count()) as pool:
+                results = pool.map(_extract_nunhems_file, main_invoice_paths)
+
+            # 3. Group results and create a flat list for processing
+            final_grouped_results = {}
+            all_items_flat = []
+            for filename, items in results:
+                if items:
+                    final_grouped_results[filename] = items
+                    all_items_flat.extend(items)
+            
+            # Clean up all uploaded files after processing is complete
+            for path in pdf_paths:
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    app.logger.error(f"Could not delete file {path}: {e}")
+
+            # 4. Fetch all PO data at once
+            all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
+            po_items_for_all = []
+            if all_pos:
+                try:
+                    po_items_for_all = get_po_items("|".join(all_pos), user_token)
+                except Exception as e:
+                    app.logger.error(f"Failed to fetch PO items for Nunhems: {e}")
+                    po_items_for_all = [{"No": "ERROR", "Description": str(e)}]
+
+            # 5. Enrich each item with PO options and package description
+            for item in all_items_flat:
+                if item.get("PurchaseOrder"):
+                    item["BCOptions"] = po_items_for_all
+                else:
+                    item["BCOptions"] = []
+                    
+                vendor_desc = item.get("VendorItemDescription", "")
+                item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
+                
+                item["PackageDescription"] = find_best_nunhems_package_description(vendor_desc, pkg_descs)
+            
+            # 6. Render the template with all necessary data
+            return render_template(
+                "results_nunhems.html",
+                items=final_grouped_results,
+                treatments1=treatments1,
+                treatments2=treatments2,
+                pkg_descs=pkg_descs
+            )
 
         else:
             for path in pdf_paths:
@@ -617,6 +684,12 @@ def create_lot():
         session.pop("user_name", None)
         return redirect(url_for("sign_in"))
     
+    def normalize_text(val):
+        if val is None:
+            return ""
+        val_str = str(val).strip()
+        return "" if val_str.lower() == "none" else val_str
+
     data = request.get_json()
     print(f"Received data for lot creation: {data}")
     def parse_decimal(val):
@@ -628,33 +701,55 @@ def create_lot():
         except ValueError:
             return None
     
-    for key, val in data.items():
-        if isinstance(val, str) and val.lower() == "none":
-            data[key] = ""
+    # for key, val in data.items():
+    #     if isinstance(val, str) and val.lower() == "none":
+    #         data[key] = ""
             
-    raw_sprout = data.get("SproutCount", "").strip()
+    # raw_sprout = data.get("SproutCount", "").strip()
 
-    # Null-guard all inputs
-    item_no     = str(data.get("BCItemNo", "")).strip() or None
-    vendor_lot  = str(data.get("VendorLotNo", "")).strip() or None
-    vendor_batch = str(data.get("VendorBatchLot", "")).strip() or None
-    country     = str(data.get("OriginCountry", "")).strip() or None
-    td1         = str(data.get("TreatmentsDescription", "")).strip() or None
-    td2_text    = str(data.get("TreatmentsDescription2", "")).strip() or None
-    seed_size   = str(data.get("SeedSize", "")).strip() or None
+    # # Null-guard all inputs
+    # item_no     = str(data.get("BCItemNo", "")).strip() or None
+    # vendor_lot  = str(data.get("VendorLotNo", "")).strip() or None
+    # vendor_batch = str(data.get("VendorBatchLot", "")).strip() or None
+    # country     = str(data.get("OriginCountry", "")).strip() or None
+    # td1         = str(data.get("TreatmentsDescription", "")).strip() or None
+    # td2_text    = str(data.get("TreatmentsDescription2", "")).strip() or None
+    # seed_size   = str(data.get("SeedSize", "")).strip() or None
 
-    seed_count = parse_decimal(data.get("SeedCount"))
-    germ_pct   = data.get("CurrentGerm", "").strip()
-    #purity     = parse_decimal(data.get("Purity"))
-    pure       = parse_decimal(data.get("Purity"))
-    inert      = parse_decimal(data.get("Inert"))
-    grower_germ= parse_decimal(data.get("GrowerGerm", ""))
-    usd_cost_val = parse_decimal(data.get("USD_Actual_Cost_$"))
-    #pkg_qty_dec_val = parse_decimal(data.get("Pkg_Qty"))
-    #pkg_qty_val = int(pkg_qty_dec_val) if pkg_qty_dec_val is not None else None
+    # seed_count = parse_decimal(data.get("SeedCount"))
+    # germ_pct   = data.get("CurrentGerm", "").strip()
+    # #purity     = parse_decimal(data.get("Purity"))
+    # pure       = parse_decimal(data.get("Purity"))
+    # inert      = parse_decimal(data.get("Inert"))
+    # grower_germ= parse_decimal(data.get("GrowerGerm", ""))
+    # usd_cost_val = parse_decimal(data.get("USD_Actual_Cost_$"))
+    # #pkg_qty_dec_val = parse_decimal(data.get("Pkg_Qty"))
+    # #pkg_qty_val = int(pkg_qty_dec_val) if pkg_qty_dec_val is not None else None
 
-    raw_date = data.get("CurrentGermDate", "").strip()
-    raw_grower_date = data.get("GrowerGermDate", "").strip()
+    # raw_date = data.get("CurrentGermDate", "").strip()
+    # raw_grower_date = data.get("GrowerGermDate", "").strip()
+    
+    # Extract and normalize all fields
+    item_no        = normalize_text(data.get("BCItemNo"))
+    vendor_lot     = normalize_text(data.get("VendorLotNo"))
+    vendor_batch   = normalize_text(data.get("VendorBatchLot"))
+    country        = normalize_text(data.get("OriginCountry"))
+    td1            = normalize_text(data.get("TreatmentsDescription"))
+    td2_text       = normalize_text(data.get("TreatmentsDescription2"))
+    seed_size      = normalize_text(data.get("SeedSize"))
+    raw_sprout     = normalize_text(data.get("SproutCount"))
+
+    seed_count     = parse_decimal(data.get("SeedCount"))
+    germ_pct       = normalize_text(data.get("CurrentGerm"))
+    pure           = parse_decimal(data.get("Purity"))
+    inert          = parse_decimal(data.get("Inert"))
+    grower_germ    = parse_decimal(data.get("GrowerGerm"))
+    usd_cost_val   = parse_decimal(data.get("USD_Actual_Cost_$"))
+
+    raw_date            = normalize_text(data.get("CurrentGermDate"))
+    raw_grower_date     = normalize_text(data.get("GrowerGermDate"))
+
+    pkg_desc_val   = normalize_text(data.get("PackageDescription"))
     
     def normalize_date(raw):
         try:
@@ -668,10 +763,9 @@ def create_lot():
     grower_germ_date_iso = normalize_date(raw_grower_date)
 
     treated = "Yes" if td1 and td1.lower() != "untreated" else "No"
-    
     if raw_sprout:
         td2_text = f"SPROUT COUNT-{raw_sprout}" + (", " + td2_text if td2_text else "")
-    td2 = td2_text or None
+    td2 = td2_text
     
     pkg_desc_val = data.get("PackageDescription")
     
@@ -699,7 +793,7 @@ def create_lot():
         "TMG_PackageDesc":             pkg_desc_val
     }
 
-    payload = {k: v for k, v in raw_payload.items() if v is not None}
+    payload = {k: v for k, v in raw_payload.items() if v != None}
 
     app.logger.info("Extracted data: %s", data)
     app.logger.info("Raw payload: %s", raw_payload)

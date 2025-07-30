@@ -5,6 +5,7 @@ from typing import List, Dict, TypedDict, Union
 import requests
 from difflib import get_close_matches
 import time
+import pycountry
 import logging
 from functools import wraps
 from dotenv import load_dotenv
@@ -229,26 +230,51 @@ def get_po_items(po_number, token):
     _po_cache[po_number] = data
     return data
 
-alpha3_to_bc = {
-    "ARE": "AE", "ARG": "AR", "AUT": "AT", "AUS": "AU", "AZE": "AZ",
-    "BEL": "BE", "BGR": "BG", "BRN": "BN", "BOL": "BO", "BRA": "BR",
-    "CAN": "CA", "CHE": "CH", "CHL": "CL", "CHN": "CN", "CRI": "CR",
-    "CYP": "CY", "CZE": "CZ", "DEU": "DE", "DNK": "DK", "DZA": "DZ",
-    "ECU": "EC", "EST": "EE", "GRC": "EL", "ESP": "ES", "ETH": "ET",
-    "FIN": "FI", "FJI": "FJ", "FRA": "FR", "GBR": "GB", "GTM": "GT",
-    "HKG": "HK", "HND": "HN", "HRV": "HR", "HUN": "HU", "IDN": "ID",
-    "IRL": "IE", "ISR": "IL", "IND": "IN", "ISL": "IS", "ITA": "IT",
-    "JPN": "JP", "KEN": "KE", "KGZ": "KG", "PRK": "KP", "KOR": "KR",
-    "LKA": "LK", "LTU": "LT", "LUX": "LU", "LVA": "LV", "MAR": "MA",
-    "MNE": "ME", "MMR": "MM", "MLT": "MT", "MEX": "MX", "MYS": "MY",
-    "MOZ": "MZ", "NGA": "NG", "NLD": "NL", "NOR": "NO", "NZL": "NZ",
-    "PER": "PE", "PHL": "PH", "POL": "PL", "PRT": "PT", "ROU": "RO",
-    "SRB": "RS", "RUS": "RU", "SAU": "SA", "SLB": "SB", "SWE": "SE",
-    "SGP": "SG", "SVN": "SI", "SVK": "SK", "SWZ": "SZ", "THA": "TH",
-    "TUN": "TN", "TUR": "TR", "TWN": "TW", "TZA": "TZ", "USA": "US",
-    "UGA": "UG", "VNM": "VN", "VUT": "VU", "WSM": "WS", "ZAF": "ZA",
-    "ZMB": "ZM", "ZWE": "ZW"
-}
+def convert_to_alpha2(country_value: str) -> str:
+    """
+    Converts a country representation (full name, alpha-3, or alpha-2) to ISO Alpha-2 code.
+    Examples:
+        "UNITED STATES" -> "US"
+        "USA" -> "US"
+        "US" -> "US"
+    Returns original value if not found.
+    """
+    if not country_value:
+        return ""
+    
+    country_value = country_value.strip()
+    
+    # If already 2 letters, assume it's Alpha-2 and return uppercase
+    if len(country_value) == 2:
+        return country_value.upper()
+    
+    try:
+        # Try lookup (works for names, alpha-2, alpha-3)
+        country = pycountry.countries.lookup(country_value)
+        return country.alpha_2
+    except LookupError:
+        return country_value  # fallback
+
+# alpha3_to_bc = {
+#     "ARE": "AE", "ARG": "AR", "AUT": "AT", "AUS": "AU", "AZE": "AZ",
+#     "BEL": "BE", "BGR": "BG", "BRN": "BN", "BOL": "BO", "BRA": "BR",
+#     "CAN": "CA", "CHE": "CH", "CHL": "CL", "CHN": "CN", "CRI": "CR",
+#     "CYP": "CY", "CZE": "CZ", "DEU": "DE", "DNK": "DK", "DZA": "DZ",
+#     "ECU": "EC", "EST": "EE", "GRC": "EL", "ESP": "ES", "ETH": "ET",
+#     "FIN": "FI", "FJI": "FJ", "FRA": "FR", "GBR": "GB", "GTM": "GT",
+#     "HKG": "HK", "HND": "HN", "HRV": "HR", "HUN": "HU", "IDN": "ID",
+#     "IRL": "IE", "ISR": "IL", "IND": "IN", "ISL": "IS", "ITA": "IT",
+#     "JPN": "JP", "KEN": "KE", "KGZ": "KG", "PRK": "KP", "KOR": "KR",
+#     "LKA": "LK", "LTU": "LT", "LUX": "LU", "LVA": "LV", "MAR": "MA",
+#     "MNE": "ME", "MMR": "MM", "MLT": "MT", "MEX": "MX", "MYS": "MY",
+#     "MOZ": "MZ", "NGA": "NG", "NLD": "NL", "NOR": "NO", "NZL": "NZ",
+#     "PER": "PE", "PHL": "PH", "POL": "PL", "PRT": "PT", "ROU": "RO",
+#     "SRB": "RS", "RUS": "RU", "SAU": "SA", "SLB": "SB", "SWE": "SE",
+#     "SGP": "SG", "SVN": "SI", "SVK": "SK", "SWZ": "SZ", "THA": "TH",
+#     "TUN": "TN", "TUR": "TR", "TWN": "TW", "TZA": "TZ", "USA": "US",
+#     "UGA": "UG", "VNM": "VN", "VUT": "VU", "WSM": "WS", "ZAF": "ZA",
+#     "ZMB": "ZM", "ZWE": "ZW"
+# }
 
 def parse_lot_block(raw_text: str) -> Dict:
     """
@@ -291,7 +317,7 @@ def parse_lot_block(raw_text: str) -> Dict:
         if not origin:
             bc_origin = ""
         else:
-            bc_origin = alpha3_to_bc.get(origin, origin)
+            bc_origin = convert_to_alpha2(origin)
 
         # sprout count: if numeric on line 9
         sprout = (
