@@ -113,7 +113,7 @@ def extract_seminis_analysis_data(folder: str) -> Dict[str, Dict]:
     """Extracts data from Seminis analysis report PDFs in the same folder."""
     analysis = {}
     for fn in os.listdir(folder):
-        if not fn.lower().endswith(".pdf") or "L_" not in fn:
+        if not fn.lower().endswith(".pdf"):
             continue
         path = os.path.join(folder, fn)
         
@@ -121,7 +121,11 @@ def extract_seminis_analysis_data(folder: str) -> Dict[str, Dict]:
         lines = extract_text_with_fallback(path)
         if not lines: # Skip the file if no text could be extracted
             continue
+        
         text = "\n".join(lines)
+        
+        if "REPORT" not in text.upper() or "ANALYSIS" not in text.upper():
+            continue
         
         #text = "".join(page.get_text() for page in fitz.open(path))
         norm = re.sub(r"\s{2,}", " ", text.replace("\n", " ").replace("\r", " "))
@@ -157,13 +161,18 @@ def extract_seminis_packing_data(folder: str) -> Dict[str, Dict]:
     """Extracts data from Seminis packing slip PDFs in the same folder."""
     packing_data = {}
     for fn in os.listdir(folder):
-        if not fn.lower().endswith(".pdf") or "packing" not in fn.lower():
+        if not fn.lower().endswith(".pdf"):
             continue
         path = os.path.join(folder, fn)
         
         # Use the robust extraction function with OCR fallback
         lines = extract_text_with_fallback(path)
         if not lines: # Skip the file if no text could be extracted
+            continue
+        
+        text = "\n".join(lines)
+        
+        if "PACKING" not in text.upper() or "LIST" not in text.upper():
             continue
         
         #lines = [ln.strip() for ln in fitz.open(path).get_page_text(0).split("\n") if ln.strip()]

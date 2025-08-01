@@ -157,17 +157,14 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
                 "SeedSize":              current.get("SeedSize"),
                 # purity‐analysis fields will get filled later
                 "PureSeed":     None,
-                #"OtherCropSeed":None,
                 "InertMatter":  None,
                 "Germ":         None,
                 "GermDate":     None
-                #"WeedSeed":     None
             })
         current.clear()
 
     for i, raw in enumerate(lines):
         line = raw.strip()
-        print(line)
         
         # — new item trigger: 6 digits + inline description — must go first
         m2 = re.match(r"^(\d{6})\s+(.+)$", line)
@@ -335,21 +332,28 @@ def extract_purity_analysis_reports(input_folder: str) -> Dict[str, Dict]:
     if not input_folder or not os.path.isdir(input_folder):
         return {}
     for file in os.listdir(input_folder):
-        if file.lower().endswith(".pdf") and len(file) >= 6:
-            batch_key = os.path.splitext(file)[0][:6]
+        if file.lower().endswith(".pdf"):
+            
             pdf_path = os.path.join(input_folder, file)
             doc = fitz.open(pdf_path)
+            
             text = ""
             for page in doc:
-                text += page.get_text()
-
+                page_text = page.get_text()
+                if "REPORT OF SEED ANALYSIS" in page_text.upper():  # Case-insensitive check
+                    text += page_text + " "
+        
             text = text.replace('\n', ' ')
             text = re.sub(r'\s{2,}', ' ', text)
+            
+            batch_match = re.search(r"\b([A-Z]\d{5,})\b", text)  # Matches K29243, etc.
+            if not batch_match:
+                continue
+            batch_key = batch_match.group(1)
 
             match_pure = re.search(r"Pure Seed:\s*(\d+\.\d+)\s*%", text)
-            #match_other = re.search(r"Other Crop Seed\s*:\s*(\d+\.\d+)\s*%", text)
+            
             match_inert = re.search(r"Inert Matter:\s*(\d+\.\d+)\s*%", text)
-            #match_weed = re.search(r"Weed Seed\s*:\s*(\d+\.\d+)\s*%", text)
 
             if match_pure  or match_inert:
                 
@@ -362,15 +366,6 @@ def extract_purity_analysis_reports(input_folder: str) -> Dict[str, Dict]:
                 else:
                     purity_data[batch_key]["PureSeed"] = 99.99
                     purity_data[batch_key]["InertMatter"] = 0.01
-        
-                # purity_data[batch_key] = {
-                #     "PureSeed": float(match_pure.group(1)) if match_pure else None,
-                #     "InertMatter": float(match_inert.group(1)) if match_inert else None
-                    
-                    
-                #     #"OtherCropSeed": float(match_other.group(1)) if match_other else None,
-                #     #"WeedSeed": float(match_weed.group(1)) if match_weed else None
-                # }
                 
                 # Grower Germ Date: first date before "REPORT OF SEED ANALYSIS"
                 date_matches = re.findall(r"(\d{1,2}/\d{1,2}/\d{4})(?=.*?REPORT OF SEED ANALYSIS)", text, re.IGNORECASE)
@@ -400,9 +395,7 @@ def enrich_invoice_items_with_purity(items: List[Dict], purity_data: Dict[str, D
         key = batch_lot[:6]
         match = purity_data.get(key, {})
         item["PureSeed"] = match.get("PureSeed")
-        #item["OtherCropSeed"] = match.get("OtherCropSeed")
         item["InertMatter"] = match.get("InertMatter")
-        #item["WeedSeed"] = match.get("WeedSeed")
         item["GrowerGerm"] = match.get("GrowerGerm")
         item["GrowerGermDate"] = match.get("GrowerGermDate")
         item["Germ"] = match.get("Germ")
@@ -416,7 +409,6 @@ def extract_discounts(blocks: List) -> List[Tuple[str, float]]:
     
     for i, b in enumerate(blocks):
         block_text = b[4].strip()
-        print(block_text)
         
         if "discount" in block_text.lower():
 
@@ -498,8 +490,6 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
     discount_amounts = extract_discounts(all_blocks)
     discounts = []  # This will be the [(item_num, discount)] list we'll build
 
-    # print("\nDISCOUNTS BEFORE MATCHING:", discounts)
-
     line_items = []
     current_item_data = {}
     desc_part1 = ""
@@ -528,13 +518,11 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
                 "Purity":                current_item_data.get("Purity"),
                 "SeedSize":              current_item_data.get("SeedSize"),
                 "PureSeed":              None,
-                #"OtherCropSeed":         None,
                 "InertMatter":           None,
                 "Germ":                  None,
                 "GermDate":              None
-                #"WeedSeed":              None
             })
-            #print(f"FLUSHED ITEM → VendorItemNumber: {current_item_data.get('VendorItemNumber')}, Batch: {current_item_data.get('VendorBatchLot')}, Seed Count: {current_item_data.get('SeedCount')}")
+
         current_item_data = {}
         desc_part1 = ""
         
@@ -571,7 +559,6 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
         m = re.match(r"^(\d{6})\s+(.+)", block_text)
         if m:
             if is_disqualified(all_blocks.index(b), all_blocks):
-                #print(f"[SKIP] {block_text} near disqualifying context — not a VendorItemNumber")
                 continue
             current_item_data["VendorItemNumber"] = m.group(1)
             desc_part1 = m.group(2).strip()
@@ -579,7 +566,6 @@ def extract_hm_clause_invoice_data(pdf_path: str) -> List[Dict]:
 
         if re.fullmatch(r"\d{6}", block_text):
             if is_disqualified(all_blocks.index(b), all_blocks):
-                #print(f"[SKIP] {block_text} near disqualifying context — not a VendorItemNumber")
                 continue
             current_item_data["VendorItemNumber"] = block_text
             desc_part1 = ""

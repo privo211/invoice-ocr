@@ -35,8 +35,6 @@ def timed_func(label: str):
 class PurityData(TypedDict):
     Purity: Union[float, str]
     Inert: Union[float, str]
-    #OtherCrop: Union[float, str]
-    #Weed: Union[float, str]
     GrowerGerm: Union[float, None]
     GrowerGermDate: Union[str, None]
     
@@ -255,27 +253,6 @@ def convert_to_alpha2(country_value: str) -> str:
     except LookupError:
         return country_value  # fallback
 
-# alpha3_to_bc = {
-#     "ARE": "AE", "ARG": "AR", "AUT": "AT", "AUS": "AU", "AZE": "AZ",
-#     "BEL": "BE", "BGR": "BG", "BRN": "BN", "BOL": "BO", "BRA": "BR",
-#     "CAN": "CA", "CHE": "CH", "CHL": "CL", "CHN": "CN", "CRI": "CR",
-#     "CYP": "CY", "CZE": "CZ", "DEU": "DE", "DNK": "DK", "DZA": "DZ",
-#     "ECU": "EC", "EST": "EE", "GRC": "EL", "ESP": "ES", "ETH": "ET",
-#     "FIN": "FI", "FJI": "FJ", "FRA": "FR", "GBR": "GB", "GTM": "GT",
-#     "HKG": "HK", "HND": "HN", "HRV": "HR", "HUN": "HU", "IDN": "ID",
-#     "IRL": "IE", "ISR": "IL", "IND": "IN", "ISL": "IS", "ITA": "IT",
-#     "JPN": "JP", "KEN": "KE", "KGZ": "KG", "PRK": "KP", "KOR": "KR",
-#     "LKA": "LK", "LTU": "LT", "LUX": "LU", "LVA": "LV", "MAR": "MA",
-#     "MNE": "ME", "MMR": "MM", "MLT": "MT", "MEX": "MX", "MYS": "MY",
-#     "MOZ": "MZ", "NGA": "NG", "NLD": "NL", "NOR": "NO", "NZL": "NZ",
-#     "PER": "PE", "PHL": "PH", "POL": "PL", "PRT": "PT", "ROU": "RO",
-#     "SRB": "RS", "RUS": "RU", "SAU": "SA", "SLB": "SB", "SWE": "SE",
-#     "SGP": "SG", "SVN": "SI", "SVK": "SK", "SWZ": "SZ", "THA": "TH",
-#     "TUN": "TN", "TUR": "TR", "TWN": "TW", "TZA": "TZ", "USA": "US",
-#     "UGA": "UG", "VNM": "VN", "VUT": "VU", "WSM": "WS", "ZAF": "ZA",
-#     "ZMB": "ZM", "ZWE": "ZW"
-# }
-
 def parse_lot_block(raw_text: str) -> Dict:
     """
     Parse the raw text block of a single lot into structured fields,
@@ -362,10 +339,7 @@ def parse_lot_block(raw_text: str) -> Dict:
             "Purity":        None,
             "OriginCountry": bc_origin,
             "SproutCount":   sprout,
-            # item-level PO now handled separately
-            "Inert":         None#,
-            # "OtherCrop":     None,
-            # "Weed":          None
+            "Inert":         None
         }
     except Exception as e:
         return {"error": str(e), "raw": raw_text}
@@ -424,8 +398,6 @@ def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
                 for tok in tokens:
                     if re.fullmatch(r"(TR|-TR-)", tok, re.IGNORECASE):
                         vals.append("0.0") 
-                    # elif re.fullmatch(r"\d+\.\d+", tok):
-                    #     vals.append(float(tok))
                     elif re.fullmatch(r"\d+(?:\.\d+)?", tok):
                         vals.append(tok)
                     if len(vals) == 5:
@@ -444,8 +416,6 @@ def extract_seed_analysis_reports(folder: str) -> Dict[str, PurityData]:
             report_map[lot_no] = {
                 "Purity":  pure,
                 "Inert":     inert,
-                # "OtherCrop": other,
-                # "Weed":      weed,
                 "GrowerGerm": grower_germ,
                 "GrowerGermDate": date_completed
             }
@@ -539,7 +509,6 @@ def extract_invoice_from_pdf(pdf_path: str, fallback_po: str = "", token: str = 
             current = {
                 "VendorItemNumber": item_no,
                 "VendorDescription": desc,
-                #"Pkg_Qty": pkg_qty,
                 "QtyShipped": shipped,
                 "USD_Actual_Cost_$": usd_actual_cost,
                 "PackageDescription": best_pkg_desc,
