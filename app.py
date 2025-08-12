@@ -3,6 +3,7 @@ from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 import re
+import fitz
 import requests
 from datetime import datetime, timedelta
 from difflib import get_close_matches
@@ -10,10 +11,12 @@ import msal
 from dotenv import load_dotenv
 from functools import wraps
 from multiprocessing import Pool, cpu_count
-from vendor_extractors.sakata import extract_sakata_data, load_package_descriptions, get_po_items
-from vendor_extractors.hm_clause import extract_hm_clause_data, find_best_hm_clause_package_description
-from vendor_extractors.seminis import extract_seminis_invoice_data, find_best_seminis_package_description
-from vendor_extractors.nunhems import extract_nunhems_invoice_data, find_best_nunhems_package_description
+from vendor_extractors.sakata import load_package_descriptions, get_po_items
+from vendor_extractors.hm_clause import extract_hm_clause_data_from_bytes, find_best_hm_clause_package_description
+#from vendor_extractors.seminis import extract_seminis_invoice_data, find_best_seminis_package_description
+from vendor_extractors.seminis import extract_seminis_data_from_bytes, find_best_seminis_package_description
+#from vendor_extractors.nunhems import extract_nunhems_invoice_data, find_best_nunhems_package_description
+from vendor_extractors.nunhems import extract_nunhems_data_from_bytes, find_best_nunhems_package_description
 import time
 import logging
 import psycopg2
@@ -296,13 +299,6 @@ def init_worker(pkg_descs: list[str]):
     import vendor_extractors.sakata
     vendor_extractors.sakata._pkg_desc_list = pkg_descs
 
-def _extract_sakata_file(path):
-    try:
-        return os.path.basename(path), extract_sakata_data([path])
-    except Exception as e:
-        app.logger.error(f"Error processing {path}: {e}")
-        return os.path.basename(path), []
-
 def _extract_hm_clause_file(path):
     try:
         return os.path.basename(path), extract_hm_clause_data(path)
@@ -408,47 +404,101 @@ def index():
     if request.method == "POST":
         vendor = request.form.get("vendor")
         files = request.files.getlist("pdfs")
-        pdf_paths = []
+        # pdf_paths = []
+        # for f in files:
+        #     if f and f.filename.lower().endswith(".pdf"):
+        #         path = os.path.join(UPLOAD_FOLDER, secure_filename(f.filename))
+        #         f.save(path)
+        #         pdf_paths.append(path)
+        pdf_files = []
         for f in files:
             if f and f.filename.lower().endswith(".pdf"):
-                path = os.path.join(UPLOAD_FOLDER, secure_filename(f.filename))
-                f.save(path)
-                pdf_paths.append(path)
+                pdf_bytes = f.read()
+                pdf_files.append((f.filename, pdf_bytes))
 
-        if not pdf_paths:
+        if not pdf_files:
             return "No valid PDF files uploaded", 400
 
+        # if vendor == "sakata":
+        #     grouped = {}
+        #     all_items = []
+        #     pkg_descs = load_package_descriptions(user_token)
+        #     treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
+        #     treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
+
+        #     # with Pool(processes=cpu_count(), initializer=init_worker, initargs=(pkg_descs,)) as pool:
+        #     #     results = pool.map(_extract_sakata_file, pdf_paths)
+                
+        #     with Pool(processes=cpu_count(), initializer=init_worker, initargs=(pkg_descs,)) as pool:
+        #         results = pool.map(_extract_sakata_bytes, pdf_files)  # pass bytes instead of paths
+
+
+        #     for filename, items in results:
+        #         if items:
+        #             grouped[filename] = items
+        #             all_items.extend(items)
+        #     #     try:
+        #     #         os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+        #     #     except Exception as e:
+        #     #         app.logger.error(f"Could not delete {filename}: {e}")
+
+        #     all_pos = set(item.get("PurchaseOrder") for item in all_items if item.get("PurchaseOrder"))
+        #     if all_pos:
+        #         try:
+        #             po_items = get_po_items("|".join(all_pos), user_token)
+        #             for item in all_items:
+        #                 po = item.get("PurchaseOrder")
+        #                 if po:
+        #                     item["BCOptions"] = po_items  # Assign all PO items to each item with a matching PO
+        #                 else:
+        #                     item["BCOptions"] = []
+                            
+        #                 vendor_desc = item.get("VendorItemDescription", "")
+        #                 item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
+                        
+        #         except Exception as e:
+        #             app.logger.error(f"Failed to fetch PO items: {e}")
+        #             for item in all_items:
+        #                 item["BCOptions"] = [{"No": "ERROR", "Description": str(e)}]
+
+        #     return render_template(
+        #         "results_sakata.html",
+        #         items=grouped,
+        #         treatments1=treatments1,
+        #         treatments2=treatments2,
+        #         pkg_descs=pkg_descs
+        #     )
+
         if vendor == "sakata":
-            grouped = {}
-            all_items = []
+            # Load shared data from Business Central
             pkg_descs = load_package_descriptions(user_token)
             treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
             treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
 
-            with Pool(processes=cpu_count(), initializer=init_worker, initargs=(pkg_descs,)) as pool:
-                results = pool.map(_extract_sakata_file, pdf_paths)
+            # --- MODIFICATION ---
+            # Remove the multiprocessing pool for Sakata.
+            # Call the extractor directly with the complete list of file bytes.
+            from vendor_extractors.sakata import extract_sakata_data_from_bytes
+            grouped = extract_sakata_data_from_bytes(pdf_files, token=user_token)
+            # --- END MODIFICATION ---
 
-            for filename, items in results:
-                if items:
-                    grouped[filename] = items
-                    all_items.extend(items)
-                try:
-                    os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-                except Exception as e:
-                    app.logger.error(f"Could not delete {filename}: {e}")
-
+            # Flatten the results to find all unique PO numbers
+            all_items = [item for items_list in grouped.values() for item in items_list]
             all_pos = set(item.get("PurchaseOrder") for item in all_items if item.get("PurchaseOrder"))
+
             if all_pos:
                 try:
+                    # Fetch BC options for all found POs at once
                     po_items = get_po_items("|".join(all_pos), user_token)
                     for item in all_items:
-                        po = item.get("PurchaseOrder")
-                        if po:
-                            item["BCOptions"] = po_items  # Assign all PO items to each item with a matching PO
+                        # The BCOptions are already populated by the extractor, but this ensures consistency
+                        if item.get("PurchaseOrder"):
+                            item["BCOptions"] = po_items
                         else:
                             item["BCOptions"] = []
-                            
-                        vendor_desc = item.get("VendorItemDescription", "")
+                        
+                        # Find the best matching BC item
+                        vendor_desc = item.get("VendorDescription", "") # Corrected key from VendorItemDescription
                         item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
                         
                 except Exception as e:
@@ -458,41 +508,93 @@ def index():
 
             return render_template(
                 "results_sakata.html",
-                items=grouped,
+                items=grouped, # The 'grouped' dict is now returned directly from the extractor
                 treatments1=treatments1,
                 treatments2=treatments2,
                 pkg_descs=pkg_descs
             )
+            
+        # elif vendor == "hm_clause":
+        #     # 1. Load shared data from BC first
+        #     pkg_descs = load_package_descriptions(user_token)
+        #     treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
+        #     treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
 
+        #     # 2. Extract data from PDFs using multiprocessing
+        #     with Pool(processes=cpu_count()) as pool:
+        #         results = pool.map(_extract_hm_clause_file, pdf_paths)
+
+        #     # 3. Group results and create a flat list for processing
+        #     final_grouped_results = {}
+        #     all_items_flat = []
+        #     for filename, items in results:
+        #         if items:
+        #             final_grouped_results[filename] = items
+        #             all_items_flat.extend(items)
+        #         # Clean up uploaded file
+        #         try:
+        #             os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+        #         except Exception as e:
+        #             app.logger.error(f"Could not delete {filename}: {e}")
+            
+        #     # 4. Fetch all PO data at once
+        #     all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
+        #     po_items_for_all = []
+        #     if all_pos:
+        #         try:
+        #             # Re-use the get_po_items function from the sakata extractor
+        #             po_items_for_all = get_po_items("|".join(all_pos), user_token)
+        #         except Exception as e:
+        #             app.logger.error(f"Failed to fetch PO items for HM Clause: {e}")
+        #             po_items_for_all = [{"No": "ERROR", "Description": str(e)}]
+            
+        #     # 5. Enrich each item with PO options and package description
+        #     for item in all_items_flat:
+        #         print(f"FINAL ITEM {item['VendorItemNumber']}: TotalDiscount = {item.get('TotalDiscount')}")
+        #         # Add BCOptions if the item has a PO (matches Sakata logic)
+        #         if item.get("PurchaseOrder"):
+        #             item["BCOptions"] = po_items_for_all
+        #         else:
+        #             item["BCOptions"] = []
+                    
+        #         vendor_desc = item.get("VendorItemDescription", "")
+        #         item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
+                
+        #         # Find and add the best package description using HM Clause specific logic
+        #         vendor_desc = item.get("VendorItemDescription", "")
+        #         item["PackageDescription"] = find_best_hm_clause_package_description(vendor_desc, pkg_descs)
+            
+        #     # 6. Render the template with all necessary data
+        #     return render_template(
+        #         "results_hm_clause.html",
+        #         items=final_grouped_results,
+        #         treatments1=treatments1,
+        #         treatments2=treatments2,
+        #         pkg_descs=pkg_descs
+        #     )   
+        
         elif vendor == "hm_clause":
             # 1. Load shared data from BC first
             pkg_descs = load_package_descriptions(user_token)
             treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
             treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
 
-            # 2. Extract data from PDFs using multiprocessing
-            with Pool(processes=cpu_count()) as pool:
-                results = pool.map(_extract_hm_clause_file, pdf_paths)
+            # --- MODIFICATION: Call the new in-memory extractor directly ---
+            # No need for multiprocessing pool or saving files to disk.
+            final_grouped_results = extract_hm_clause_data_from_bytes(pdf_files)
+            # --- END MODIFICATION ---
 
-            # 3. Group results and create a flat list for processing
-            final_grouped_results = {}
+            # 3. Create a flat list for post-processing
             all_items_flat = []
-            for filename, items in results:
+            for filename, items in final_grouped_results.items():
                 if items:
-                    final_grouped_results[filename] = items
                     all_items_flat.extend(items)
-                # Clean up uploaded file
-                try:
-                    os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-                except Exception as e:
-                    app.logger.error(f"Could not delete {filename}: {e}")
             
             # 4. Fetch all PO data at once
             all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
             po_items_for_all = []
             if all_pos:
                 try:
-                    # Re-use the get_po_items function from the sakata extractor
                     po_items_for_all = get_po_items("|".join(all_pos), user_token)
                 except Exception as e:
                     app.logger.error(f"Failed to fetch PO items for HM Clause: {e}")
@@ -500,8 +602,6 @@ def index():
             
             # 5. Enrich each item with PO options and package description
             for item in all_items_flat:
-                print(f"FINAL ITEM {item['VendorItemNumber']}: TotalDiscount = {item.get('TotalDiscount')}")
-                # Add BCOptions if the item has a PO (matches Sakata logic)
                 if item.get("PurchaseOrder"):
                     item["BCOptions"] = po_items_for_all
                 else:
@@ -510,48 +610,92 @@ def index():
                 vendor_desc = item.get("VendorItemDescription", "")
                 item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
                 
-                # Find and add the best package description using HM Clause specific logic
-                vendor_desc = item.get("VendorItemDescription", "")
+                # Find and add the best package description
                 item["PackageDescription"] = find_best_hm_clause_package_description(vendor_desc, pkg_descs)
             
-            # 6. Render the template with all necessary data
+            # 6. Render the template
             return render_template(
                 "results_hm_clause.html",
                 items=final_grouped_results,
                 treatments1=treatments1,
                 treatments2=treatments2,
                 pkg_descs=pkg_descs
-            )   
+            )
 
+        # elif vendor == "seminis":
+        #     # 1. Load shared data from BC first
+        #     pkg_descs = load_package_descriptions(user_token)
+        #     treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
+        #     treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
+
+        #     # 2. Extract data from PDFs using multiprocessing
+        #     main_invoice_paths = [p for p in pdf_paths if "packing" not in p.lower() and "l_" not in p.lower()]
+
+        #     with Pool(processes=cpu_count()) as pool:
+        #         results = pool.map(_extract_seminis_file, main_invoice_paths)
+
+        #     # 3. Group results and create a flat list for processing
+        #     final_grouped_results = {}
+        #     all_items_flat = []
+        #     for filename, items in results:
+        #         if items:
+        #             final_grouped_results[filename] = items
+        #             all_items_flat.extend(items)
+        #         # Clean up all uploaded files associated with this vendor
+        #         try:
+        #             # Construct paths for potential related files to delete them
+        #             folder = app.config["UPLOAD_FOLDER"]
+        #             for f in os.listdir(folder):
+        #                 file_path = os.path.join(folder, f)
+        #                 if os.path.isfile(file_path):
+        #                     os.remove(file_path)
+        #         except Exception as e:
+        #             app.logger.error(f"Could not delete files for {filename}: {e}")
+
+        #     # 4. Fetch all PO data at once
+        #     all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
+        #     po_items_for_all = []
+        #     if all_pos:
+        #         try:
+        #             po_items_for_all = get_po_items("|".join(all_pos), user_token)
+        #         except Exception as e:
+        #             app.logger.error(f"Failed to fetch PO items for Seminis: {e}")
+        #             po_items_for_all = [{"No": "ERROR", "Description": str(e)}]
+
+        #     # 5. Enrich each item with PO options
+        #     for item in all_items_flat:
+        #         if item.get("PurchaseOrder"):
+        #             item["BCOptions"] = po_items_for_all
+        #         else:
+        #             item["BCOptions"] = []
+                    
+        #         vendor_desc = item.get("VendorItemDescription", "")
+        #         item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
+                    
+        #         # 6. Find and add the best package description using HM Clause specific logic
+        #         vendor_desc = item.get("VendorItemDescription", "")
+        #         item["PackageDescription"] = find_best_seminis_package_description(vendor_desc, pkg_descs)
+
+        #     # 7. Render the template with all necessary data
+        #     return render_template(
+        #         "results_seminis.html",
+        #         items=final_grouped_results,
+        #         treatments1=treatments1,
+        #         treatments2=treatments2,
+        #         pkg_descs=pkg_descs
+        #     )
+        
         elif vendor == "seminis":
-            # 1. Load shared data from BC first
+            # 1. Load shared data from BC
             pkg_descs = load_package_descriptions(user_token)
             treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
             treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
 
-            # 2. Extract data from PDFs using multiprocessing
-            main_invoice_paths = [p for p in pdf_paths if "packing" not in p.lower() and "l_" not in p.lower()]
-
-            with Pool(processes=cpu_count()) as pool:
-                results = pool.map(_extract_seminis_file, main_invoice_paths)
-
-            # 3. Group results and create a flat list for processing
-            final_grouped_results = {}
-            all_items_flat = []
-            for filename, items in results:
-                if items:
-                    final_grouped_results[filename] = items
-                    all_items_flat.extend(items)
-                # Clean up all uploaded files associated with this vendor
-                try:
-                    # Construct paths for potential related files to delete them
-                    folder = app.config["UPLOAD_FOLDER"]
-                    for f in os.listdir(folder):
-                        file_path = os.path.join(folder, f)
-                        if os.path.isfile(file_path):
-                            os.remove(file_path)
-                except Exception as e:
-                    app.logger.error(f"Could not delete files for {filename}: {e}")
+            # 2. Call the new in-memory extractor directly
+            final_grouped_results = extract_seminis_data_from_bytes(pdf_files)
+            
+            # 3. Flatten results for post-processing
+            all_items_flat = [item for items_list in final_grouped_results.values() for item in items_list]
 
             # 4. Fetch all PO data at once
             all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
@@ -563,21 +707,14 @@ def index():
                     app.logger.error(f"Failed to fetch PO items for Seminis: {e}")
                     po_items_for_all = [{"No": "ERROR", "Description": str(e)}]
 
-            # 5. Enrich each item with PO options
+            # 5. Enrich each item with BC options and package descriptions
             for item in all_items_flat:
-                if item.get("PurchaseOrder"):
-                    item["BCOptions"] = po_items_for_all
-                else:
-                    item["BCOptions"] = []
-                    
+                item["BCOptions"] = po_items_for_all if item.get("PurchaseOrder") else []
                 vendor_desc = item.get("VendorItemDescription", "")
                 item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
-                    
-                # 6. Find and add the best package description using HM Clause specific logic
-                vendor_desc = item.get("VendorItemDescription", "")
                 item["PackageDescription"] = find_best_seminis_package_description(vendor_desc, pkg_descs)
 
-            # 7. Render the template with all necessary data
+            # 6. Render the template
             return render_template(
                 "results_seminis.html",
                 items=final_grouped_results,
@@ -586,32 +723,76 @@ def index():
                 pkg_descs=pkg_descs
             )
             
+        # elif vendor == "nunhems":
+        #     # 1. Load shared data from BC first
+        #     pkg_descs = load_package_descriptions(user_token)
+        #     treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
+        #     treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
+
+        #     # 2. Filter for main invoice files and extract data using multiprocessing
+        #     main_invoice_paths = [p for p in pdf_paths if not any(x in os.path.basename(p).lower() for x in ["nal", "basf", "packing", "ship"])]
+            
+        #     with Pool(processes=cpu_count()) as pool:
+        #         results = pool.map(_extract_nunhems_file, main_invoice_paths)
+
+        #     # 3. Group results and create a flat list for processing
+        #     final_grouped_results = {}
+        #     all_items_flat = []
+        #     for filename, items in results:
+        #         if items:
+        #             final_grouped_results[filename] = items
+        #             all_items_flat.extend(items)
+            
+        #     # Clean up all uploaded files after processing is complete
+        #     for path in pdf_paths:
+        #         try:
+        #             os.remove(path)
+        #         except Exception as e:
+        #             app.logger.error(f"Could not delete file {path}: {e}")
+
+        #     # 4. Fetch all PO data at once
+        #     all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
+        #     po_items_for_all = []
+        #     if all_pos:
+        #         try:
+        #             po_items_for_all = get_po_items("|".join(all_pos), user_token)
+        #         except Exception as e:
+        #             app.logger.error(f"Failed to fetch PO items for Nunhems: {e}")
+        #             po_items_for_all = [{"No": "ERROR", "Description": str(e)}]
+
+        #     # 5. Enrich each item with PO options and package description
+        #     for item in all_items_flat:
+        #         if item.get("PurchaseOrder"):
+        #             item["BCOptions"] = po_items_for_all
+        #         else:
+        #             item["BCOptions"] = []
+                    
+        #         vendor_desc = item.get("VendorItemDescription", "")
+        #         item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
+                
+        #         item["PackageDescription"] = find_best_nunhems_package_description(vendor_desc, pkg_descs)
+            
+        #     # 6. Render the template with all necessary data
+        #     return render_template(
+        #         "results_nunhems.html",
+        #         items=final_grouped_results,
+        #         treatments1=treatments1,
+        #         treatments2=treatments2,
+        #         pkg_descs=pkg_descs
+        #     )
+        
         elif vendor == "nunhems":
             # 1. Load shared data from BC first
             pkg_descs = load_package_descriptions(user_token)
             treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
             treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
 
-            # 2. Filter for main invoice files and extract data using multiprocessing
-            main_invoice_paths = [p for p in pdf_paths if not any(x in os.path.basename(p).lower() for x in ["nal", "basf", "packing", "ship"])]
-            
-            with Pool(processes=cpu_count()) as pool:
-                results = pool.map(_extract_nunhems_file, main_invoice_paths)
+            # --- MODIFICATION: Call the new in-memory extractor directly ---
+            final_grouped_results = extract_nunhems_data_from_bytes(pdf_files)
+            # --- END MODIFICATION ---
 
-            # 3. Group results and create a flat list for processing
-            final_grouped_results = {}
-            all_items_flat = []
-            for filename, items in results:
-                if items:
-                    final_grouped_results[filename] = items
-                    all_items_flat.extend(items)
-            
-            # Clean up all uploaded files after processing is complete
-            for path in pdf_paths:
-                try:
-                    os.remove(path)
-                except Exception as e:
-                    app.logger.error(f"Could not delete file {path}: {e}")
+            # 3. Create a flat list for post-processing
+            all_items_flat = [item for items_list in final_grouped_results.values() for item in items_list]
 
             # 4. Fetch all PO data at once
             all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
@@ -625,17 +806,12 @@ def index():
 
             # 5. Enrich each item with PO options and package description
             for item in all_items_flat:
-                if item.get("PurchaseOrder"):
-                    item["BCOptions"] = po_items_for_all
-                else:
-                    item["BCOptions"] = []
-                    
+                item["BCOptions"] = po_items_for_all if item.get("PurchaseOrder") else []
                 vendor_desc = item.get("VendorItemDescription", "")
                 item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
-                
                 item["PackageDescription"] = find_best_nunhems_package_description(vendor_desc, pkg_descs)
             
-            # 6. Render the template with all necessary data
+            # 6. Render the template
             return render_template(
                 "results_nunhems.html",
                 items=final_grouped_results,

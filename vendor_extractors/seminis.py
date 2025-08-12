@@ -3,135 +3,108 @@ import os
 import json
 import fitz  # PyMuPDF
 import re
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
 import requests
-from difflib import get_close_matches
 import time
+from difflib import get_close_matches
 from collections import defaultdict
-item_usage_counter = defaultdict(int)
 
+# --- Configuration for Azure OCR (if needed) ---
 AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
 AZURE_KEY = os.getenv("AZURE_KEY")
 
-def extract_text_with_azure_ocr(pdf_path: str) -> List[str]:
-    """Sends a PDF to Azure Form Recognizer for OCR and returns extracted lines."""
-    with open(pdf_path, "rb") as f:
-        headers = {
-            "Ocp-Apim-Subscription-Key": AZURE_KEY,
-            "Content-Type": "application/pdf"
-        }
-        response = requests.post(
-            f"{AZURE_ENDPOINT}formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31",
-            headers=headers,
-            data=f
-        )
+# --- OCR and Text Extraction Logic (Modified for In-Memory) ---
+
+def extract_text_with_azure_ocr(pdf_content: bytes) -> List[str]:
+    """Sends PDF content (bytes) to Azure Form Recognizer for OCR."""
+    headers = {
+        "Ocp-Apim-Subscription-Key": AZURE_KEY,
+        "Content-Type": "application/pdf"
+    }
+    # Post the raw bytes directly
+    response = requests.post(
+        f"{AZURE_ENDPOINT}formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31",
+        headers=headers,
+        data=pdf_content
+    )
     if response.status_code != 202:
         raise RuntimeError(f"OCR request failed: {response.text}")
 
     op_url = response.headers["Operation-Location"]
-
-    for _ in range(30):
+    for _ in range(30): # Poll for results
         time.sleep(1.5)
         result = requests.get(op_url, headers={"Ocp-Apim-Subscription-Key": AZURE_KEY}).json()
         if result.get("status") == "succeeded":
             lines = []
             for page in result["analyzeResult"]["pages"]:
-                page_text = " ".join(line.get("content", "").strip() for line in page.get("lines", []) if line.get("content"))
-                # Skip pages that are just legal notices
-                if page_text.lower().startswith("notice to purchaser") or "notice to purchaser" in page_text.lower():
+                if "notice to purchaser" in " ".join(line.get("content", "").lower() for line in page.get("lines", [])):
                     continue
-                
-
                 for line in page["lines"]:
                     txt = line.get("content", "").strip()
                     if txt:
                         lines.append(txt)
-                lines.append("--- PAGE BREAK ---")
-                
-            print(lines)  # Debugging output
             return lines
-        
         if result.get("status") == "failed":
             raise RuntimeError("OCR analysis failed")
     raise TimeoutError("OCR timed out")
 
-# def extract_text_with_fallback(pdf_path: str) -> List[str]:
-#     """Extracts text from a PDF, using PyMuPDF first and falling back to Azure OCR if needed."""
-#     lines = []
-#     azure_lines = None
-#     doc = fitz.open(pdf_path)
-
-#     for page in doc:
-#         page_text = page.get_text()
-#         if "notice to purchaser" in page_text.lower():
-#             continue
-#         if page_text.strip():
-#             for ln in page_text.splitlines():
-#                 ln = ln.strip()
-#                 if ln:
-#                     lines.append(ln)
-#         else: # If a page is blank (likely a scanned image), use Azure OCR
-#             if azure_lines is None:
-#                 azure_lines = extract_text_with_azure_ocr(pdf_path)
-#             lines.extend(azure_lines)
-#     return lines
-
-def extract_text_with_fallback(pdf_path: str) -> List[str]:
+def extract_text_with_fallback(source: Union[str, bytes]) -> List[str]:
     """
-    Extracts text from a PDF, using PyMuPDF first. If any page is blank
-    (indicating a scanned document), it falls back to using Azure OCR for the entire document.
+    Extracts text from a PDF source (path or bytes), falling back to Azure OCR if needed.
     """
     lines = []
     is_scanned = False
+    doc = None
     try:
-        doc = fitz.open(pdf_path)
-    except fitz.errors.FitzError: # Handles corrupted/unsupported PDFs
-        # If the file can't be opened, go straight to OCR
-        return extract_text_with_azure_ocr(pdf_path)
+        if isinstance(source, bytes):
+            # If the source is bytes, open it as a stream
+            doc = fitz.open(stream=source, filetype="pdf")
+        else: # Assumes it's a file path
+            doc = fitz.open(source)
+    except Exception:
+        # If PyMuPDF fails, go straight to OCR. Pass bytes if we have them.
+        if isinstance(source, bytes):
+            return extract_text_with_azure_ocr(source)
+        with open(source, "rb") as f: # Otherwise, read the file and pass bytes
+            return extract_text_with_azure_ocr(f.read())
 
-    # First, try to extract text with PyMuPDF and check if any page is empty
+    # Check for scanned document
     for page in doc:
-        page_text = page.get_text()
-        if "notice to purchaser" in page_text.lower():
+        if "notice to purchaser" in page.get_text().lower():
             continue
-        if page_text.strip():
-            lines.extend([ln.strip() for ln in page_text.splitlines() if ln.strip()])
-        else:
-            # If we find even one blank page, flag the whole document for OCR
+        if not page.get_text().strip():
             is_scanned = True
-            break # No need to check other pages
-
-    # If the document was flagged as scanned (or if PyMuPDF extracted nothing),
-    # discard PyMuPDF's results and use Azure OCR for the whole document.
-    if is_scanned or not lines:
-        return extract_text_with_azure_ocr(pdf_path)
+            break
     
-    # Otherwise, return the text successfully extracted by PyMuPDF
-    return lines
+    # If not scanned, extract text normally
+    if not is_scanned:
+        for page in doc:
+            if "notice to purchaser" in page.get_text().lower():
+                continue
+            lines.extend([ln.strip() for ln in page.get_text().splitlines() if ln.strip()])
+        return lines
+    
+    # If scanned, fall back to OCR. Pass bytes if we have them.
+    if isinstance(source, bytes):
+        return extract_text_with_azure_ocr(source)
+    with open(source, "rb") as f:
+        return extract_text_with_azure_ocr(f.read())
 
-def extract_seminis_analysis_data(folder: str) -> Dict[str, Dict]:
-    """Extracts data from Seminis analysis report PDFs in the same folder."""
+# --- Data Extraction Logic (Modified for In-Memory) ---
+
+def _extract_seminis_analysis_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, Dict]:
+    """Extracts data from Seminis analysis reports from a list of file bytes."""
     analysis = {}
-    for fn in os.listdir(folder):
-        if not fn.lower().endswith(".pdf"):
-            continue
-        path = os.path.join(folder, fn)
-        
-        # Use the robust extraction function with OCR fallback
-        lines = extract_text_with_fallback(path)
-        if not lines: # Skip the file if no text could be extracted
-            continue
+    for filename, pdf_bytes in pdf_files:
+        lines = extract_text_with_fallback(pdf_bytes)
+        if not lines: continue
         
         text = "\n".join(lines)
-        
         if "REPORT" not in text.upper() or "ANALYSIS" not in text.upper():
             continue
         
-        #text = "".join(page.get_text() for page in fitz.open(path))
         norm = re.sub(r"\s{2,}", " ", text.replace("\n", " ").replace("\r", " "))
-
-        m_lot = re.search(r"Lot Number[:\s]+(\d{9})", norm)
-        if not m_lot:
+        if not (m_lot := re.search(r"Lot Number[:\s]+(\d{9})", norm)):
             continue
         lot = m_lot.group(1)
 
@@ -143,128 +116,87 @@ def extract_seminis_analysis_data(folder: str) -> Dict[str, Dict]:
         pure = float(pure_match.group(1)) if pure_match else None
         inert = float(inert_match.group(1)) if inert_match else None
 
-        # Apply normalization: If PureSeed == 100, adjust values
-        if pure == 100.0:
-            pure = 99.99
-            inert = 0.01
+        if pure == 100.0: pure, inert = 99.99, 0.01
 
         analysis[lot] = {
-            "PureSeed": pure,
-            "InertMatter": inert,
+            "PureSeed": pure, "InertMatter": inert,
             "Germ": int(float(germ_match.group(1))) if germ_match else None,
             "GermDate": date_match.group(1) if date_match else None
         }
-        
     return analysis
 
-def extract_seminis_packing_data(folder: str) -> Dict[str, Dict]:
-    """Extracts data from Seminis packing slip PDFs in the same folder."""
+def _extract_seminis_packing_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, Dict]:
+    """Extracts data from Seminis packing slips from a list of file bytes."""
     packing_data = {}
-    for fn in os.listdir(folder):
-        if not fn.lower().endswith(".pdf"):
-            continue
-        path = os.path.join(folder, fn)
-        
-        # Use the robust extraction function with OCR fallback
-        lines = extract_text_with_fallback(path)
-        if not lines: # Skip the file if no text could be extracted
-            continue
+    for filename, pdf_bytes in pdf_files:
+        lines = extract_text_with_fallback(pdf_bytes)
+        if not lines: continue
         
         text = "\n".join(lines)
-        
         if "PACKING" not in text.upper() or "LIST" not in text.upper():
             continue
         
-        #lines = [ln.strip() for ln in fitz.open(path).get_page_text(0).split("\n") if ln.strip()]
         for i, line in enumerate(lines):
-            if "TRT:" not in line:
-                continue
+            if "TRT:" not in line: continue
+            
             block = lines[i:i+12]
             joined = " ".join(block)
 
-            seed_count = vendor_batch = germ = germ_date = None
-            if (m := re.search(r"\d+\s*/\s*(\d+)", joined)): seed_count = int(m.group(1))
-            if (m := re.search(r"\d{2}/\d{2}/\d{4}.*?\b(\d{10})\b", joined)): vendor_batch = m.group(1)
-            if (m := re.search(r"(\d{2}/\d{2}/\d{4})", joined)): germ_date = m.group(1)
-            if (m := re.search(r"(\d{2,3})\s+(?=\d{2}/\d{2}/\d{4})", joined)) and int(m.group(1)) != 100: 
-                germ = int(m.group(1))
-            elif (m := re.search(r"(\d{2,3})\s+(?=\d{2}/\d{2}/\d{4})", joined)) and int(m.group(1)) == 100:
-                germ = 98 # Special case for 100% germination
+            m_seed_count = re.search(r"\d+\s*/\s*(\d+)", joined)
+            m_vendor_batch = re.search(r"\d{2}/\d{2}/\d{4}.*?\b(\d{10})\b", joined)
+            m_germ_date = re.search(r"(\d{2}/\d{2}/\d{4})", joined)
+            m_germ = re.search(r"(\d{2,3})\s+(?=\d{2}/\d{2}/\d{4})", joined)
 
-            if vendor_batch:
+            germ = None
+            if m_germ:
+                germ_val = int(m_germ.group(1))
+                germ = 98 if germ_val == 100 else germ_val
+
+            if m_vendor_batch:
+                vendor_batch = m_vendor_batch.group(1)
                 packing_data[vendor_batch] = {
-                    "SeedCountPerLB": seed_count,
+                    "SeedCountPerLB": int(m_seed_count.group(1)) if m_seed_count else None,
                     "PackingGerm": germ,
-                    "PackingGermDate": germ_date
+                    "PackingGermDate": m_germ_date.group(1) if m_germ_date else None
                 }
-            print(f"Extracted packing data for batch {vendor_batch}: {packing_data[vendor_batch]}")
     return packing_data
 
-def extract_seminis_invoice_data(pdf_path: str) -> List[Dict]:
-    """
-    Main function to extract all item data from a Seminis invoice PDF.
-    It aligns the output with the standard data model for the Flask web application.
-    """
-    folder = os.path.dirname(pdf_path)
-    lines = extract_text_with_fallback(pdf_path)
-
-    # Pre-load data from supplementary analysis and packing slip PDFs
-    analysis_map = extract_seminis_analysis_data(folder)
-    packing_map = extract_seminis_packing_data(folder)
-
-    # Extract top-level invoice data that applies to all items
+def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packing_map: dict) -> List[Dict]:
+    """Processes the extracted lines from a single Seminis invoice."""
     text_content = "\n".join(lines)
-    #print(text_content)  # Debugging output
     vendor_invoice_no = po_number = None
     
-    if m := re.search(r"Invoice Number\s*:\s*(\S+)", text_content):
-        vendor_invoice_no = m.group(1)
-    if m := re.search(r"PO #\s*:\s*(\S+)", text_content):
-        po_number = f"PO-{m.group(1)}"
+    if m := re.search(r"Invoice Number\s*:\s*(\S+)", text_content): vendor_invoice_no = m.group(1)
+    if m := re.search(r"PO #\s*:\s*(\S+)", text_content): po_number = f"PO-{m.group(1)}"
 
     items = []
-    # Find all line items, which are identified by a "TRT:" line
     trt_indices = [i for i, l in enumerate(lines) if "TRT:" in l]
     amount_idx = next((i for i, l in enumerate(lines) if "Amount" in l), 0)
     total_item_indices = [i for i, l in enumerate(lines) if "Total Item" in l]
-
-    # Define the start of each item's text block
     block_starts = [amount_idx + 1] + [total_item_indices[i] + 3 for i in range(min(len(trt_indices) - 1, len(total_item_indices)))]
 
     for idx, trt_idx in enumerate(trt_indices):
-        # Extract item description
         desc_lines = lines[block_starts[idx]:trt_idx]
         filtered = [l for l in desc_lines if not any(x in l for x in ["Invoice Number", "PO #", "Sales Order", "Delivery Nr", "Order Date", "Ship Date", "/", "Page"])]
         vendor_item_description = " ".join(filtered).strip()
+        treatment_desc = re.sub(r"TRT:\s*", "", lines[trt_idx].strip()).strip()
 
-        # Parse Treatment and Quantity
-        treatment_line = lines[trt_idx].strip()
-        treatment_desc = re.sub(r"TRT:\s*", "", treatment_line).strip()
-
-        # Extract other details from the lines following the treatment
-        package = vendor_lot = origin_country = vendor_batch = total_price = None
-        total_quantity = None
+        package = vendor_lot = origin_country = vendor_batch = total_price = total_quantity = None
         
         for j in range(trt_idx + 1, min(trt_idx + 15, len(lines))):
             line = lines[j]
             if not package and (m := re.search(r"\d+\s+MK\s+\w+", line)): package = m.group().strip()
             if not vendor_lot and (m := re.search(r"\b\d{9}(?:/\d{2})?\b", line)): vendor_lot = m.group()
-            #if not vendor_batch and (m := re.search(r"\b\d{10}\b", line)): vendor_batch = m.group()
             if not vendor_batch and (m := re.search(r"\b(\d{10})\b", line)):
                 vendor_batch = m.group(1)
-                # Check the next line for TotalQuantity
                 if j + 1 < len(lines):
                     next_line = lines[j+1].strip()
-                    # Pattern for 28,960 MK or 7,920
                     if (m_qty := re.search(r'([\d,]+)\s*(?:MK)?', next_line)):
-                        try:
-                            total_quantity = int(m_qty.group(1).replace(",", ""))
-                        except ValueError:
-                            total_quantity = None
+                        try: total_quantity = int(m_qty.group(1).replace(",", ""))
+                        except ValueError: total_quantity = None
             if not origin_country:
                 cc_match = re.findall(r"\b[A-Z]{2}\b", line)
-                filtered_cc = [c for c in cc_match if c != "MK"]
-                if filtered_cc: origin_country = filtered_cc[0]
+                if (filtered_cc := [c for c in cc_match if c != "MK"]): origin_country = filtered_cc[0]
             if line == "Total Item":
                 for k in range(j + 1, min(j + 4, len(lines))):
                     if (m := re.search(r"[\d,]+\.\d{2}", lines[k+1])):
@@ -273,74 +205,61 @@ def extract_seminis_invoice_data(pdf_path: str) -> List[Dict]:
                 break
 
         lot_key = vendor_lot.split("/")[0] if vendor_lot else None
-
-        # Build the standardized item dictionary
         item = {
-            "VendorInvoiceNo": vendor_invoice_no,
-            "PurchaseOrder": po_number,
-            "VendorLot": vendor_lot,
-            "VendorItemDescription": f"{vendor_item_description} {package}".strip(),
-            "VendorBatch": vendor_batch,
-            "OriginCountry": origin_country,
-            "TotalPrice": total_price,
-            "TotalQuantity": total_quantity,
-            "USD_Actual_Cost_$": None, # Calculated below
+            "VendorInvoiceNo": vendor_invoice_no, "PurchaseOrder": po_number, "VendorLot": vendor_lot,
+            "VendorItemDescription": f"{vendor_item_description} {package}".strip(), "VendorBatch": vendor_batch,
+            "OriginCountry": origin_country, "TotalPrice": total_price, "TotalQuantity": total_quantity,
             "Treatment": treatment_desc,
-            "Purity": None, # From analysis map
-            "InertMatter": None, # From analysis map
-            "Germ": None, # From analysis map
-            "GermDate": None, # From analysis map
-            "SeedCountPerLB": None, # From packing map
-            "PackingGerm": None, # From packing map
-            "PackingGermDate": None, # From packing map
         }
 
-        # Enrich item with data from analysis and packing slips
-        if lot_key:
-            analysis_data = analysis_map.get(lot_key, {})
+        if lot_key and (analysis_data := analysis_map.get(lot_key)):
             item.update(analysis_data)
-            # Map PureSeed to Purity for consistency with the other vendor module
-            if analysis_data.get("PureSeed"):
-                item["Purity"] = analysis_data["PureSeed"]
-
-        if vendor_batch:
-            packing_data = packing_map.get(vendor_batch, {})
+            if "PureSeed" in analysis_data: item["Purity"] = analysis_data["PureSeed"]
+        if vendor_batch and (packing_data := packing_map.get(vendor_batch)):
             item.update(packing_data)
 
-        # Final cost calculation
         tp = item.get("TotalPrice") or 0.0
         qty = item.get("TotalQuantity")
         item["USD_Actual_Cost_$"] = round((tp / qty), 4) if qty and qty > 0 else None
-
         items.append(item)
-
     return items
 
+def extract_seminis_data_from_bytes(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, List[Dict]]:
+    """Main in-memory function to extract all item data from a batch of Seminis files."""
+    if not pdf_files:
+        return {}
+
+    # Pre-process all files to get analysis and packing data first
+    analysis_map = _extract_seminis_analysis_data(pdf_files)
+    packing_map = _extract_seminis_packing_data(pdf_files)
+
+    grouped_results = {}
+    for filename, pdf_bytes in pdf_files:
+        lines = extract_text_with_fallback(pdf_bytes)
+        if not lines: continue
+
+        # Identify if the current file is the main invoice
+        text_content = "\n".join(lines)
+        if "INVOICE" in text_content.upper() and "PACKING" not in text_content.upper() and "REPORT" not in text_content.upper():
+            # Process this invoice using the pre-computed maps
+            invoice_items = _process_single_seminis_invoice(lines, analysis_map, packing_map)
+            if invoice_items:
+                grouped_results[filename] = invoice_items
+    
+    return grouped_results
+
 def find_best_seminis_package_description(vendor_desc: str, pkg_desc_list: list[str]) -> str:
-    """
-    Given a Seminis vendor description, find the best match from the BC Package Descriptions.
-    Logic: 80 MK -> 80,000 SEEDS.
-    """
+    """Finds the best matching package description for Seminis items."""
     if not vendor_desc or not pkg_desc_list:
         return ""
 
-    normalized_desc = vendor_desc.upper()
-    candidate = ""
-
-    # Search for patterns like "80 MK"
-    m = re.search(r"(\d+)\s*(MK)\b", normalized_desc)
-    if m:
-        qty = int(m.group(1))
-        unit = m.group(2)
-
-        if unit == "MK":
-            seed_count = qty * 1000
-            candidate = f"{seed_count:,} SEEDS"
-
-        # Check if the generated candidate exists in the BC list
+    # Seminis specific logic: e.g., "80 MK" -> "80,000 SEEDS"
+    if m := re.search(r"(\d+)\s*(MK)\b", vendor_desc.upper()):
+        seed_count = int(m.group(1)) * 1000
+        candidate = f"{seed_count:,} SEEDS"
         if candidate in pkg_desc_list:
             return candidate
 
-    # Fallback to fuzzy matching against all package descriptions
-    matches = get_close_matches(normalized_desc, pkg_desc_list, n=1, cutoff=0.6)
+    # Fallback to general fuzzy matching
+    matches = get_close_matches(vendor_desc.upper(), pkg_desc_list, n=1, cutoff=0.6)
     return matches[0] if matches else ""
