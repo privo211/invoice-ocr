@@ -679,7 +679,7 @@
             CurrentGermDate:        getFieldValue(card, 'GermDate'),
             SeedCount:              getFieldValue(card, 'SeedCount'),
             USD_Actual_Cost_$:      getFieldValue(card, 'USD_Actual_Cost_$'),
-            GrowerGerm:             null, // Nunhems does not have a separate grower germ
+            GrowerGerm:             getFieldValue(card, 'GrowerGerm')s,
             GrowerGermDate:         getFieldValue(card, 'GrowerGermDate'),
             Purity:                 getFieldValue(card, 'Purity'),
             Inert:                  getFieldValue(card, 'Inert'),
