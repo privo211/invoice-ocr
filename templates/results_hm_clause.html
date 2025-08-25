@@ -299,6 +299,11 @@
                       </select>
                   </dd>
 
+                  <dt class="col-sm-4">KTT #</dt>
+                  <dd class="col-sm-8">
+                    <div class="field-box" data-field="KTT" contenteditable="true"></div>
+                  </dd>
+
                   <dt class="col-sm-4">Vendor Treatment</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="Treatment" contenteditable="true">
@@ -788,6 +793,7 @@
 
         const data = {
           BCItemNo: bcItemNo,
+          KTT:                  getFieldValue(card, 'KTT'),
           TreatmentsDescription: getFieldValue(card, 'TreatmentsDescription'),
           TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
           VendorLotNo: getFieldValue(card, 'VendorLotNo'),

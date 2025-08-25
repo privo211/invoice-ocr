@@ -220,6 +220,65 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
     print("="*80 + "\n")
     return None
 
+def aggregate_duplicate_lots(grouped_results: dict) -> dict:
+    """
+    Aggregates quantities and prices for duplicate lots across all uploaded files.
+    A duplicate is defined by having the same Lot/Batch No. and Vendor Item Description.
+    """
+    unique_items_map = {}  # key: (lot_no, description), value: item_dict
+    processed_grouped_results = {}
+
+    # Define a list of possible keys for lot numbers and descriptions
+    lot_keys = ["VendorLot", "VendorLotNo", "VendorBatchLot", "VendorBatchNo"]
+    desc_keys = ["VendorItemDescription", "VendorDescription"]
+
+    for filename, items_list in grouped_results.items():
+        processed_items_for_file = []
+        for item in items_list:
+            # Find the first available lot number and description from the keys list
+            lot_no = next((item.get(key) for key in lot_keys if item.get(key)), None)
+            desc = next((item.get(key) for key in desc_keys if item.get(key)), None)
+            
+            # If we can't form a unique key, treat the item as unique
+            if not lot_no or not desc:
+                processed_items_for_file.append(item)
+                continue
+
+            agg_key = (lot_no, desc)
+
+            # Convert quantity and price to numbers for aggregation
+            try:
+                current_qty = float(item.get("TotalQuantity", 0) or 0)
+                current_price = float(item.get("TotalPrice", 0) or 0)
+            except (ValueError, TypeError):
+                # If values are not numeric, can't aggregate. Treat as unique.
+                processed_items_for_file.append(item)
+                continue
+
+            if agg_key in unique_items_map:
+                # It's a duplicate, update the existing item
+                existing_item = unique_items_map[agg_key]
+                try:
+                    existing_qty = float(existing_item.get("TotalQuantity", 0) or 0)
+                    existing_price = float(existing_item.get("TotalPrice", 0) or 0)
+
+                    existing_item["TotalQuantity"] = existing_qty + current_qty
+                    existing_item["TotalPrice"] = existing_price + current_price
+                    
+                except (ValueError, TypeError):
+                    pass # Should not happen, but here for safety
+            else:
+                # This is a new unique item. Add it to the map and the display list.
+                item["TotalQuantity"] = current_qty
+                item["TotalPrice"] = current_price
+                unique_items_map[agg_key] = item
+                processed_items_for_file.append(item)
+
+        if processed_items_for_file:
+            processed_grouped_results[filename] = processed_items_for_file
+
+    return processed_grouped_results
+
 @app.route("/api/items")
 def api_items():
     from vendor_extractors.sakata import load_all_items
@@ -475,15 +534,14 @@ def index():
             treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
             treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
 
-            # --- MODIFICATION ---
-            # Remove the multiprocessing pool for Sakata.
-            # Call the extractor directly with the complete list of file bytes.
             from vendor_extractors.sakata import extract_sakata_data_from_bytes
-            grouped = extract_sakata_data_from_bytes(pdf_files, token=user_token)
-            # --- END MODIFICATION ---
+            grouped_results = extract_sakata_data_from_bytes(pdf_files, token=user_token)
+            
+            # Aggregate duplicate lots
+            final_grouped_results = aggregate_duplicate_lots(grouped_results)
 
             # Flatten the results to find all unique PO numbers
-            all_items = [item for items_list in grouped.values() for item in items_list]
+            all_items = [item for items_list in final_grouped_results.values() for item in items_list]
             all_pos = set(item.get("PurchaseOrder") for item in all_items if item.get("PurchaseOrder"))
 
             if all_pos:
@@ -508,7 +566,7 @@ def index():
 
             return render_template(
                 "results_sakata.html",
-                items=grouped, # The 'grouped' dict is now returned directly from the extractor
+                items=final_grouped_results,
                 treatments1=treatments1,
                 treatments2=treatments2,
                 pkg_descs=pkg_descs
@@ -579,16 +637,13 @@ def index():
             treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
             treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
 
-            # --- MODIFICATION: Call the new in-memory extractor directly ---
-            # No need for multiprocessing pool or saving files to disk.
-            final_grouped_results = extract_hm_clause_data_from_bytes(pdf_files)
-            # --- END MODIFICATION ---
+            grouped_results = extract_hm_clause_data_from_bytes(pdf_files)
+            
+            # Aggregate duplicate lots
+            final_grouped_results = aggregate_duplicate_lots(grouped_results)
 
             # 3. Create a flat list for post-processing
-            all_items_flat = []
-            for filename, items in final_grouped_results.items():
-                if items:
-                    all_items_flat.extend(items)
+            all_items_flat = [item for items_list in final_grouped_results.values() for item in items_list]
             
             # 4. Fetch all PO data at once
             all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
@@ -692,7 +747,10 @@ def index():
             treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
 
             # 2. Call the new in-memory extractor directly
-            final_grouped_results = extract_seminis_data_from_bytes(pdf_files)
+            grouped_results = extract_seminis_data_from_bytes(pdf_files, pkg_descs)
+            
+            # Aggregate duplicate lots
+            final_grouped_results = aggregate_duplicate_lots(grouped_results)
             
             # 3. Flatten results for post-processing
             all_items_flat = [item for items_list in final_grouped_results.values() for item in items_list]
@@ -712,7 +770,7 @@ def index():
                 item["BCOptions"] = po_items_for_all if item.get("PurchaseOrder") else []
                 vendor_desc = item.get("VendorItemDescription", "")
                 item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
-                item["PackageDescription"] = find_best_seminis_package_description(vendor_desc, pkg_descs)
+                #item["PackageDescription"] = find_best_seminis_package_description(vendor_desc, pkg_descs)
 
             # 6. Render the template
             return render_template(
@@ -787,9 +845,10 @@ def index():
             treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
             treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
 
-            # --- MODIFICATION: Call the new in-memory extractor directly ---
-            final_grouped_results = extract_nunhems_data_from_bytes(pdf_files)
-            # --- END MODIFICATION ---
+            grouped_results = extract_nunhems_data_from_bytes(pdf_files, pkg_descs)
+            
+            # Aggregate duplicate lots
+            final_grouped_results = aggregate_duplicate_lots(grouped_results)
 
             # 3. Create a flat list for post-processing
             all_items_flat = [item for items_list in final_grouped_results.values() for item in items_list]
@@ -809,7 +868,6 @@ def index():
                 item["BCOptions"] = po_items_for_all if item.get("PurchaseOrder") else []
                 vendor_desc = item.get("VendorItemDescription", "")
                 item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
-                item["PackageDescription"] = find_best_nunhems_package_description(vendor_desc, pkg_descs)
             
             # 6. Render the template
             return render_template(
@@ -830,6 +888,7 @@ def index():
 
     return render_template("index.html", user_name=session.get("user_name"))
 
+# Lot creation endpoint
 # Lot creation endpoint
 @app.route("/create-lot", methods=["POST"])
 @login_required
@@ -877,6 +936,16 @@ def create_lot():
         except ValueError:
             return None
     
+    def parse_integer(val):
+        s = str(val or "").strip()
+        if not s or s.lower() == "none":
+            return None
+        try:
+            # Convert to float first to handle decimals (e.g., "123.0")
+            return int(float(s))
+        except (ValueError, TypeError):
+            return None
+
     # for key, val in data.items():
     #     if isinstance(val, str) and val.lower() == "none":
     #         data[key] = ""
@@ -914,13 +983,14 @@ def create_lot():
     td2_text       = normalize_text(data.get("TreatmentsDescription2"))
     seed_size      = normalize_text(data.get("SeedSize"))
     raw_sprout     = normalize_text(data.get("SproutCount"))
-
+    ktt            = normalize_text(data.get("KTT"))
     seed_count     = parse_decimal(data.get("SeedCount"))
     germ_pct       = normalize_text(data.get("CurrentGerm"))
     pure           = parse_decimal(data.get("Purity"))
     inert          = parse_decimal(data.get("Inert"))
     grower_germ    = parse_decimal(data.get("GrowerGerm"))
     usd_cost_val   = parse_decimal(data.get("USD_Actual_Cost_$"))
+    original_received_qty = parse_integer(data.get("TotalQuantity"))
 
     raw_date            = normalize_text(data.get("CurrentGermDate"))
     raw_grower_date     = normalize_text(data.get("GrowerGermDate"))
@@ -964,6 +1034,8 @@ def create_lot():
         "TMG_Purity":                  pure,
         "TMG_Inert":                   inert,
         "TMG_Treated":                 treated,
+        "KTT":                         ktt,
+        "OriginalReceivedQty":         original_received_qty,
         #"TMG_PackageQty":              pkg_qty_val,
         "TMG_USD_Actual_Cost":         usd_cost_val,
         "TMG_PackageDesc":             pkg_desc_val

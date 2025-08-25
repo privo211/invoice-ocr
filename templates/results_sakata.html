@@ -325,7 +325,10 @@
                       </select>
                     </dd>
 
-                    
+                    <dt class="col-sm-4">KTT #</dt>
+                    <dd class="col-sm-8">
+                      <div class="field-box" data-field="KTT" contenteditable="true"></div>
+                    </dd>
 
                     <dt class="col-sm-4">Vendor Treatment Name</dt>
                     <dd class="col-sm-8">
@@ -828,6 +831,7 @@
 
         const data = {
           BCItemNo: bcItemNo,
+          KTT:                  getFieldValue(card, 'KTT'),
           VendorLotNo: getFieldValue(card, 'VendorLotNo'),
           OriginCountry: getFieldValue(card, 'OriginCountry'),
           TreatmentsDescription: getFieldValue(card, 'TreatmentsDescription'),

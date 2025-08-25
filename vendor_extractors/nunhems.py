@@ -7,6 +7,7 @@ import requests
 import time
 import pycountry
 from datetime import datetime
+from difflib import get_close_matches
 from typing import List, Dict, Any, Union, Tuple
 
 # Azure credentials from environment variables
@@ -142,7 +143,8 @@ def _extract_nunhems_packing_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[st
                     packing_data[lot] = {"SeedCount": int(match[-1].replace(",", ""))}
     return packing_data
 
-def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_map: dict, packing_map: dict) -> List[Dict]:
+def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_map: dict, packing_map: dict, pkg_desc_list: list[str]) -> List[Dict]:
+#def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_map: dict, packing_map: dict) -> List[Dict]:
     """Processes the extracted lines from a single Nunhems invoice."""
     text_content = "\n".join(lines)
     vendor_invoice_no = po_number = None
@@ -180,6 +182,12 @@ def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_ma
                         total_qty = int(float(m.group(1).replace(",", "")))
                         break
                 break
+            
+        package_description = ""
+        if "KAMTERTER PRODUCTS INC" in text_content.upper():
+            package_description = "SUBCON BULK-MS"
+        else:
+            package_description = find_best_nunhems_package_description(vendor_item_description, pkg_desc_list)
 
         quality_info, germ_info, packing_info = quality_map.get(vendor_lot, {}), germ_map.get(vendor_lot, {}), packing_map.get(vendor_lot, {})
         cost = round((net_price / total_qty), 4) if net_price and total_qty and total_qty > 0 else None
@@ -191,11 +199,13 @@ def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_ma
             "InertMatter": quality_info.get("Inert"), "Germ": germ_info.get("Germ"),
             "GermDate": germ_info.get("GermDate"), "SeedCountPerLB": packing_info.get("SeedCount"),
             "GrowerGerm": quality_info.get("GrowerGerm"), "GrowerGermDate": quality_info.get("GrowerGermDate"),
+            "PackageDescription": package_description
         }
         items.append(item)
     return items
 
-def extract_nunhems_data_from_bytes(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, List[Dict]]:
+def extract_nunhems_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_desc_list: list[str]) -> Dict[str, List[Dict]]:
+# def extract_nunhems_data_from_bytes(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, List[Dict]]:
     """Main in-memory function to extract all item data from a batch of Nunhems files."""
     if not pdf_files: return {}
 
@@ -208,7 +218,7 @@ def extract_nunhems_data_from_bytes(pdf_files: List[Tuple[str, bytes]]) -> Dict[
         lines = _extract_lines(pdf_bytes)
         text_content = "\n".join(lines).upper()
         if "INVOICE NUMBER" in text_content and "PACKING LIST" not in text_content and "QUALITY CERTIFICATE" not in text_content:
-            invoice_items = _process_single_nunhems_invoice(lines, quality_map, germ_map, packing_map)
+            invoice_items = _process_single_nunhems_invoice(lines, quality_map, germ_map, packing_map, pkg_desc_list)
             if invoice_items:
                 grouped_results[filename] = invoice_items
     return grouped_results
