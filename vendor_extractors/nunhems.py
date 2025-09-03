@@ -147,6 +147,7 @@ def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_ma
 #def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_map: dict, packing_map: dict) -> List[Dict]:
     """Processes the extracted lines from a single Nunhems invoice."""
     text_content = "\n".join(lines)
+    print(text_content)
     vendor_invoice_no = po_number = None
     if m := re.search(r"Invoice\s+Number[:\s]+([\s\S]*?)\b(\d{9})\b", text_content, re.IGNORECASE): vendor_invoice_no = m.group(2)
     if m := re.search(r"Customer\s+P\.?O\.?\s+Number[:\s]+([\s\S]*?)\b(\d{5})\b", text_content, re.IGNORECASE): po_number = f"PO-{m.group(2)}"
@@ -171,17 +172,32 @@ def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_ma
                         break
                 break
         
-        for i, line in enumerate(lines):
-            if "Net price" in line:
-                for j in range(i+1, min(i+4, len(lines))):
-                    if m := re.search(r"[\d,]+\.\d{2}", lines[j]):
-                        net_price = float(m.group(0).replace(",", ""))
-                        break
-                for j in range(i-1, max(i-4, -1), -1):
-                    if m := re.search(r"([\d,]+\.\d{2})", lines[j]):
-                        total_qty = int(float(m.group(1).replace(",", "")))
-                        break
-                break
+        # for i, line in enumerate(lines):
+        #     if "Net price" in line:
+        #         for j in range(i+1, min(i+4, len(lines))):
+        #             if m := re.search(r"[\d,]+\.\d{2}", lines[j]):
+        #                 net_price = float(m.group(0).replace(",", ""))
+        #                 break
+        #         for j in range(i-1, max(i-4, -1), -1):
+        #             if m := re.search(r"([\d,]+\.\d{2})", lines[j]):
+        #                 total_qty = int(float(m.group(1).replace(",", "")))
+        #                 break
+        #         break
+        
+        # Define the robust pattern for finding quantity and price
+        price_qty_pattern = re.compile(r"([\d,]+(?:\.\d{2})?)\s+Net price\s+([\d,]+\.\d{2})", re.IGNORECASE)
+    
+        # Define the text block for the current item to search within
+        start_line_index = idx
+        end_line_index = sds_indices[i + 1] if i + 1 < len(sds_indices) else len(lines)
+        item_block_text = "\n".join(lines[start_line_index:end_line_index])
+        
+        # Search for the quantity and price pattern within the item's text block
+        match = price_qty_pattern.search(item_block_text)
+        if match:
+            qty_str, price_str = match.groups()
+            total_qty = int(float(qty_str.replace(",", "")))
+            net_price = float(price_str.replace(",", ""))
             
         package_description = ""
         if "KAMTERTER PRODUCTS INC" in text_content.upper():

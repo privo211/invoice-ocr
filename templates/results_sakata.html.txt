@@ -258,18 +258,17 @@
     {% if items %}
       {% for filename, item_list in items.items() %}
         
-        {% if item_list %}
         <h3>📄 {{ filename }} - Vendor Invoice No.: {{ item_list[0].InvoiceNumber }}</h3>
-        {% endif %}
-
         <div class="row row-cols-1 row-cols-md-2 g-4">
-          {% for lot in item_list %}
+          {% for item in item_list %}
+            {% set item_idx = loop.index0 %}
+            {% for lot in item.Lots %}
               {% set lot_idx = loop.index0 %}
               <div class="col">
                 <div class="card h-100 p-3">
                   
                   <div class="item-header">
-                    {{ lot.VendorItemNumber }} - {{ lot.VendorDescription }}
+                    {{ item.VendorItemNumber }} - {{ item.VendorDescription }}
                   </div>
                   <dl class="row">
 
@@ -278,8 +277,9 @@
                       <div
                         class="field-box po-field"
                         contenteditable="true"
+                        data-item-idx="{{ item_idx }}"
                         data-lot-idx="{{ lot_idx }}"
-                      >{{ lot.PurchaseOrder }}</div>
+                      >{{ item.PurchaseOrder }}</div>
                     </dd>
 
                     <dt class="col-sm-4">Select BC Item No.</dt>
@@ -287,13 +287,25 @@
                       <select
                         class="field-box form-select"
                         onchange="handleBCChange(this)"
+                        data-item-idx="{{ item_idx }}"
                         data-lot-idx="{{ lot_idx }}"
                         data-field="BCItemNo"
                       >
-                        {% if not lot.BCOptions %}<option value="">— Enter a PO to see options —</option>{% endif %}
-                        {% for opt in lot.BCOptions %}
+                        <!--{% for opt in item.BCOptions %}
                           <option value="{{ opt.No }}"
-                                  {% if lot.SuggestedBCItemNo == opt.No %}selected{% endif %}>
+                                  {% if lot.BCItemNo == opt.No %}selected{% endif %}>
+                            {{ opt.No }} — {{ opt.Description }}
+                          </option>
+                        {% endfor %}
+                        <option value="Other"
+                                {% if lot.BCItemNo == 'Other' or item.BCOptions|length == 0 %}selected{% endif %}>
+                          Other
+                        </option>-->
+
+                        {% if not item.BCOptions %}<option value="">— Enter a PO to see options —</option>{% endif %}
+                        {% for opt in item.BCOptions %}
+                          <option value="{{ opt.No }}"
+                                  {% if item.SuggestedBCItemNo == opt.No %}selected{% endif %}>
                             {{ opt.No }} — {{ opt.Description }}
                           </option>
                         {% endfor %}
@@ -302,13 +314,14 @@
                       </select>
 
                       <select
-                        id="bc-input-{{ lot_idx }}"
+                        id="bc-input-{{ item_idx }}-{{ lot_idx }}"
                         class="field-box form-select mt-1"
-                        style="{% if lot.BCItemNo == 'Other' or lot.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}"
+                        style="{% if lot.BCItemNo == 'Other' or item.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}"
                       >
                         <option value="" {% if not lot.BCItemNo or lot.BCItemNo == 'Other' %}selected{% endif %}>
                           — Choose an Item No. —
                         </option>
+                        <!-- JS will fill in the rest when “Other” is selected -->
                       </select>
                     </dd>
 
@@ -320,7 +333,7 @@
                     <dt class="col-sm-4">Vendor Treatment Name</dt>
                     <dd class="col-sm-8">
                       <div class="field-box" data-field="VendorTreatmentName" contenteditable="true">
-                        {{ lot.TreatmentName }}
+                        {{ item.TreatmentName }}
                       </div>
                     </dd>
 
@@ -329,7 +342,7 @@
                       <div class="input-group input-group-sm">
                         <input
                           type="text"
-                          id="td1-{{ lot_idx }}"
+                          id="td1-{{ item_idx }}-{{ lot_idx }}"
                           class="form-control"
                           data-field="TreatmentsDescription"
                           value="{{ lot.TreatmentsDescription or '' }}"
@@ -339,7 +352,7 @@
                           type="button"
                           data-bs-toggle="modal"
                           data-bs-target="#lookup-modal-1"
-                          data-target-id="td1-{{ lot_idx }}"
+                          data-target-id="td1-{{ item_idx }}-{{ lot_idx }}"
                         >☰</button>
                       </div>
                     </dd>
@@ -349,7 +362,7 @@
                       <div class="input-group input-group-sm">
                         <input
                           type="text"
-                          id="td2-{{ lot_idx }}"
+                          id="td2-{{ item_idx }}-{{ lot_idx }}"
                           class="form-control"
                           data-field="TreatmentsDescription2"
                           value="{{ lot.TreatmentsDescription2 or '' }}"
@@ -359,7 +372,7 @@
                           type="button"
                           data-bs-toggle="modal"
                           data-bs-target="#lookup-modal-2"
-                          data-target-id="td2-{{ lot_idx }}"
+                          data-target-id="td2-{{ item_idx }}-{{ lot_idx }}"
                         >☰</button>
                       </div>
                     </dd>
@@ -432,18 +445,11 @@
                         {{ lot.SeedCount }}
                       </div>
                     </dd>
-                    
-                    <dt class="col-sm-4">Original Received Qty.</dt>
-                    <dd class="col-sm-8">
-                      <div class="field-box" data-field="TotalQuantity" contenteditable="true">
-                        {{ lot.TotalQuantity }}
-                      </div>
-                    </dd>
 
                     <dt class="col-sm-4">Total Price</dt>
                     <dd class="col-sm-8">
                       <div class="field-box" data-field="TotalPrice" contenteditable="true">
-                        {{ lot.TotalPrice }}
+                        {{ item.TotalPrice }}
                       </div>
                     </dd>
 
@@ -487,6 +493,7 @@
                   </dl>
                 </div>
               </div>
+            {% endfor %}
           {% endfor %}
         </div>
       {% endfor %}
@@ -505,6 +512,7 @@
     {% endif %}
   </div>
 
+  <!-- Lookup Modals -->
   {% for modal_id, treatments in {1:treatments1, 2:treatments2}.items() %}
   <div class="modal fade" id="lookup-modal-{{modal_id}}" tabindex="-1">
     <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
@@ -557,8 +565,9 @@
     }
 
     async function handleBCChange(sel) {
-      const lot_idx = sel.dataset.lotIdx;
-      const input = document.getElementById(`bc-input-${lot_idx}`);
+      const idx   = sel.dataset.itemIdx,
+            lid   = sel.dataset.lotIdx,
+            input = document.getElementById(`bc-input-${idx}-${lid}`);
 
       if (sel.value === 'Other') {
         input.style.display = 'block';
@@ -623,15 +632,16 @@
       }
 
       // Re-wire PO and BC logic
-      document.querySelectorAll('select[data-field="BCItemNo"]').forEach(handleBCChange);
+      document.querySelectorAll('select[data-item-idx]').forEach(handleBCChange);
       document.querySelectorAll('.po-field').forEach(div => {
         div.addEventListener('blur', async e => {
-          const po = e.target.textContent.trim();
-          const lotIdx = e.target.dataset.lotIdx;
+          const po      = e.target.textContent.trim();
+          const itemIdx = e.target.dataset.itemIdx;
+          const lotIdx  = e.target.dataset.lotIdx;
           if (!po) return;
 
           const select = document.querySelector(
-            `select[data-lot-idx="${lotIdx}"][data-field="BCItemNo"]`
+            `select[data-item-idx="${itemIdx}"][data-lot-idx="${lotIdx}"][data-field="BCItemNo"]`
           );
 
           try {
@@ -663,9 +673,12 @@
           const modalEl = document.querySelector(btn.getAttribute('data-bs-target'));
           const targetId = btn.getAttribute('data-target-id');
           modalEl.dataset.targetId = targetId;
+
+          // 1. Uncheck all boxes
           modalEl.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
         });
       });
+
 
       document.querySelectorAll('.lookup-ok').forEach(ok => {
         ok.addEventListener('click', () => {
@@ -683,11 +696,91 @@
     });
 
     function getFieldValue(cardEl, fieldName) {
+      // First look for contenteditable div
       let el = cardEl.querySelector(`[data-field="${fieldName}"]`);
       if (!el) return '';
+      // If it's an <input> or <select>, use .value; otherwise .textContent
       if ('value' in el) return el.value.trim();
       return el.textContent.trim();
     }
+
+    /*document.getElementById('create-lots-btn').addEventListener('click', async () => {
+
+      const cards = document.querySelectorAll('.card');
+      for (const card of cards) {
+        // Prompt user
+        const name = card.querySelector('.item-header')?.textContent.trim();
+        if (!confirm(`Create this lot?\n\n${name}`)) continue;
+
+        // 1) First read whatever was selected in the BC dropdown
+        let bcItemNo = getFieldValue(card, 'BCItemNo');
+
+        // 2) If the dropdown was "Other", override with the manually-typed input
+        if (bcItemNo === 'Other') {
+          // find the <select> so we can pull its data-item-idx / data-lot-idx
+          const selectEl = card.querySelector('select[data-field="BCItemNo"]');
+          const itemIdx = selectEl.dataset.itemIdx;
+          const lotIdx  = selectEl.dataset.lotIdx;
+          // now grab the text input by ID:
+          const manualInput = document.getElementById(`bc-input-${itemIdx}-${lotIdx}`);
+          bcItemNo = manualInput.value.trim();
+        }
+
+        const data = {
+          BCItemNo:           bcItemNo,
+          VendorLotNo:        getFieldValue(card, 'VendorLotNo'),
+          OriginCountry:      getFieldValue(card, 'OriginCountry'),
+          TreatmentsDescription:  getFieldValue(card, 'TreatmentsDescription'),
+          TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
+          SeedSize:           getFieldValue(card, 'SeedSize'),
+          SeedCount:          getFieldValue(card, 'SeedCount'),
+          CurrentGerm:        getFieldValue(card, 'CurrentGerm'),
+          CurrentGermDate:           getFieldValue(card, 'CurrentGermDate'),
+          GrowerGerm:        getFieldValue(card, 'GrowerGerm'),
+          GrowerGermDate:           getFieldValue(card, 'GrowerGermDate'),
+          Purity:             getFieldValue(card, 'Purity'),
+          Inert:              getFieldValue(card, 'Inert'),
+          SproutCount:            getFieldValue(card, 'SproutCount'),
+          Weed:               getFieldValue(card, 'Weed'),
+          OtherCropSeed:   getFieldValue(card, 'OtherCropSeed'),
+          VendorTreatmentName: getFieldValue(card, 'VendorTreatmentName'),
+          Pkg_Qty:            getFieldValue(card, 'Pkg_Qty'),
+          USD_Actual_Cost_$: getFieldValue(card, 'USD_Actual_Cost_$'),
+          PackageDescription: getFieldValue(card, 'PackageDescription'),
+          TotalPrice:         getFieldValue(card, 'TotalPrice'),
+          VendorItemNumber: getFieldValue(card, 'VendorItemNumber'),
+          VendorDescription: getFieldValue(card, 'VendorDescription')
+        };
+
+        // Send to backend
+        try {
+          const res = await fetch('/create-lot', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify(data)
+          });
+
+          if (res.redirected || res.status === 401) {
+            // If the server sent a 302 to /sign_in or returned 401, force a real redirect
+            window.location.href = '/sign_in';
+            return;
+          }
+
+          const json = await res.json();
+          if (json.status === 'success') {
+            card.style.border = '2px solid green';
+            alert(`✅ Created Lot for Vendor Lot No.:${data.VendorLotNo} and Item No.:(${data.BCItemNo})`);
+          } else {
+            card.style.border = '2px solid red';
+            alert(`❌ Error: ${json.message}`);
+          }
+        } catch (err) {
+          card.style.border = '2px solid red';
+          alert(`❌ Network error: ${err.message}`);
+        }
+      }
+    });*/
 
     // Open modal and populate list
     document.getElementById('create-lots-btn')?.addEventListener('click', () => {
@@ -699,11 +792,11 @@
 
       cards.forEach((card, idx) => {
         const name = card.querySelector('.item-header')?.textContent.trim() || 'Unnamed Item';
-        card.dataset.lotIdx = idx; // ensure tracking
+        card.dataset.itemIdx = idx; // ensure tracking
         const listItem = document.createElement('li');
         listItem.innerHTML = `
           <label>
-            <input type="checkbox" class="lot-item-checkbox" data-lot-idx="${idx}" checked />
+            <input type="checkbox" class="lot-item-checkbox" data-item-idx="${idx}" checked />
             ${name}
           </label>`;
         listElement.appendChild(listItem);
@@ -720,14 +813,16 @@
     // Final confirmation click
     document.getElementById('confirm-lot-creation-btn')?.addEventListener('click', async () => {
       const selected = document.querySelectorAll('.lot-item-checkbox:checked');
-      if (selected.length === 0) return alert("No lots were selected. Please select at least one to create.");
+      if (selected.length === 0) return alert("No lots were selected. Please select at least one lot to create.");
 
       bootstrap.Modal.getInstance(document.getElementById('lot-selection-modal')).hide();
 
       for (const cb of selected) {
-        const idx = cb.dataset.lotIdx;
-        const card = document.querySelector(`.card[data-lot-idx="${idx}"]`);
+        const idx = cb.dataset.itemIdx;
+        const card = document.querySelector(`.card[data-item-idx="${idx}"]`);
 
+        // Replace this with your current lot creation logic (read fields + POST to /create-lot)
+        // For example:
         let bcItemNo = getFieldValue(card, 'BCItemNo');
         if (bcItemNo === 'Other') {
           const manualInput = document.getElementById(`bc-input-${idx}`);
@@ -736,7 +831,7 @@
 
         const data = {
           BCItemNo: bcItemNo,
-          KTT: getFieldValue(card, 'KTT'),
+          KTT:                  getFieldValue(card, 'KTT'),
           VendorLotNo: getFieldValue(card, 'VendorLotNo'),
           OriginCountry: getFieldValue(card, 'OriginCountry'),
           TreatmentsDescription: getFieldValue(card, 'TreatmentsDescription'),
@@ -750,7 +845,10 @@
           Purity: getFieldValue(card, 'Purity'),
           Inert: getFieldValue(card, 'Inert'),
           SproutCount: getFieldValue(card, 'SproutCount'),
-          TotalQuantity: getFieldValue(card, 'TotalQuantity'),
+          Weed: getFieldValue(card, 'Weed'),
+          OtherCropSeed: getFieldValue(card, 'OtherCropSeed'),
+          VendorTreatmentName: getFieldValue(card, 'VendorTreatmentName'),
+          Pkg_Qty: getFieldValue(card, 'Pkg_Qty'),
           USD_Actual_Cost_$: getFieldValue(card, 'USD_Actual_Cost_$'),
           PackageDescription: getFieldValue(card, 'PackageDescription'),
           TotalPrice: getFieldValue(card, 'TotalPrice'),
@@ -765,12 +863,6 @@
             credentials: 'same-origin',
             body: JSON.stringify(data)
           });
-
-          // Redirect if token expired
-          if (res.redirected || res.status === 401) {
-            window.location.href = '/sign_in';
-            return;
-          }
 
           const json = await res.json();
           if (res.ok && json.status === 'success') {

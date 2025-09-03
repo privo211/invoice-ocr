@@ -163,14 +163,7 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
     Finds the best BC Item Number by matching vendor description against BC options.
     This version tokenizes strings to find the best match based on word overlap.
     """
-    # ---- START: DEBUGGING PRINT STATEMENTS ----
-    print("\n" + "="*80)
-    print(f"DEBUG: Attempting to match Vendor Description:\n  '{vendor_desc}'")
-    # ---- END: DEBUGGING PRINT STATEMENTS ----
-
     if not vendor_desc or not bc_options:
-        print("DEBUG: No vendor description or BC options provided. Returning None.")
-        print("="*80 + "\n")
         return None
 
     # Helper function to clean and split a string into a set of words
@@ -185,9 +178,6 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
     best_match_no = None
     highest_score = 0
 
-    print(f"\nDEBUG: Vendor Words: {vendor_words}")
-    print("\nDEBUG: Evaluating BC Options...")
-
     for option in bc_options:
         bc_desc = option.get("Description", "")
         if not bc_desc:
@@ -198,77 +188,226 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
         # Calculate score based on the number of common words
         common_words = vendor_words.intersection(bc_words)
         score = len(common_words)
-        
-        print(f"  - Comparing with: '{bc_desc}'")
-        print(f"    - BC Words: {bc_words}")
-        print(f"    - Common Words: {common_words}")
-        print(f"    - Score: {score}")
 
         # If this option has a better score, it becomes the new best match
         if score > highest_score:
             highest_score = score
             best_match_no = option.get("No")
-            print(f"    - NEW BEST MATCH FOUND! (Item No: {best_match_no})")
+            
 
     # We require at least 1 words to match to be confident.
     if highest_score >= 1:
-        print(f"\nDEBUG: SUCCESS! Final Best Match is Item No.: '{best_match_no}' with a score of {highest_score}")
-        print("="*80 + "\n")
+        
         return best_match_no
-
-    print(f"\nDEBUG: FAILED. No match with a high enough score was found (Highest score: {highest_score}).")
-    print("="*80 + "\n")
+    
     return None
 
-def aggregate_duplicate_lots(grouped_results: dict) -> dict:
+# def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
+#     """
+#     Aggregates quantities and prices for duplicate lots based on the vendor.
+#     - For HM Clause & Seminis: Duplicates are identified by (Lot No + Batch No).
+#     - For Sakata & Nunhems: Duplicates are identified by Lot No only.
+#     - If aggregated, the Vendor Item Description is cleaned and marked as '[COMBINED]'.
+#     """
+    
+#     if vendor == "sakata":
+#         flattened_results = {}
+#         for filename, items_list in grouped_results.items():
+#             flat_lots_list = []
+#             for item in items_list:
+#                 # Lots are nested; loop through them
+#                 for lot in item.get("Lots", []):
+#                     # Start with parent item's data, excluding the "Lots" key itself
+#                     combined_lot = {k: v for k, v in item.items() if k != "Lots"}
+                    
+#                     # Update/overwrite with the specific lot's data
+#                     combined_lot.update(lot)
+
+#                     # Ensure TotalQuantity is set for aggregation, using QtyShipped from the parent
+#                     if 'TotalQuantity' not in combined_lot:
+#                          combined_lot['TotalQuantity'] = item.get('QtyShipped')
+
+#                     flat_lots_list.append(combined_lot)
+            
+#             if flat_lots_list:
+#                 flattened_results[filename] = flat_lots_list
+                
+#         # Replace the original nested structure with the new flattened one for processing
+#         grouped_results = flattened_results
+        
+#     unique_items_map = {}  # key: (lot_no, [batch_no]), value: item_dict
+#     processed_grouped_results = {}
+
+#     lot_keys = ["VendorLot", "VendorLotNo", "VendorProductLot"]
+#     batch_keys = ["VendorBatchLot", "VendorBatchNo"]
+#     desc_keys = ["VendorItemDescription", "VendorDescription"]
+
+#     for filename, items_list in grouped_results.items():
+#         processed_items_for_file = []
+#         for item in items_list:
+#             agg_key = None
+#             lot_no = next((item.get(key) for key in lot_keys if item.get(key)), None)
+
+#             if vendor in ["hm_clause", "seminis"]:
+#                 batch_no = next((item.get(key) for key in batch_keys if item.get(key)), None)
+#                 if lot_no and batch_no:
+#                     agg_key = (lot_no, batch_no)
+            
+#             elif vendor in ["sakata", "nunhems"]:
+#                 if lot_no:
+#                     agg_key = (lot_no,)
+
+#             if not agg_key:
+#                 processed_items_for_file.append(item)
+#                 continue
+
+#             try:
+#                 current_qty = float(item.get("TotalQuantity", 0) or 0)
+#                 current_price = float(item.get("TotalPrice", 0) or 0)
+#             except (ValueError, TypeError):
+#                 processed_items_for_file.append(item)
+#                 continue
+
+#             if agg_key in unique_items_map:
+#                 # It's a duplicate, so update the existing item
+#                 existing_item = unique_items_map[agg_key]
+
+#                 # Find the description key to modify
+#                 desc_key = next((key for key in desc_keys if key in existing_item), None)
+
+#                 # Modify description only once when the first duplicate is found
+#                 if desc_key and "[COMBINED]" not in existing_item[desc_key]:
+#                     current_desc = existing_item[desc_key]
+#                     # Remove quantity suffix (e.g., " 10,000 SDS")
+#                     modified_desc = re.sub(r"\s+[\d,]+\s+\w+$", "", current_desc).strip()
+#                     existing_item[desc_key] = f"{modified_desc} [COMBINED]"
+                
+#                 # Aggregate quantity and price
+#                 existing_qty = float(existing_item.get("TotalQuantity", 0) or 0)
+#                 existing_price = float(existing_item.get("TotalPrice", 0) or 0)
+#                 existing_item["TotalQuantity"] = existing_qty + current_qty
+#                 existing_item["TotalPrice"] = existing_price + current_price
+                
+#                 # Recalculate the unit cost
+#                 new_total_qty = existing_item["TotalQuantity"]
+#                 new_total_price = existing_item["TotalPrice"]
+#                 cost_key = "USD_Actual_Cost_$"
+#                 if "USD_Actual_Cost_$" not in existing_item:
+#                     cost_key = next((k for k in existing_item if "Cost" in k), "USD_Actual_Cost_$")
+
+#                 if new_total_qty > 0:
+#                     existing_item[cost_key] = round(new_total_price / new_total_qty, 4)
+#             else:
+#                 # This is a new unique item
+#                 item["TotalQuantity"] = current_qty
+#                 item["TotalPrice"] = current_price
+#                 unique_items_map[agg_key] = item
+#                 processed_items_for_file.append(item)
+
+#         if processed_items_for_file:
+#             processed_grouped_results[filename] = processed_items_for_file
+
+#     return processed_grouped_results
+
+def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
     """
-    Aggregates quantities and prices for duplicate lots across all uploaded files.
-    A duplicate is defined by having the same Lot/Batch No. and Vendor Item Description.
+    Aggregates quantities and prices for duplicate lots based on the vendor.
+    - For HM Clause & Seminis: Duplicates are identified by (Lot No + Batch No).
+    - For Sakata & Nunhems: Duplicates are identified by Lot No only.
+    - If aggregated, the Vendor Item Description is cleaned and marked as '[COMBINED]'.
     """
-    unique_items_map = {}  # key: (lot_no, description), value: item_dict
+    
+    if vendor == "sakata":
+        flattened_results = {}
+        for filename, items_list in grouped_results.items():
+            flat_lots_list = []
+            for item in items_list:
+                for lot in item.get("Lots", []):
+                    combined_lot = {k: v for k, v in item.items() if k != "Lots"}
+                    combined_lot.update(lot)
+                    if 'TotalQuantity' not in combined_lot:
+                         combined_lot['TotalQuantity'] = item.get('QtyShipped')
+                    flat_lots_list.append(combined_lot)
+            
+            if flat_lots_list:
+                flattened_results[filename] = flat_lots_list
+                
+        grouped_results = flattened_results
+        
+    unique_items_map = {}
     processed_grouped_results = {}
 
-    # Define a list of possible keys for lot numbers and descriptions
-    lot_keys = ["VendorLot", "VendorLotNo", "VendorBatchLot", "VendorBatchNo"]
+    lot_keys = ["VendorLot", "VendorLotNo", "VendorProductLot"]
+    batch_keys = ["VendorBatchLot", "VendorBatchNo"]
     desc_keys = ["VendorItemDescription", "VendorDescription"]
 
     for filename, items_list in grouped_results.items():
         processed_items_for_file = []
         for item in items_list:
-            # Find the first available lot number and description from the keys list
-            lot_no = next((item.get(key) for key in lot_keys if item.get(key)), None)
-            desc = next((item.get(key) for key in desc_keys if item.get(key)), None)
+            agg_key = None
             
-            # If we can't form a unique key, treat the item as unique
-            if not lot_no or not desc:
+            lot_no_raw = next((item.get(key) for key in lot_keys if item.get(key)), None)
+            lot_no = lot_no_raw.strip() if lot_no_raw else None
+
+            if vendor in ["hm_clause", "seminis"]:
+                batch_no_raw = next((item.get(key) for key in batch_keys if item.get(key)), None)
+                batch_no = batch_no_raw.strip() if batch_no_raw else None
+                if lot_no and batch_no:
+                    agg_key = (lot_no, batch_no)
+            
+            elif vendor in ["sakata", "nunhems"]:
+                if lot_no:
+                    agg_key = (lot_no,)
+
+            if not agg_key:
                 processed_items_for_file.append(item)
                 continue
 
-            agg_key = (lot_no, desc)
-
-            # Convert quantity and price to numbers for aggregation
             try:
                 current_qty = float(item.get("TotalQuantity", 0) or 0)
                 current_price = float(item.get("TotalPrice", 0) or 0)
             except (ValueError, TypeError):
-                # If values are not numeric, can't aggregate. Treat as unique.
                 processed_items_for_file.append(item)
                 continue
 
             if agg_key in unique_items_map:
-                # It's a duplicate, update the existing item
                 existing_item = unique_items_map[agg_key]
-                try:
-                    existing_qty = float(existing_item.get("TotalQuantity", 0) or 0)
-                    existing_price = float(existing_item.get("TotalPrice", 0) or 0)
+                desc_key = next((key for key in desc_keys if key in existing_item), None)
 
-                    existing_item["TotalQuantity"] = existing_qty + current_qty
-                    existing_item["TotalPrice"] = existing_price + current_price
-                    
-                except (ValueError, TypeError):
-                    pass # Should not happen, but here for safety
+                if desc_key and "[COMBINED]" not in existing_item[desc_key]:
+                    current_desc = existing_item[desc_key]
+                    modified_desc = re.sub(r"\s+[\d,]+\s+\w+$", "", current_desc).strip()
+                    existing_item[desc_key] = f"{modified_desc} [COMBINED]"
+                
+                existing_qty = float(existing_item.get("TotalQuantity", 0) or 0)
+                existing_price = float(existing_item.get("TotalPrice", 0) or 0)
+                existing_item["TotalQuantity"] = existing_qty + current_qty
+                
+                # CORRECTED: Always sum the TotalPrice for all vendors during aggregation
+                existing_item["TotalPrice"] = existing_price + current_price
+                
+                new_total_qty = existing_item["TotalQuantity"]
+                new_total_price = existing_item["TotalPrice"]
+                cost_key = "USD_Actual_Cost_$"
+                if cost_key not in existing_item:
+                    cost_key = next((k for k in existing_item if "Cost" in k), "USD_Actual_Cost_$")
+
+                # CORRECTED: Added specific cost recalculation logic for Sakata
+                if new_total_qty > 0:
+                    if vendor == "sakata":
+                        pkg_qty = None
+                        desc = existing_item.get("VendorDescription", "")
+                        if m_pkg := re.search(r"(\d+)(?=\s*[Mm]\b|\s*[Ll][Bb]\b|M$|LB$)", desc):
+                            pkg_qty = int(m_pkg.group(1))
+
+                        if pkg_qty and pkg_qty > 0:
+                            total_seed_units = new_total_qty * pkg_qty
+                            if total_seed_units > 0:
+                                existing_item[cost_key] = round(new_total_price / total_seed_units, 4)
+                    else: # Logic for other vendors
+                        if new_total_price:
+                            existing_item[cost_key] = round(new_total_price / new_total_qty, 4)
             else:
-                # This is a new unique item. Add it to the map and the display list.
                 item["TotalQuantity"] = current_qty
                 item["TotalPrice"] = current_price
                 unique_items_map[agg_key] = item
@@ -463,12 +602,7 @@ def index():
     if request.method == "POST":
         vendor = request.form.get("vendor")
         files = request.files.getlist("pdfs")
-        # pdf_paths = []
-        # for f in files:
-        #     if f and f.filename.lower().endswith(".pdf"):
-        #         path = os.path.join(UPLOAD_FOLDER, secure_filename(f.filename))
-        #         f.save(path)
-        #         pdf_paths.append(path)
+      
         pdf_files = []
         for f in files:
             if f and f.filename.lower().endswith(".pdf"):
@@ -477,56 +611,6 @@ def index():
 
         if not pdf_files:
             return "No valid PDF files uploaded", 400
-
-        # if vendor == "sakata":
-        #     grouped = {}
-        #     all_items = []
-        #     pkg_descs = load_package_descriptions(user_token)
-        #     treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
-        #     treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
-
-        #     # with Pool(processes=cpu_count(), initializer=init_worker, initargs=(pkg_descs,)) as pool:
-        #     #     results = pool.map(_extract_sakata_file, pdf_paths)
-                
-        #     with Pool(processes=cpu_count(), initializer=init_worker, initargs=(pkg_descs,)) as pool:
-        #         results = pool.map(_extract_sakata_bytes, pdf_files)  # pass bytes instead of paths
-
-
-        #     for filename, items in results:
-        #         if items:
-        #             grouped[filename] = items
-        #             all_items.extend(items)
-        #     #     try:
-        #     #         os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-        #     #     except Exception as e:
-        #     #         app.logger.error(f"Could not delete {filename}: {e}")
-
-        #     all_pos = set(item.get("PurchaseOrder") for item in all_items if item.get("PurchaseOrder"))
-        #     if all_pos:
-        #         try:
-        #             po_items = get_po_items("|".join(all_pos), user_token)
-        #             for item in all_items:
-        #                 po = item.get("PurchaseOrder")
-        #                 if po:
-        #                     item["BCOptions"] = po_items  # Assign all PO items to each item with a matching PO
-        #                 else:
-        #                     item["BCOptions"] = []
-                            
-        #                 vendor_desc = item.get("VendorItemDescription", "")
-        #                 item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
-                        
-        #         except Exception as e:
-        #             app.logger.error(f"Failed to fetch PO items: {e}")
-        #             for item in all_items:
-        #                 item["BCOptions"] = [{"No": "ERROR", "Description": str(e)}]
-
-        #     return render_template(
-        #         "results_sakata.html",
-        #         items=grouped,
-        #         treatments1=treatments1,
-        #         treatments2=treatments2,
-        #         pkg_descs=pkg_descs
-        #     )
 
         if vendor == "sakata":
             # Load shared data from Business Central
@@ -538,7 +622,7 @@ def index():
             grouped_results = extract_sakata_data_from_bytes(pdf_files, token=user_token)
             
             # Aggregate duplicate lots
-            final_grouped_results = aggregate_duplicate_lots(grouped_results)
+            final_grouped_results = aggregate_duplicate_lots(grouped_results, vendor = "sakata")
 
             # Flatten the results to find all unique PO numbers
             all_items = [item for items_list in final_grouped_results.values() for item in items_list]
@@ -571,65 +655,6 @@ def index():
                 treatments2=treatments2,
                 pkg_descs=pkg_descs
             )
-            
-        # elif vendor == "hm_clause":
-        #     # 1. Load shared data from BC first
-        #     pkg_descs = load_package_descriptions(user_token)
-        #     treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
-        #     treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
-
-        #     # 2. Extract data from PDFs using multiprocessing
-        #     with Pool(processes=cpu_count()) as pool:
-        #         results = pool.map(_extract_hm_clause_file, pdf_paths)
-
-        #     # 3. Group results and create a flat list for processing
-        #     final_grouped_results = {}
-        #     all_items_flat = []
-        #     for filename, items in results:
-        #         if items:
-        #             final_grouped_results[filename] = items
-        #             all_items_flat.extend(items)
-        #         # Clean up uploaded file
-        #         try:
-        #             os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-        #         except Exception as e:
-        #             app.logger.error(f"Could not delete {filename}: {e}")
-            
-        #     # 4. Fetch all PO data at once
-        #     all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
-        #     po_items_for_all = []
-        #     if all_pos:
-        #         try:
-        #             # Re-use the get_po_items function from the sakata extractor
-        #             po_items_for_all = get_po_items("|".join(all_pos), user_token)
-        #         except Exception as e:
-        #             app.logger.error(f"Failed to fetch PO items for HM Clause: {e}")
-        #             po_items_for_all = [{"No": "ERROR", "Description": str(e)}]
-            
-        #     # 5. Enrich each item with PO options and package description
-        #     for item in all_items_flat:
-        #         print(f"FINAL ITEM {item['VendorItemNumber']}: TotalDiscount = {item.get('TotalDiscount')}")
-        #         # Add BCOptions if the item has a PO (matches Sakata logic)
-        #         if item.get("PurchaseOrder"):
-        #             item["BCOptions"] = po_items_for_all
-        #         else:
-        #             item["BCOptions"] = []
-                    
-        #         vendor_desc = item.get("VendorItemDescription", "")
-        #         item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
-                
-        #         # Find and add the best package description using HM Clause specific logic
-        #         vendor_desc = item.get("VendorItemDescription", "")
-        #         item["PackageDescription"] = find_best_hm_clause_package_description(vendor_desc, pkg_descs)
-            
-        #     # 6. Render the template with all necessary data
-        #     return render_template(
-        #         "results_hm_clause.html",
-        #         items=final_grouped_results,
-        #         treatments1=treatments1,
-        #         treatments2=treatments2,
-        #         pkg_descs=pkg_descs
-        #     )   
         
         elif vendor == "hm_clause":
             # 1. Load shared data from BC first
@@ -640,7 +665,7 @@ def index():
             grouped_results = extract_hm_clause_data_from_bytes(pdf_files)
             
             # Aggregate duplicate lots
-            final_grouped_results = aggregate_duplicate_lots(grouped_results)
+            final_grouped_results = aggregate_duplicate_lots(grouped_results, vendor = "hm_clause")
 
             # 3. Create a flat list for post-processing
             all_items_flat = [item for items_list in final_grouped_results.values() for item in items_list]
@@ -677,69 +702,6 @@ def index():
                 pkg_descs=pkg_descs
             )
 
-        # elif vendor == "seminis":
-        #     # 1. Load shared data from BC first
-        #     pkg_descs = load_package_descriptions(user_token)
-        #     treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
-        #     treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
-
-        #     # 2. Extract data from PDFs using multiprocessing
-        #     main_invoice_paths = [p for p in pdf_paths if "packing" not in p.lower() and "l_" not in p.lower()]
-
-        #     with Pool(processes=cpu_count()) as pool:
-        #         results = pool.map(_extract_seminis_file, main_invoice_paths)
-
-        #     # 3. Group results and create a flat list for processing
-        #     final_grouped_results = {}
-        #     all_items_flat = []
-        #     for filename, items in results:
-        #         if items:
-        #             final_grouped_results[filename] = items
-        #             all_items_flat.extend(items)
-        #         # Clean up all uploaded files associated with this vendor
-        #         try:
-        #             # Construct paths for potential related files to delete them
-        #             folder = app.config["UPLOAD_FOLDER"]
-        #             for f in os.listdir(folder):
-        #                 file_path = os.path.join(folder, f)
-        #                 if os.path.isfile(file_path):
-        #                     os.remove(file_path)
-        #         except Exception as e:
-        #             app.logger.error(f"Could not delete files for {filename}: {e}")
-
-        #     # 4. Fetch all PO data at once
-        #     all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
-        #     po_items_for_all = []
-        #     if all_pos:
-        #         try:
-        #             po_items_for_all = get_po_items("|".join(all_pos), user_token)
-        #         except Exception as e:
-        #             app.logger.error(f"Failed to fetch PO items for Seminis: {e}")
-        #             po_items_for_all = [{"No": "ERROR", "Description": str(e)}]
-
-        #     # 5. Enrich each item with PO options
-        #     for item in all_items_flat:
-        #         if item.get("PurchaseOrder"):
-        #             item["BCOptions"] = po_items_for_all
-        #         else:
-        #             item["BCOptions"] = []
-                    
-        #         vendor_desc = item.get("VendorItemDescription", "")
-        #         item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
-                    
-        #         # 6. Find and add the best package description using HM Clause specific logic
-        #         vendor_desc = item.get("VendorItemDescription", "")
-        #         item["PackageDescription"] = find_best_seminis_package_description(vendor_desc, pkg_descs)
-
-        #     # 7. Render the template with all necessary data
-        #     return render_template(
-        #         "results_seminis.html",
-        #         items=final_grouped_results,
-        #         treatments1=treatments1,
-        #         treatments2=treatments2,
-        #         pkg_descs=pkg_descs
-        #     )
-        
         elif vendor == "seminis":
             # 1. Load shared data from BC
             pkg_descs = load_package_descriptions(user_token)
@@ -750,7 +712,7 @@ def index():
             grouped_results = extract_seminis_data_from_bytes(pdf_files, pkg_descs)
             
             # Aggregate duplicate lots
-            final_grouped_results = aggregate_duplicate_lots(grouped_results)
+            final_grouped_results = aggregate_duplicate_lots(grouped_results, vendor = "seminis")
             
             # 3. Flatten results for post-processing
             all_items_flat = [item for items_list in final_grouped_results.values() for item in items_list]
@@ -780,64 +742,6 @@ def index():
                 treatments2=treatments2,
                 pkg_descs=pkg_descs
             )
-            
-        # elif vendor == "nunhems":
-        #     # 1. Load shared data from BC first
-        #     pkg_descs = load_package_descriptions(user_token)
-        #     treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
-        #     treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
-
-        #     # 2. Filter for main invoice files and extract data using multiprocessing
-        #     main_invoice_paths = [p for p in pdf_paths if not any(x in os.path.basename(p).lower() for x in ["nal", "basf", "packing", "ship"])]
-            
-        #     with Pool(processes=cpu_count()) as pool:
-        #         results = pool.map(_extract_nunhems_file, main_invoice_paths)
-
-        #     # 3. Group results and create a flat list for processing
-        #     final_grouped_results = {}
-        #     all_items_flat = []
-        #     for filename, items in results:
-        #         if items:
-        #             final_grouped_results[filename] = items
-        #             all_items_flat.extend(items)
-            
-        #     # Clean up all uploaded files after processing is complete
-        #     for path in pdf_paths:
-        #         try:
-        #             os.remove(path)
-        #         except Exception as e:
-        #             app.logger.error(f"Could not delete file {path}: {e}")
-
-        #     # 4. Fetch all PO data at once
-        #     all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
-        #     po_items_for_all = []
-        #     if all_pos:
-        #         try:
-        #             po_items_for_all = get_po_items("|".join(all_pos), user_token)
-        #         except Exception as e:
-        #             app.logger.error(f"Failed to fetch PO items for Nunhems: {e}")
-        #             po_items_for_all = [{"No": "ERROR", "Description": str(e)}]
-
-        #     # 5. Enrich each item with PO options and package description
-        #     for item in all_items_flat:
-        #         if item.get("PurchaseOrder"):
-        #             item["BCOptions"] = po_items_for_all
-        #         else:
-        #             item["BCOptions"] = []
-                    
-        #         vendor_desc = item.get("VendorItemDescription", "")
-        #         item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
-                
-        #         item["PackageDescription"] = find_best_nunhems_package_description(vendor_desc, pkg_descs)
-            
-        #     # 6. Render the template with all necessary data
-        #     return render_template(
-        #         "results_nunhems.html",
-        #         items=final_grouped_results,
-        #         treatments1=treatments1,
-        #         treatments2=treatments2,
-        #         pkg_descs=pkg_descs
-        #     )
         
         elif vendor == "nunhems":
             # 1. Load shared data from BC first
@@ -848,7 +752,7 @@ def index():
             grouped_results = extract_nunhems_data_from_bytes(pdf_files, pkg_descs)
             
             # Aggregate duplicate lots
-            final_grouped_results = aggregate_duplicate_lots(grouped_results)
+            final_grouped_results = aggregate_duplicate_lots(grouped_results, vendor = "nunhems")
 
             # 3. Create a flat list for post-processing
             all_items_flat = [item for items_list in final_grouped_results.values() for item in items_list]
@@ -888,7 +792,6 @@ def index():
 
     return render_template("index.html", user_name=session.get("user_name"))
 
-# Lot creation endpoint
 # Lot creation endpoint
 @app.route("/create-lot", methods=["POST"])
 @login_required
@@ -945,34 +848,6 @@ def create_lot():
             return int(float(s))
         except (ValueError, TypeError):
             return None
-
-    # for key, val in data.items():
-    #     if isinstance(val, str) and val.lower() == "none":
-    #         data[key] = ""
-            
-    # raw_sprout = data.get("SproutCount", "").strip()
-
-    # # Null-guard all inputs
-    # item_no     = str(data.get("BCItemNo", "")).strip() or None
-    # vendor_lot  = str(data.get("VendorLotNo", "")).strip() or None
-    # vendor_batch = str(data.get("VendorBatchLot", "")).strip() or None
-    # country     = str(data.get("OriginCountry", "")).strip() or None
-    # td1         = str(data.get("TreatmentsDescription", "")).strip() or None
-    # td2_text    = str(data.get("TreatmentsDescription2", "")).strip() or None
-    # seed_size   = str(data.get("SeedSize", "")).strip() or None
-
-    # seed_count = parse_decimal(data.get("SeedCount"))
-    # germ_pct   = data.get("CurrentGerm", "").strip()
-    # #purity     = parse_decimal(data.get("Purity"))
-    # pure       = parse_decimal(data.get("Purity"))
-    # inert      = parse_decimal(data.get("Inert"))
-    # grower_germ= parse_decimal(data.get("GrowerGerm", ""))
-    # usd_cost_val = parse_decimal(data.get("USD_Actual_Cost_$"))
-    # #pkg_qty_dec_val = parse_decimal(data.get("Pkg_Qty"))
-    # #pkg_qty_val = int(pkg_qty_dec_val) if pkg_qty_dec_val is not None else None
-
-    # raw_date = data.get("CurrentGermDate", "").strip()
-    # raw_grower_date = data.get("GrowerGermDate", "").strip()
     
     # Extract and normalize all fields
     item_no        = normalize_text(data.get("BCItemNo"))
@@ -1036,7 +911,6 @@ def create_lot():
         "TMG_Treated":                 treated,
         "KTT":                         ktt,
         "OriginalReceivedQty":         original_received_qty,
-        #"TMG_PackageQty":              pkg_qty_val,
         "TMG_USD_Actual_Cost":         usd_cost_val,
         "TMG_PackageDesc":             pkg_desc_val
     }
