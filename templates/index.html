@@ -589,6 +589,13 @@
       toggleButton.textContent = dark ? 'Light Mode' : 'Dark Mode';
       localStorage.setItem('theme', dark ? 'dark-mode' : 'light-mode');
       updateLogoTheme(dark);
+
+      // Find all the remove file buttons currently on the page
+      const closeButtons = document.querySelectorAll('.btn-close');
+      
+      closeButtons.forEach(btn => {
+        btn.classList.toggle('btn-close-white', dark);
+      });
     });
 
     // Dropzone & PDF handling
