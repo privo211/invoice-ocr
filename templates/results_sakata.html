@@ -798,9 +798,8 @@
               dd.style.fontWeight = 'bold';
               dd.style.color = '#198754';
 
-              // Append the new elements to the end of the list
-              dl.appendChild(dt);
-              dl.appendChild(dd);
+              dl.prepend(dd);
+              dl.prepend(dt);
             }
           } else {
               card.style.border = '2px solid red';
@@ -808,19 +807,27 @@
               creationResults.push({ vendorLot: data.VendorLotNo, bcLot: 'N/A', status: 'Failed', error: errorMessage });
               alert(`❌ Error for Vendor Lot ${data.VendorLotNo}:\n${errorMessage}`);
           }
-          /*if (res.ok && json.status === 'success') {
-            card.style.border = '2px solid green';
-          } else {
-            card.style.border = '2px solid red';
-            alert(`❌ Error for ${data.VendorLotNo}: ${json.message}`);
-          }*/
+          
         } catch (err) {
           card.style.border = '2px solid red';
           alert(`❌ Network error: ${err.message}`);
         }
       }
 
-      alert("✅ Done processing selected lots!");
+      // Final detailed summary alert
+      const successCount = creationResults.filter(r => r.status === 'Success').length;
+      const failedCount = creationResults.length - successCount;
+      let summaryMessage = `✅ Processing complete.\n\nSuccess: ${successCount} | Failed: ${failedCount}\n\n`;
+
+      summaryMessage += creationResults.map(r => {
+        let line = `- Vendor Lot [${r.vendorLot}] -> BC Lot [${r.bcLot}]`;
+        if (r.status === 'Failed') {
+          line += ` (FAILED: ${r.error.substring(0, 100)}...)`;
+        }
+        return line;
+      }).join('\n');
+      
+      alert(summaryMessage);
     });
 
   </script>
