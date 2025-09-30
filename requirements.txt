@@ -7,3 +7,4 @@ python-dotenv>=1.0
 PyMuPDF>=1.23
 openpyxl>=3.0
 pycountry>=24.0
+psycopg2-binary>=1.0

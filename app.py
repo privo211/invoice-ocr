@@ -935,7 +935,10 @@ def create_lot():
     try:
         resp = timed_post(bc_url, json=payload, headers=headers)
         resp.raise_for_status()
-        return jsonify({"status": "success"})
+        lot_data = resp.json()
+        generated_lot_no = lot_data.get("Lot_No")
+        return jsonify({"status": "success", "Lot_No": generated_lot_no})
+        #return jsonify({"status": "success"})
     except requests.exceptions.HTTPError as e:
         app.logger.error("HTTP error creating lot: %d - %s", e.response.status_code, e.response.text)
         if e.response.status_code == 401:
