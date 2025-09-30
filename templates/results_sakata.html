@@ -724,6 +724,9 @@
 
       bootstrap.Modal.getInstance(document.getElementById('lot-selection-modal')).hide();
 
+      // Array to hold the results for the final summary
+      let creationResults = []; 
+
       for (const cb of selected) {
         const idx = cb.dataset.lotIdx;
         const card = document.querySelector(`.card[data-lot-idx="${idx}"]`);
@@ -768,17 +771,49 @@
 
           // Redirect if token expired
           if (res.redirected || res.status === 401) {
+            alert('Your session has expired. Please sign in again.');
             window.location.href = '/sign_in';
             return;
           }
 
           const json = await res.json();
-          if (res.ok && json.status === 'success') {
+
+          if (res.ok && json.status === 'success' && json.Lot_No) {
+            card.style.border = '2px solid green';
+            const newLotNo = json.Lot_No;
+            creationResults.push({ vendorLot: data.VendorLotNo, bcLot: newLotNo, status: 'Success' });
+
+            // Find the definition list (<dl>) inside the card
+            const dl = card.querySelector('dl');
+            if (dl && !card.querySelector('.bc-lot-display')) { // Check to prevent adding duplicates
+              // Create new elements to display the BC Lot No.
+              const dt = document.createElement('dt');
+              dt.className = 'col-sm-4 bc-lot-display'; // Add a class for the check above
+              dt.textContent = 'BC Lot No.';
+              dt.style.color = '#198754'; // Bootstrap success green
+
+              const dd = document.createElement('dd');
+              dd.className = 'col-sm-8';
+              dd.textContent = newLotNo;
+              dd.style.fontWeight = 'bold';
+              dd.style.color = '#198754';
+
+              // Append the new elements to the end of the list
+              dl.appendChild(dt);
+              dl.appendChild(dd);
+            }
+          } else {
+              card.style.border = '2px solid red';
+              const errorMessage = json.message || 'An unknown error occurred.';
+              creationResults.push({ vendorLot: data.VendorLotNo, bcLot: 'N/A', status: 'Failed', error: errorMessage });
+              alert(`❌ Error for Vendor Lot ${data.VendorLotNo}:\n${errorMessage}`);
+          }
+          /*if (res.ok && json.status === 'success') {
             card.style.border = '2px solid green';
           } else {
             card.style.border = '2px solid red';
             alert(`❌ Error for ${data.VendorLotNo}: ${json.message}`);
-          }
+          }*/
         } catch (err) {
           card.style.border = '2px solid red';
           alert(`❌ Network error: ${err.message}`);
