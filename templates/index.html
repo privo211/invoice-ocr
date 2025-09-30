@@ -249,7 +249,7 @@
     });
 
     // Function to update the file list display and button visibility
-    function updateFileInfo() {
+    /*function updateFileInfo() {
       const files = Array.from(dataTransfer.files);
       if (files.length) {
         fileInfo.textContent = `${files.length} file(s):\n${files.map(f => f.name).join('\n')}`;
@@ -258,7 +258,67 @@
         fileInfo.textContent = 'No files chosen (max. 25 MB)';
         buttonContainer.style.display = 'none'; // Hide button container
       }
-    }
+    }*/
+
+    // New and improved function
+    function updateFileInfo() {
+      const fileListContainer = document.getElementById('file-info');
+      const files = Array.from(dataTransfer.files);
+
+      // Clear the current display
+      fileListContainer.innerHTML = '';
+
+      if (files.length === 0) {
+        fileListContainer.textContent = 'No files chosen (max. 25 MB)';
+        buttonContainer.style.display = 'none';
+      } else {
+        // Create a list element to hold our file items
+        const list = document.createElement('ul');
+        list.className = 'list-group mt-2'; // Use Bootstrap list-group for styling
+
+        files.forEach((file, index) => {
+          const listItem = document.createElement('li');
+          listItem.className = 'list-group-item d-flex justify-content-between align-items-center';
+
+          // Create a span to hold the file name
+          const fileNameSpan = document.createElement('span');
+          fileNameSpan.textContent = file.name;
+          
+          // Create the remove button for this file
+          const deleteBtn = document.createElement('button');
+          deleteBtn.type = 'button';
+          deleteBtn.className = 'btn-close'; // Bootstrap's 'X' button style
+          deleteBtn.setAttribute('aria-label', 'Remove file');
+          deleteBtn.dataset.fileIndex = index; // Store the file's index
+
+          // Add the click event listener to handle removal
+          deleteBtn.addEventListener('click', (e) => {
+            const indexToRemove = parseInt(e.target.dataset.fileIndex, 10);
+            
+            // Create a new list of files, excluding the one to be removed
+            const currentFiles = Array.from(dataTransfer.files);
+            const updatedFiles = currentFiles.filter((_, i) => i !== indexToRemove);
+            
+            // Clear the master DataTransfer object
+            dataTransfer.items.clear();
+            
+            // Add the updated files back
+            updatedFiles.forEach(f => dataTransfer.items.add(f));
+            
+            // Sync the file input and re-render the UI
+            pdfInput.files = dataTransfer.files;
+            updateFileInfo();
+          });
+
+          listItem.appendChild(fileNameSpan);
+          listItem.appendChild(deleteBtn);
+          list.appendChild(listItem);
+        });
+
+        fileListContainer.appendChild(list);
+        buttonContainer.style.display = 'flex';
+      }
+}
 
     // Form submit loading overlay
     const form = document.getElementById('extract-form');
@@ -283,7 +343,7 @@
     clearBtn.type = 'button';
     clearBtn.className = 'btn btn-outline-danger btn-sm';
     
-    // Create the "Undo" button
+    /*// Create the "Undo" button
     const undoBtn = document.createElement('button');
     undoBtn.textContent = 'Undo';
     undoBtn.type = 'button';
@@ -319,7 +379,7 @@
         // Update the input element and the UI
         pdfInput.files = dataTransfer.files;
         updateFileInfo();
-    });
+    });*/
   </script>
 
 </body>
