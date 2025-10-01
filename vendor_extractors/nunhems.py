@@ -213,7 +213,7 @@ def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_ma
             "TotalPrice": net_price, "TotalQuantity": total_qty, "USD_Actual_Cost_$": cost,
             "Treatment": treatment, "Purity": quality_info.get("PureSeeds"),
             "InertMatter": quality_info.get("Inert"), "Germ": germ_info.get("Germ"),
-            "GermDate": germ_info.get("GermDate"), "SeedCountPerLB": packing_info.get("SeedCount"),
+            "GermDate": germ_info.get("GermDate"), "SeedCount": packing_info.get("SeedCount"),
             "GrowerGerm": quality_info.get("GrowerGerm"), "GrowerGermDate": quality_info.get("GrowerGermDate"),
             "PackageDescription": package_description
         }
