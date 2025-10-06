@@ -275,20 +275,19 @@ import requests
 import time
 from difflib import get_close_matches
 from collections import defaultdict
+from db_logger import log_processing_event
 
 # --- Configuration for Azure OCR (if needed) ---
 AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
 AZURE_KEY = os.getenv("AZURE_KEY")
 
 # --- OCR and Text Extraction Logic (Modified for In-Memory) ---
-
-def extract_text_with_azure_ocr(pdf_content: bytes) -> List[str]:
-    """Sends PDF content (bytes) to Azure Form Recognizer for OCR."""
+def extract_text_with_azure_ocr(pdf_content: bytes) -> Tuple[List[str], int]:
+    """Sends PDF content to Azure OCR and returns lines and page count."""
     headers = {
         "Ocp-Apim-Subscription-Key": AZURE_KEY,
         "Content-Type": "application/pdf"
     }
-    # Post the raw bytes directly
     response = requests.post(
         f"{AZURE_ENDPOINT}formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31",
         headers=headers,
@@ -298,72 +297,106 @@ def extract_text_with_azure_ocr(pdf_content: bytes) -> List[str]:
         raise RuntimeError(f"OCR request failed: {response.text}")
 
     op_url = response.headers["Operation-Location"]
-    for _ in range(30): # Poll for results
+    for _ in range(30):
         time.sleep(1.5)
         result = requests.get(op_url, headers={"Ocp-Apim-Subscription-Key": AZURE_KEY}).json()
         if result.get("status") == "succeeded":
             lines = []
-            for page in result["analyzeResult"]["pages"]:
+            analyze_result = result.get("analyzeResult", {})
+            pages = analyze_result.get("pages", [])
+            page_count = len(pages)  # Get page count from OCR result
+            for page in pages:
+                # ... existing line processing logic ...
                 if "notice to purchaser" in " ".join(line.get("content", "").lower() for line in page.get("lines", [])):
                     continue
                 for line in page["lines"]:
                     txt = line.get("content", "").strip()
                     if txt:
                         lines.append(txt)
-            return lines
+            return lines, page_count
         if result.get("status") == "failed":
             raise RuntimeError("OCR analysis failed")
     raise TimeoutError("OCR timed out")
 
-def extract_text_with_fallback(source: Union[str, bytes]) -> List[str]:
-    """
-    Extracts text from a PDF source (path or bytes), falling back to Azure OCR if needed.
-    """
-    lines = []
-    is_scanned = False
+# def extract_text_with_fallback(source: Union[str, bytes]) -> List[str]:
+#     """
+#     Extracts text from a PDF source (path or bytes), falling back to Azure OCR if needed.
+#     """
+#     lines = []
+#     is_scanned = False
+#     doc = None
+#     try:
+#         if isinstance(source, bytes):
+#             # If the source is bytes, open it as a stream
+#             doc = fitz.open(stream=source, filetype="pdf")
+#         else: # Assumes it's a file path
+#             doc = fitz.open(source)
+#     except Exception:
+#         # If PyMuPDF fails, go straight to OCR. Pass bytes if we have them.
+#         if isinstance(source, bytes):
+#             return extract_text_with_azure_ocr(source)
+#         with open(source, "rb") as f: # Otherwise, read the file and pass bytes
+#             return extract_text_with_azure_ocr(f.read())
+
+#     # Check for scanned document
+#     for page in doc:
+#         if "notice to purchaser" in page.get_text().lower():
+#             continue
+#         if not page.get_text().strip():
+#             is_scanned = True
+#             break
+    
+#     # If not scanned, extract text normally
+#     if not is_scanned:
+#         for page in doc:
+#             if "notice to purchaser" in page.get_text().lower():
+#                 continue
+#             lines.extend([ln.strip() for ln in page.get_text().splitlines() if ln.strip()])
+#         return lines
+    
+#     # If scanned, fall back to OCR. Pass bytes if we have them.
+#     if isinstance(source, bytes):
+#         return extract_text_with_azure_ocr(source)
+#     with open(source, "rb") as f:
+#         return extract_text_with_azure_ocr(f.read())
+
+def extract_text_with_fallback(source: Union[str, bytes]) -> Dict:
+    """Extracts text and returns a dictionary with metadata for logging."""
     doc = None
     try:
-        if isinstance(source, bytes):
-            # If the source is bytes, open it as a stream
-            doc = fitz.open(stream=source, filetype="pdf")
-        else: # Assumes it's a file path
-            doc = fitz.open(source)
+        doc = fitz.open(stream=source, filetype="pdf") if isinstance(source, bytes) else fitz.open(source)
     except Exception:
-        # If PyMuPDF fails, go straight to OCR. Pass bytes if we have them.
-        if isinstance(source, bytes):
-            return extract_text_with_azure_ocr(source)
-        with open(source, "rb") as f: # Otherwise, read the file and pass bytes
-            return extract_text_with_azure_ocr(f.read())
+        # If PyMuPDF fails, go straight to OCR
+        pdf_bytes = source if isinstance(source, bytes) else open(source, "rb").read()
+        lines, page_count = extract_text_with_azure_ocr(pdf_bytes)
+        return {'lines': lines, 'method': 'Azure OCR', 'page_count': page_count}
 
-    # Check for scanned document
-    for page in doc:
-        if "notice to purchaser" in page.get_text().lower():
-            continue
-        if not page.get_text().strip():
-            is_scanned = True
-            break
+    page_count = doc.page_count
+    is_scanned = not any(page.get_text().strip() for page in doc)
     
-    # If not scanned, extract text normally
     if not is_scanned:
+        lines = []
         for page in doc:
-            if "notice to purchaser" in page.get_text().lower():
+            page_text = page.get_text()
+            if "notice to purchaser" in page_text.lower():
                 continue
-            lines.extend([ln.strip() for ln in page.get_text().splitlines() if ln.strip()])
-        return lines
+            lines.extend([ln.strip() for ln in page_text.splitlines() if ln.strip()])
+        doc.close()
+        return {'lines': lines, 'method': 'PyMuPDF', 'page_count': page_count}
     
-    # If scanned, fall back to OCR. Pass bytes if we have them.
-    if isinstance(source, bytes):
-        return extract_text_with_azure_ocr(source)
-    with open(source, "rb") as f:
-        return extract_text_with_azure_ocr(f.read())
+    # If scanned, fall back to OCR
+    doc.close()
+    pdf_bytes = source if isinstance(source, bytes) else open(source, "rb").read()
+    lines, page_count_ocr = extract_text_with_azure_ocr(pdf_bytes)
+    return {'lines': lines, 'method': 'Azure OCR', 'page_count': page_count_ocr}
 
 # --- Data Extraction Logic (Modified for In-Memory) ---
-
 def _extract_seminis_analysis_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, Dict]:
-    """Extracts data from Seminis analysis reports from a list of file bytes."""
+    """Extracts data from Seminis analysis reports."""
     analysis = {}
     for filename, pdf_bytes in pdf_files:
-        lines = extract_text_with_fallback(pdf_bytes)
+        extraction_info = extract_text_with_fallback(pdf_bytes)
+        lines = extraction_info['lines']
         if not lines: continue
         
         text = "\n".join(lines)
@@ -396,7 +429,8 @@ def _extract_seminis_packing_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[st
     """Extracts data from Seminis packing slips from a list of file bytes."""
     packing_data = {}
     for filename, pdf_bytes in pdf_files:
-        lines = extract_text_with_fallback(pdf_bytes)
+        extraction_info = extract_text_with_fallback(pdf_bytes)
+        lines = extraction_info['lines']
         if not lines: continue
         
         text = "\n".join(lines)
@@ -500,26 +534,70 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
         items.append(item)
     return items
 
+# def extract_seminis_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_desc_list: list[str]) -> Dict[str, List[Dict]]:
+#     """Main in-memory function to extract all item data from a batch of Seminis files."""
+#     if not pdf_files:
+#         return {}
+
+#     # Pre-process all files to get analysis and packing data first
+#     analysis_map = _extract_seminis_analysis_data(pdf_files)
+#     packing_map = _extract_seminis_packing_data(pdf_files)
+
+#     grouped_results = {}
+#     for filename, pdf_bytes in pdf_files:
+#         lines = extract_text_with_fallback(pdf_bytes)
+#         if not lines: continue
+        
+#         extraction_info = extract_text_with_fallback(pdf_bytes)
+#         lines = extraction_info['lines']
+
+#         # Identify if the current file is the main invoice
+#         text_content = "\n".join(lines)
+#         if "INVOICE" in text_content.upper() and "PACKING" not in text_content.upper() and "REPORT" not in text_content.upper():
+#             # Process this invoice using the pre-computed maps
+#             invoice_items = _process_single_seminis_invoice(lines, analysis_map, packing_map, pkg_desc_list)
+#             if invoice_items:
+#                 grouped_results[filename] = invoice_items
+    
+#     return grouped_results
+
 def extract_seminis_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_desc_list: list[str]) -> Dict[str, List[Dict]]:
-    """Main in-memory function to extract all item data from a batch of Seminis files."""
+    """Main function to extract all data from a batch of Seminis files and log each one."""
     if not pdf_files:
         return {}
 
-    # Pre-process all files to get analysis and packing data first
     analysis_map = _extract_seminis_analysis_data(pdf_files)
     packing_map = _extract_seminis_packing_data(pdf_files)
 
     grouped_results = {}
     for filename, pdf_bytes in pdf_files:
-        lines = extract_text_with_fallback(pdf_bytes)
-        if not lines: continue
+        extraction_info = extract_text_with_fallback(pdf_bytes)
+        lines = extraction_info['lines']
+        
+        po_number = None
+        is_invoice = False
+        
+        if lines:
+            text_content = "\n".join(lines)
+            if m := re.search(r"PO #\s*:\s*(\S+)", text_content):
+                po_number = f"PO-{m.group(1)}"
+            is_invoice = "INVOICE" in text_content.upper() and "PACKING" not in text_content.upper() and "REPORT" not in text_content.upper()
 
-        # Identify if the current file is the main invoice
-        text_content = "\n".join(lines)
-        if "INVOICE" in text_content.upper() and "PACKING" not in text_content.upper() and "REPORT" not in text_content.upper():
-            # Process this invoice using the pre-computed maps
+        # LOG THE EXTRACTION EVENT
+        log_processing_event(
+            vendor='Seminis',
+            po_number=po_number,
+            filename=filename,
+            extraction_info=extraction_info
+        )
+
+        if is_invoice:
             invoice_items = _process_single_seminis_invoice(lines, analysis_map, packing_map, pkg_desc_list)
             if invoice_items:
+                # Associate PO with each item if not already present
+                for item in invoice_items:
+                    if not item.get("PurchaseOrder") and po_number:
+                        item["PurchaseOrder"] = po_number
                 grouped_results[filename] = invoice_items
     
     return grouped_results

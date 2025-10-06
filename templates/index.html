@@ -533,6 +533,15 @@
           </div>
         </div>
 
+        {% if stats and stats.total > 0 %}
+        <div class="stats-preview alert alert-light text-center p-2 mb-4" role="alert" style="font-size: 0.9rem;">
+          Processed: <strong>{{ stats.total }}</strong> docs | 
+          AI OCR Usage: <strong>{{ stats.ocr_percent }}%</strong> | 
+          Avg. Pages: <strong>{{ stats.avg_pages }}</strong>
+          <a href="{{ url_for('logs') }}" class="ms-3 fw-bold">View Full Logs</a>
+        </div>
+        {% endif %}
+
         <form id="extract-form" action="/" method="post" enctype="multipart/form-data">
           <label for="vendor">Select Vendor:</label>
           <select name="vendor" id="vendor">

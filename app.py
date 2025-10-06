@@ -20,6 +20,7 @@ from vendor_extractors.nunhems import extract_nunhems_data_from_bytes, find_best
 import time
 import logging
 import psycopg2
+import db_logger
 
 app = Flask(__name__)
 # Application setup
@@ -34,7 +35,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 app.logger.setLevel(logging.INFO)
-
+db_logger.init_app(app)
 # ---- POSTGRES MSAL CACHE CONFIG ----
 DB_CONFIG = {
     'host': 'localhost',
@@ -587,6 +588,23 @@ def logout():
     session.clear()
     return render_template("logout.html")
 
+# --- NEW ROUTE for viewing detailed logs ---
+@app.route("/logs")
+@login_required
+def logs():
+    page = request.args.get('page', 1, type=int)
+    logs, total_logs = db_logger.get_paginated_logs(page=page, per_page=50)
+    stats = db_logger.get_log_stats()
+    
+    # Calculate total pages for pagination
+    total_pages = (total_logs + 49) // 50
+    
+    return render_template("logs.html", 
+                           logs=logs, 
+                           stats=stats,
+                           current_page=page,
+                           total_pages=total_pages,
+                           user_name=session.get("user_name"))
 
 # Main route
 @app.route("/", methods=["GET", "POST"])
@@ -790,7 +808,8 @@ def index():
                     app.logger.error(f"Could not delete {path}: {e}")
             return "Unsupported vendor selected", 400
 
-    return render_template("index.html", user_name=session.get("user_name"))
+    stats = db_logger.get_log_stats()
+    return render_template("index.html", user_name=session.get("user_name"), stats=stats)
 
 # Lot creation endpoint
 @app.route("/create-lot", methods=["POST"])
