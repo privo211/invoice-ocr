@@ -252,11 +252,15 @@
 
   <div class="container">
     {% if items %}
+      {% set item_counter = namespace(value=0) %}
+
       {% for filename, item_list in items.items() %}
         <h3>📄 {{ filename }}   -   Vendor Invoice No.: {{ item_list[0].VendorInvoiceNo or 'N/A' }}</h3>
         <div class="row row-cols-1 row-cols-md-2 g-4">
           {% for item in item_list %}
-            {% set item_idx = loop.index0 %}
+            <!--{% set item_idx = loop.index0 %}-->
+            {% set item_idx = item_counter.value %}
+
             <div class="col">
               <div class="card h-100 p-3" data-item-idx="{{ item_idx }}">
                 <div class="item-header">{{ item.VendorItemDescription }}</div>
@@ -265,22 +269,6 @@
                   <dd class="col-sm-8">
                     <div class="field-box po-field" contenteditable="true" data-item-idx="{{ item_idx }}">{{ item.PurchaseOrder or '' }}</div>
                   </dd>
-
-                  <!--<dt class="col-sm-4">Select BC Item No.</dt>
-                  <dd class="col-sm-8">
-                    <select class="field-box form-select bc-item-select" data-item-idx="{{ item_idx }}" data-field="BCItemNo">
-                      {% if not item.BCOptions %}<option value="">— Enter a PO to see options —</option>{% endif %}
-                      {% for opt in item.BCOptions %}<option value="{{ opt.No }}">{{ opt.No }} — {{ opt.Description }}</option>{% endfor %}
-                      <option value="Other">Other</option>
-                    </select>
-                    <select id="bc-input-{{ item_idx }}" class="field-box form-select mt-1" style="{% if item.BCItemNo == 'Other' or item.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}">
-                      
-                      <option value="" {% if not item.BCItemNo or item.BCItemNo == 'Other' %}selected{% endif %}>
-                        — Choose an Item No. —
-                      </option>
-
-                    </select>
-                  </dd>-->
 
                   <dt class="col-sm-4">Select BC Item No.</dt>
                   <dd class="col-sm-8">
@@ -444,6 +432,9 @@
                 </dl>
               </div>
             </div>
+
+            {% do item_counter.update(value=item_counter.value + 1) %}
+
           {% endfor %}
         </div>
       {% endfor %}
