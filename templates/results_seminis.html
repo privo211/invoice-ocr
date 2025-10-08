@@ -259,7 +259,7 @@
         <div class="row row-cols-1 row-cols-md-2 g-4">
           {% for item in item_list %}
             <!--{% set item_idx = loop.index0 %}-->
-            {% set item_counter.value = item_counter.value + 1 %}
+            {% set item_idx = item_counter.value %}
 
             <div class="col">
               <div class="card h-100 p-3" data-item-idx="{{ item_idx }}">
@@ -433,7 +433,7 @@
               </div>
             </div>
 
-            {% set _ = item_counter.update(value=item_counter.value + 1) %}
+            {% set item_counter.value = item_counter.value + 1 %}
 
           {% endfor %}
         </div>
