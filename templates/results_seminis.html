@@ -433,7 +433,7 @@
               </div>
             </div>
 
-            {% do item_counter.update(value=item_counter.value + 1) %}
+            {% set _ = item_counter.update(value=item_counter.value + 1) %}
 
           {% endfor %}
         </div>
