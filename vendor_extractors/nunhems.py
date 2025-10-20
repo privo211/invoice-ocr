@@ -72,41 +72,6 @@ def _parse_percent(s: str) -> Union[float, str]:
             return s[:-1].strip()
     return s
 
-# def _extract_nunhems_quality_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, Dict]:
-#     """Extracts data from Nunhems Quality Certificate PDFs from a list of file bytes."""
-#     quality_map = {}
-#     for filename, pdf_bytes in pdf_files:
-#         lines = _extract_lines(pdf_bytes)
-#         if not any("Quality Certificate" in ln for ln in lines):
-#             continue
-
-#         current_lot = None
-#         i = 0
-#         while i < len(lines):
-#             ln = lines[i]
-#             if re.match(r"Lot[/ ]*Batch number", ln, re.IGNORECASE) and i + 1 < len(lines):
-#                 if m := re.search(r"(\d{11})", lines[i + 1]):
-#                     current_lot = m.group(1)
-#                     quality_map.setdefault(current_lot, {})
-#                 i += 2
-#                 continue
-#             if current_lot and re.match(r"Pure\s*seeds?", ln, re.IGNORECASE) and i + 5 < len(lines):
-#                 vals = lines[i+3 : i+6]
-#                 quality_map[current_lot]["PureSeeds"] = _parse_percent(vals[0])
-#                 quality_map[current_lot]["Inert"] = _parse_percent(vals[1])
-#                 i += 6
-#                 continue
-#             if current_lot and (m := re.match(r"Date:\s*([A-Za-z]+\s+\d{1,2},\s*\d{4})", ln)):
-#                 dt = datetime.strptime(m.group(1), "%B %d, %Y")
-#                 quality_map[current_lot]["GrowerGermDate"] = dt.strftime("%m/%d/%Y")
-#             if current_lot and "Normal seedlings" in ln and i + 1 < len(lines):
-#                 for j in range(i+1, min(i+6, len(lines))):
-#                     if percent_match := re.search(r"(\d+)%", lines[j]):
-#                         quality_map[current_lot]["GrowerGerm"] = int(percent_match.group(1))
-#                         break
-#             i += 1
-#     return quality_map
-
 def _extract_nunhems_quality_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, Dict]:
     """Extracts data from Nunhems Quality Certificate PDFs from a list of file bytes."""
     quality_map = {}
@@ -119,51 +84,80 @@ def _extract_nunhems_quality_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[st
         i = 0
         while i < len(lines):
             ln = lines[i]
-            if re.match(r"Lot[/ ]*Batch number", ln, re.IGNORECASE) and i + 1 < len(lines):
+            if re.search(r"Lot[/ ]*Batch number", ln, re.IGNORECASE) and i + 1 < len(lines):
                 if m := re.search(r"(\d{11})", lines[i + 1]):
                     current_lot = m.group(1)
                     quality_map.setdefault(current_lot, {})
                 i += 2
                 continue
-            
-            # Find Purity and apply business rule
-            if current_lot and re.match(r"Pure\s*seeds?", ln, re.IGNORECASE):
-                try:
-                    # Find the line with percentages, which could be a few lines down
-                    for j in range(i + 1, i + 5):
-                        percent_line = lines[j]
-                        vals = re.findall(r"(\d+\.?\d*|TR)%", percent_line)
-                        if len(vals) > 0:
-                            pure_val_str = vals[0]
-                            inert_val_str = vals[1] if len(vals) > 1 else "0.0"
-
-                            pure_val = 0.0 if pure_val_str == 'TR' else float(pure_val_str)
-                            inert_val = 0.0 if inert_val_str == 'TR' else float(inert_val_str)
-                            
-                            # Apply 100% purity rule
-                            if pure_val == 100.0:
-                                quality_map[current_lot]["PureSeeds"] = 99.99
-                                quality_map[current_lot]["Inert"] = 0.01
-                            else:
-                                quality_map[current_lot]["PureSeeds"] = pure_val
-                                quality_map[current_lot]["Inert"] = inert_val
-                            break # Stop after finding the values
-                except (ValueError, IndexError):
-                    pass # Ignore parsing errors
-            
+            if current_lot and re.match(r"Pure\s*seeds?", ln, re.IGNORECASE) and i + 5 < len(lines):
+                vals = lines[i+3 : i+6]
+                quality_map[current_lot]["PureSeeds"] = _parse_percent(vals[0])
+                quality_map[current_lot]["Inert"] = _parse_percent(vals[1])
+                i += 6
+                continue
             if current_lot and (m := re.match(r"Date:\s*([A-Za-z]+\s+\d{1,2},\s*\d{4})", ln)):
-                try:
-                    dt = datetime.strptime(m.group(1), "%B %d, %Y")
-                    quality_map[current_lot]["GrowerGermDate"] = dt.strftime("%m/%d/%Y")
-                except ValueError:
-                    pass
-            if current_lot and "Normal seedlings" in ln:
-                for j in range(i + 1, min(i + 4, len(lines))):
+                dt = datetime.strptime(m.group(1), "%B %d, %Y")
+                quality_map[current_lot]["GrowerGermDate"] = dt.strftime("%m/%d/%Y")
+            if current_lot and "Normal seedlings" in ln and i + 1 < len(lines):
+                for j in range(i+1, min(i+6, len(lines))):
                     if percent_match := re.search(r"(\d+)%", lines[j]):
                         quality_map[current_lot]["GrowerGerm"] = int(percent_match.group(1))
                         break
             i += 1
     return quality_map
+
+# def _extract_nunhems_quality_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, Dict]:
+#     """Extracts data from Nunhems Quality Certificate PDFs from a list of file bytes."""
+#     quality_map = {}
+#     for filename, pdf_bytes in pdf_files:
+#         lines = _extract_lines(pdf_bytes)
+#         if not any("Quality Certificate" in ln for ln in lines):
+#             continue
+#         current_lot = None
+#         i = 0
+#         while i < len(lines):
+#             ln = lines[i]
+#             if re.match(r"Lot[/ ]*Batch number", ln, re.IGNORECASE) and i + 1 < len(lines):
+#                 if m := re.search(r"(\d{11})", lines[i + 1]):
+#                     current_lot = m.group(1)
+#                     quality_map.setdefault(current_lot, {})
+#                 i += 2
+#                 continue
+            
+#             # Find Purity and apply business rule
+#             if current_lot and re.match(r"Pure\s*seeds?", ln, re.IGNORECASE):
+#                 # scan next 10 lines for percentages
+#                 window_text = " ".join(lines[i : i+5])  # combine next 5 lines
+#                 percent_vals = re.findall(r"(\d+\.?\d*|TR)%", window_text)
+#                 print(percent_vals)
+#                 if percent_vals:
+#                     pure_val_str = percent_vals[0]
+#                     inert_val_str = percent_vals[1] if len(percent_vals) > 1 else "0.0"
+#                     other_val_str = percent_vals[2] if len(percent_vals) > 2 else "0.0"
+#                     pure_val = 0.0 if pure_val_str == "TR" else float(pure_val_str)
+#                     inert_val = 0.0 if inert_val_str == "TR" else float(inert_val_str)
+#                     # Apply business rule
+#                     if pure_val == 100.0:
+#                         pure_val = 99.99
+#                         inert_val = 0.01
+#                     quality_map[current_lot]["PureSeeds"] = pure_val
+#                     quality_map[current_lot]["Inert"] = inert_val
+#                     quality_map[current_lot]["OtherSeeds"] = 0.0 if other_val_str == "TR" else float(other_val_str)
+
+#             if current_lot and (m := re.match(r"Date:\s*([A-Za-z]+\s+\d{1,2},\s*\d{4})", ln)):
+#                 try:
+#                     dt = datetime.strptime(m.group(1), "%B %d, %Y")
+#                     quality_map[current_lot]["GrowerGermDate"] = dt.strftime("%m/%d/%Y")
+#                 except ValueError:
+#                     pass
+#             if current_lot and "Normal seedlings" in ln:
+#                 for j in range(i + 1, min(i + 4, len(lines))):
+#                     if percent_match := re.search(r"(\d+)%", lines[j]):
+#                         quality_map[current_lot]["GrowerGerm"] = int(percent_match.group(1))
+#                         break
+#             i += 1
+#     return quality_map
 
 def _extract_nunhems_germ_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, Dict]:
     """Parses Nunhems Germ Confirmation PDFs from a list of file bytes."""
@@ -211,17 +205,36 @@ def _extract_nunhems_packing_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[st
 #     if m := re.search(r"Customer\s+P\.?O\.?\s+Number[:\s]+([\s\S]*?)\b(\d{5})\b", text_content, re.IGNORECASE): po_number = f"PO-{m.group(2)}"
 
 #     items = []
-#     sds_indices = [i for i, l in enumerate(lines) if re.search(r"\d{1,3}(?:,\d{3})*\s+SDS", l)]
-#     for idx in sds_indices:
-#         sds_match = re.search(r"(\d{1,3}(?:,\d{3})*)\s+SDS", lines[idx])
-#         part1 = lines[idx + 1] if idx + 1 < len(lines) else ""
-#         part2 = lines[idx - 1] if idx - 1 >= 0 else ""
-#         part3 = sds_match.group(0).strip() if sds_match else ""
-#         vendor_item_description = f"{part1} {part2} {part3}".strip()
-#         treatment = lines[idx + 2].strip() if idx + 2 < len(lines) else None
+#     sds_lines = [(i, re.search(r"(\d{1,3}(?:,\d{3})*)\s+SDS", l)) for i, l in enumerate(lines)]
+#     sds_item_markers = [(i, m) for i, m in sds_lines if m]
+
+#     for i, (sds_line_idx, sds_match) in enumerate(sds_item_markers):
+        
+#         start_idx = sds_item_markers[i-1][0] + 1 if i > 0 else 0
+#         end_idx = sds_item_markers[i+1][0] if i + 1 < len(sds_item_markers) else len(lines)
+#         item_block_text = "\n".join(lines[start_idx:end_idx])
+
+#         desc_part1 = lines[sds_line_idx - 1].strip() if sds_line_idx > 0 else ""
+#         desc_part2 = lines[sds_line_idx - 2].strip() if sds_line_idx > 1 else ""
+#         vendor_item_description = f"{desc_part2} {desc_part1} {sds_match.group(0)}".strip()
+        
+#         if "UNTREATED" in item_block_text.upper():
+#             treatment = "Untreated"
+#         else:
+#             treatment = lines[sds_line_idx + 1].strip() if sds_line_idx + 1 < len(lines) else ""
+#             if re.match(r'^\d{11}', treatment):
+#                 treatment = ""
+        
+#     # sds_indices = [i for i, l in enumerate(lines) if re.search(r"\d{1,3}(?:,\d{3})*\s+SDS", l)]
+#     # for idx in sds_indices:
+#     #     sds_match = re.search(r"(\d{1,3}(?:,\d{3})*)\s+SDS", lines[idx])
+#     #     part1 = lines[idx + 1] if idx + 1 < len(lines) else ""
+#     #     part2 = lines[idx - 1] if idx - 1 >= 0 else ""
+#     #     part3 = sds_match.group(0).strip() if sds_match else ""
+#     #     vendor_item_description = f"{part1} {part2} {part3}".strip()
 
 #         vendor_lot = origin_country = net_price = total_qty = None
-#         for i in range(idx, min(len(lines), idx + 30)):
+#         for i in range(sds_line_idx, min(len(lines), sds_line_idx + 30)):
 #             if "Lot Number:" in lines[i] and i + 1 < len(lines) and (m := re.search(r"\b(\d{11})\b", lines[i+1])):
 #                 vendor_lot = m.group(0)
 #                 for j in range(i, min(len(lines), i + 20)):
@@ -246,7 +259,7 @@ def _extract_nunhems_packing_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[st
 #         price_qty_pattern = re.compile(r"([\d,]+(?:\.\d{2})?)\s+Net price\s+([\d,]+\.\d{2})", re.IGNORECASE)
     
 #         # Define the text block for the current item to search within
-#         start_line_index = idx
+#         start_line_index = sds_line_idx
 #         end_line_index = sds_indices[i + 1] if i + 1 < len(sds_indices) else len(lines)
 #         item_block_text = "\n".join(lines[start_line_index:end_line_index])
         
@@ -279,88 +292,298 @@ def _extract_nunhems_packing_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[st
 #     return items
 
 def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_map: dict, packing_map: dict, pkg_desc_list: list[str]) -> List[Dict]:
-    """
-    Processes a single Nunhems invoice using the robust 'SDS'-based logic,
-    with the corrected treatment rule as specified.
-    """
+    """Processes Nunhems invoice lines and combines entries by VendorLot."""
     text_content = "\n".join(lines)
-    
-    # --- ADDED FOR DEBUGGING ---
-    # This will print the full, raw text of the invoice to the terminal.
-    print("--- EXTRACTED NUNHEMS INVOICE TEXT ---")
-    print(text_content)
-    print("--------------------------------------")
-    # ---------------------------
-
     vendor_invoice_no = po_number = None
-    if m := re.search(r"Invoice\s+Number[:\s]+.*?(\d{9})\b", text_content, re.IGNORECASE | re.DOTALL):
-        vendor_invoice_no = m.group(1)
-    if m := re.search(r"Customer\s+P\.?O\.?\s+Number[:\s]+.*?(\d{5})\b", text_content, re.IGNORECASE | re.DOTALL):
-        po_number = f"PO-{m.group(1)}"
+    if m := re.search(r"Invoice\s+Number[:\s]+([\s\S]*?)\b(\d{9})\b", text_content, re.IGNORECASE):
+        vendor_invoice_no = m.group(2)
+    if m := re.search(r"Customer\s+P\.?O\.?\s+Number[:\s]+([\s\S]*?)\b(\d{5})\b", text_content, re.IGNORECASE):
+        po_number = f"PO-{m.group(2)}"
 
     items = []
-    is_kamterter_shipment = "KAMTERTER PRODUCTS INC" in text_content.upper()
-
     sds_lines = [(i, re.search(r"(\d{1,3}(?:,\d{3})*)\s+SDS", l)) for i, l in enumerate(lines)]
     sds_item_markers = [(i, m) for i, m in sds_lines if m]
 
     for i, (sds_line_idx, sds_match) in enumerate(sds_item_markers):
-        
-        start_idx = sds_item_markers[i-1][0] + 1 if i > 0 else 0
-        end_idx = sds_item_markers[i+1][0] if i + 1 < len(sds_item_markers) else len(lines)
+        # capture item text block between SDS lines
+        start_idx = sds_item_markers[i - 1][0] + 1 if i > 0 else 0
+        end_idx = sds_item_markers[i + 1][0] if i + 1 < len(sds_item_markers) else len(lines)
         item_block_text = "\n".join(lines[start_idx:end_idx])
 
+        # description
         desc_part1 = lines[sds_line_idx - 1].strip() if sds_line_idx > 0 else ""
-        desc_part2 = lines[sds_line_idx - 2].strip() if sds_line_idx > 1 else ""
+        desc_part2 = lines[sds_line_idx + 1].strip() if sds_line_idx > 1 else ""
         vendor_item_description = f"{desc_part2} {desc_part1} {sds_match.group(0)}".strip()
-        
+
+        # treatment normalization
         if "UNTREATED" in item_block_text.upper():
             treatment = "Untreated"
         else:
             treatment = lines[sds_line_idx + 1].strip() if sds_line_idx + 1 < len(lines) else ""
-            if re.match(r'^\d{11}', treatment):
+            if re.match(r"^\d{11}", treatment):
                 treatment = ""
 
-        package_description = "SUBCON BULK-MS" if is_kamterter_shipment else find_best_nunhems_package_description(vendor_item_description, pkg_desc_list)
-        
-        price_match = re.search(r"Net price\s+([\d,]+\.\d{2})", item_block_text)
-        net_price_per_1000 = float(price_match.group(1).replace(",", "")) if price_match else None
+        # extract vendor lot and qty from "Lot Number" section
+        vendor_lot = None
+        total_qty = None
+        origin_country = None
+        for j in range(sds_line_idx, min(len(lines), sds_line_idx + 25)):
+            if "LOT NUMBER" in lines[j].upper():
+                if (m := re.search(r"(\d{11})", lines[j + 1] if j + 1 < len(lines) else "")):
+                    vendor_lot = m.group(1)
+                qty_match = re.search(r"\|\s*([\d,]+)\s*\|", lines[j])
+                if qty_match:
+                    total_qty = int(qty_match.group(1).replace(",", ""))
+                if "ORIGIN" in lines[j]:
+                    print(lines[j])
+                    origin_country = convert_to_alpha2(lines[j].split("ORIGIN")[-1].strip())
+                    print(origin_country)
+                break
 
-        lot_details = re.findall(r"(\d{11})\s*\|\s*([\d,]+)\s*\|.*?ORIGIN", item_block_text)
-        if not lot_details:
+        # fallback price/qty pattern search
+        price_qty_pattern = re.compile(r"([\d,]+(?:\.\d{2})?)\s+Net price\s+([\d,]+\.\d{2})", re.IGNORECASE)
+        match = price_qty_pattern.search(item_block_text)
+        net_price = None
+        if match:
+            qty_str, price_str = match.groups()
+            if not total_qty:
+                total_qty = int(float(qty_str.replace(",", "")))
+            net_price = float(price_str.replace(",", ""))
+
+        package_description = "SUBCON BULK-MS" if "KAMTERTER PRODUCTS INC" in text_content.upper() \
+            else find_best_nunhems_package_description(vendor_item_description, pkg_desc_list)
+
+        quality_info = quality_map.get(vendor_lot, {})
+        germ_info = germ_map.get(vendor_lot, {})
+        packing_info = packing_map.get(vendor_lot, {})
+
+        cost = round((net_price / total_qty), 4) if net_price and total_qty else None
+        items.append({
+            "VendorInvoiceNo": vendor_invoice_no, "PurchaseOrder": po_number,
+            "VendorLot": vendor_lot, "VendorItemDescription": vendor_item_description,
+            "OriginCountry": origin_country, "TotalPrice": net_price, "TotalQuantity": total_qty,
+            "USD_Actual_Cost_$": cost, "Treatment": treatment,
+            "Purity": quality_info.get("PureSeeds"), "InertMatter": quality_info.get("Inert"),
+            "Germ": germ_info.get("Germ"), "GermDate": germ_info.get("GermDate"),
+            "SeedCount": packing_info.get("SeedCount"),
+            "GrowerGerm": quality_info.get("GrowerGerm"),
+            "GrowerGermDate": quality_info.get("GrowerGermDate"),
+            "PackageDescription": package_description
+        })
+
+    # 🔹 Combine by VendorLot (fixes 7→4 lots issue)
+    combined = {}
+    for it in items:
+        key = it["VendorLot"]
+        if not key:
             continue
+        if key not in combined:
+            combined[key] = it.copy()
+        else:
+            # merge numeric fields
+            for f in ("TotalQuantity", "TotalPrice"):
+                if it.get(f):
+                    combined[key][f] = (combined[key].get(f) or 0) + it[f]
+            # ensure combined tag
+            if "[COMBINED]" not in combined[key]["VendorItemDescription"].upper():
+                combined[key]["VendorItemDescription"] += " [COMBINED]"
+    # recompute cost and normalize treatment
+    for c in combined.values():
+        if c.get("TotalPrice") and c.get("TotalQuantity"):
+            c["USD_Actual_Cost_$"] = round(c["TotalPrice"] / c["TotalQuantity"], 4)
+        c["Treatment"] = "Untreated"
+    return list(combined.values())
 
-        for lot_tuple in lot_details:
-            vendor_lot, qty_str = lot_tuple
-            total_qty = int(qty_str.replace(",", ""))
-            
-            origin_country = None
-            for line in item_block_text.split('\n'):
-                if vendor_lot in line:
-                    if origin_match := re.search(r"\|\s*([A-Z\s]+?)\s+ORIGIN", line, re.IGNORECASE):
-                        origin_country = convert_to_alpha2(origin_match.group(1).strip())
-                    break
 
-            total_price = (total_qty / 1000) * net_price_per_1000 if net_price_per_1000 else None
-            cost_per_seed = round(net_price_per_1000 / 1000, 4) if net_price_per_1000 else None
-            
-            quality_info = quality_map.get(vendor_lot, {})
-            germ_info = germ_map.get(vendor_lot, {})
-            packing_info = packing_map.get(vendor_lot, {})
+# def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_map: dict, packing_map: dict, pkg_desc_list: list[str]) -> List[Dict]:
+#     """
+#     Processes a single Nunhems invoice with a more resilient anchor to fix the
+#     "No data was extracted" error.
+#     """
+#     text_content = "\n".join(lines)
+    
+#     # # --- ADDED FOR DEBUGGING ---
+#     # print("--- EXTRACTED NUNHEMS INVOICE TEXT ---")
+#     # print(text_content)
+#     # print("--------------------------------------")
+#     # # ---------------------------
 
-            item = {
-                "VendorInvoiceNo": vendor_invoice_no, "PurchaseOrder": po_number, "VendorLot": vendor_lot,
-                "VendorItemDescription": vendor_item_description, "OriginCountry": origin_country,
-                "TotalPrice": total_price, "TotalQuantity": total_qty, "USD_Actual_Cost_$": cost_per_seed,
-                "Treatment": treatment, "Purity": quality_info.get("PureSeeds"),
-                "InertMatter": quality_info.get("Inert"), "Germ": germ_info.get("Germ"),
-                "GermDate": germ_info.get("GermDate"), "SeedCount": packing_info.get("SeedCount"),
-                "GrowerGerm": quality_info.get("GrowerGerm"), "GrowerGermDate": quality_info.get("GrowerGermDate"),
-                "PackageDescription": package_description
-            }
-            items.append(item)
+#     po_number = None
+#     if m := re.search(r"Customer\s+P\.?O\.?\s+Number[:\s]+([\s\S]*?)\b(\d{5})\b", text_content, re.IGNORECASE): po_number = f"PO-{m.group(2)}"
+    
+#     vendor_invoice_no = None
+#     if m := re.search(r"Invoice\s+Number[:\s]+.*?(\d{9})\b", text_content, re.IGNORECASE | re.DOTALL):
+#         vendor_invoice_no = m.group(1)
+
+#     items = []
+
+#     # Find lines with SDS information
+#     sds_indices = [i for i, l in enumerate(lines) if re.search(r"\d{1,3}(?:,\d{3})*\s+SDS", l)]
+
+#     # Precompute vendor item descriptions for each SDS line
+#     vendor_item_descriptions = {}
+#     treatments = {}
+#     for idx in sds_indices:
+#         sds_match = re.search(r"(\d{1,3}(?:,\d{3})*)\s+SDS", lines[idx])
+#         part1 = lines[idx + 1] if idx + 1 < len(lines) else ""
+#         part2 = lines[idx - 1] if idx - 1 >= 0 else ""
+#         part3 = sds_match.group(0).strip() if sds_match else ""
+#         vendor_item_descriptions[idx] = f"{part1} {part2} {part3}".strip()
+#         treatments[idx] = lines[idx + 2].strip() if idx + 2 < len(lines) else None
+
+#     # Find item start indices
+#     item_start_indices = [i for i, l in enumerate(lines) if re.match(r"^\d{4}\s+[A-Z\s]+", l)]
+
+#     for i, start_idx in enumerate(item_start_indices):
+#         end_idx = item_start_indices[i + 1] if i + 1 < len(item_start_indices) else len(lines)
+#         item_block_lines = lines[start_idx:end_idx]
+#         item_block_text = "\n".join(item_block_lines)
+
+#         # Attempt to match SDS line within this block to get vendor item description and treatment
+#         sds_line_idx = next((idx for idx in sds_indices if start_idx <= idx < end_idx), None)
+#         vendor_item_description = vendor_item_descriptions.get(sds_line_idx, "")
+#         treatment = treatments.get(sds_line_idx, None)
+
+#         # Extract price
+#         price_match = re.search(r"Net price\s+([\d,]+\.\d{2})", item_block_text)
+#         net_price_per_1000 = float(price_match.group(1).replace(",", "")) if price_match else None
+
+#         # Extract lot details
+#         lot_details = re.findall(r"Lot Number:\s*\n?(\d{11})\s*\|\s*([\d,]+)", item_block_text)
+
+#         for vendor_lot, qty_str in lot_details:
+#             total_qty = int(qty_str.replace(",", ""))
             
-    return items
+#             origin_country = None
+#             seed_count_per_lb = None
+#             for line in item_block_text.split('\n'):
+#                 if vendor_lot in line:
+#                     if "ORIGIN" in line:
+#                         if origin_match := re.search(r"\|\s*([A-Z\s]+?)\s+ORIGIN", line, re.IGNORECASE):
+#                             origin_country = convert_to_alpha2(origin_match.group(1).strip())
+                    
+#                     if "SDS/LB" in line:
+#                         if sc_match := re.search(r"([\d,]+)\s+SDS/LB", line):
+#                             seed_count_per_lb = int(sc_match.group(1).replace(",", ""))
+                    
+#                     if origin_country and seed_count_per_lb is not None:
+#                         break
+            
+#             total_price = (total_qty / 1000) * net_price_per_1000 if net_price_per_1000 and total_qty else None
+#             cost_per_seed = round(net_price_per_1000 / 1000, 4) if net_price_per_1000 else None
+            
+#             quality_info = quality_map.get(vendor_lot, {})
+#             germ_info = germ_map.get(vendor_lot, {})
+#             final_seed_count = seed_count_per_lb if seed_count_per_lb is not None else packing_map.get(vendor_lot, {}).get("SeedCount")
+#             package_description = find_best_nunhems_package_description(vendor_item_description, pkg_desc_list)
+
+#             item = {
+#                 "VendorInvoiceNo": vendor_invoice_no,
+#                 "PurchaseOrder": po_number,
+#                 "VendorLot": vendor_lot,
+#                 "VendorItemDescription": vendor_item_description,
+#                 "OriginCountry": origin_country,
+#                 "TotalPrice": total_price,
+#                 "TotalQuantity": total_qty,
+#                 "USD_Actual_Cost_$": cost_per_seed,
+#                 "Treatment": treatment,
+#                 "Purity": quality_info.get("PureSeeds"),
+#                 "InertMatter": quality_info.get("Inert"),
+#                 "Germ": germ_info.get("Germ"),
+#                 "GermDate": germ_info.get("GermDate"),
+#                 "SeedCount": final_seed_count,
+#                 "GrowerGerm": quality_info.get("GrowerGerm"),
+#                 "GrowerGermDate": quality_info.get("GrowerGermDate"),
+#                 "PackageDescription": package_description
+#             }
+#             items.append(item)
+
+#     return items
+
+
+# def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_map: dict, packing_map: dict, pkg_desc_list: list[str]) -> List[Dict]:
+#     """
+#     Processes a single Nunhems invoice using the robust 'SDS'-based logic,
+#     with the corrected treatment rule as specified.
+#     """
+#     text_content = "\n".join(lines)
+    
+#     # --- ADDED FOR DEBUGGING ---
+#     # This will print the full, raw text of the invoice to the terminal.
+#     print("--- EXTRACTED NUNHEMS INVOICE TEXT ---")
+#     print(text_content)
+#     print("--------------------------------------")
+#     # ---------------------------
+
+#     vendor_invoice_no = po_number = None
+#     if m := re.search(r"Invoice\s+Number[:\s]+.*?(\d{9})\b", text_content, re.IGNORECASE | re.DOTALL):
+#         vendor_invoice_no = m.group(1)
+#     if m := re.search(r"Customer\s+P\.?O\.?\s+Number[:\s]+.*?(\d{5})\b", text_content, re.IGNORECASE | re.DOTALL):
+#         po_number = f"PO-{m.group(1)}"
+
+#     items = []
+#     is_kamterter_shipment = "KAMTERTER PRODUCTS INC" in text_content.upper()
+
+#     sds_lines = [(i, re.search(r"(\d{1,3}(?:,\d{3})*)\s+SDS", l)) for i, l in enumerate(lines)]
+#     sds_item_markers = [(i, m) for i, m in sds_lines if m]
+
+#     for i, (sds_line_idx, sds_match) in enumerate(sds_item_markers):
+        
+#         start_idx = sds_item_markers[i-1][0] + 1 if i > 0 else 0
+#         end_idx = sds_item_markers[i+1][0] if i + 1 < len(sds_item_markers) else len(lines)
+#         item_block_text = "\n".join(lines[start_idx:end_idx])
+
+#         desc_part1 = lines[sds_line_idx - 1].strip() if sds_line_idx > 0 else ""
+#         desc_part2 = lines[sds_line_idx - 2].strip() if sds_line_idx > 1 else ""
+#         vendor_item_description = f"{desc_part2} {desc_part1} {sds_match.group(0)}".strip()
+        
+#         if "UNTREATED" in item_block_text.upper():
+#             treatment = "Untreated"
+#         else:
+#             treatment = lines[sds_line_idx + 1].strip() if sds_line_idx + 1 < len(lines) else ""
+#             if re.match(r'^\d{11}', treatment):
+#                 treatment = ""
+
+#         package_description = "SUBCON BULK-MS" if is_kamterter_shipment else find_best_nunhems_package_description(vendor_item_description, pkg_desc_list)
+        
+#         price_match = re.search(r"Net price\s+([\d,]+\.\d{2})", item_block_text)
+#         net_price_per_1000 = float(price_match.group(1).replace(",", "")) if price_match else None
+
+#         lot_details = re.findall(r"(\d{11})\s*\|\s*([\d,]+)\s*\|.*?ORIGIN", item_block_text)
+#         if not lot_details:
+#             continue
+
+#         for lot_tuple in lot_details:
+#             vendor_lot, qty_str = lot_tuple
+#             total_qty = int(qty_str.replace(",", ""))
+            
+#             origin_country = None
+#             for line in item_block_text.split('\n'):
+#                 if vendor_lot in line:
+#                     if origin_match := re.search(r"\|\s*([A-Z\s]+?)\s+ORIGIN", line, re.IGNORECASE):
+#                         origin_country = convert_to_alpha2(origin_match.group(1).strip())
+#                     break
+
+#             total_price = (total_qty / 1000) * net_price_per_1000 if net_price_per_1000 else None
+#             cost_per_seed = round(net_price_per_1000 / 1000, 4) if net_price_per_1000 else None
+            
+#             quality_info = quality_map.get(vendor_lot, {})
+#             germ_info = germ_map.get(vendor_lot, {})
+#             packing_info = packing_map.get(vendor_lot, {})
+
+#             item = {
+#                 "VendorInvoiceNo": vendor_invoice_no, "PurchaseOrder": po_number, "VendorLot": vendor_lot,
+#                 "VendorItemDescription": vendor_item_description, "OriginCountry": origin_country,
+#                 "TotalPrice": total_price, "TotalQuantity": total_qty, "USD_Actual_Cost_$": cost_per_seed,
+#                 "Treatment": treatment, "Purity": quality_info.get("PureSeeds"),
+#                 "InertMatter": quality_info.get("Inert"), "Germ": germ_info.get("Germ"),
+#                 "GermDate": germ_info.get("GermDate"), "SeedCount": packing_info.get("SeedCount"),
+#                 "GrowerGerm": quality_info.get("GrowerGerm"), "GrowerGermDate": quality_info.get("GrowerGermDate"),
+#                 "PackageDescription": package_description
+#             }
+#             items.append(item)
+            
+#     return items
 
 # def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_map: dict, packing_map: dict, pkg_desc_list: list[str]) -> List[Dict]:
 #     """Processes the extracted lines from a single Nunhems invoice."""
