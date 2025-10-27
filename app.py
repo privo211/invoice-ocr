@@ -857,6 +857,7 @@ def create_lot():
         return "" if val_str.lower() == "none" else val_str
 
     data = request.get_json()
+    vendor = normalize_text(data.get("vendor"))
     print(f"Received data for lot creation: {data}")
     def parse_decimal(val):
         s = str(val or "").strip()
