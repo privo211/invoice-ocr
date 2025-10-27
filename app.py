@@ -156,7 +156,7 @@ def token_is_valid(access_token: str) -> bool:
         return False
     test_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/{get_bc_env(vendor)}/ODataV4/"
+        f"{BC_TENANT}/Production/ODataV4/"
         f"Company('{BC_COMPANY}')/Items?$top=1"
     )
     try:
