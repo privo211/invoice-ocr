@@ -50,12 +50,19 @@ DB_CONFIG = {
 load_dotenv()
 BC_TENANT = os.environ["AZURE_TENANT_ID"]
 BC_COMPANY = os.environ["BC_COMPANY"]
-BC_ENV = os.environ["BC_ENV"]
+#BC_ENV = os.environ["BC_ENV"]
+BC_ENV_DEFAULT = os.environ.get("BC_ENV", "SANDBOX-2025")
 CLIENT_ID = os.environ["AZURE_CLIENT_ID"]
 CLIENT_SECRET = os.environ["AZURE_CLIENT_SECRET"]
 AUTHORITY = f"https://login.microsoftonline.com/{BC_TENANT}"
 REDIRECT_PATH = "/auth/callback"
 SCOPE_BC = ["https://api.businesscentral.dynamics.com/.default"]
+
+def get_bc_env(vendor: str | None = None) -> str:
+    """Return 'Production' if vendor == 'seminis', else use default BC_ENV."""
+    if vendor and vendor.strip().lower() == "seminis":
+        return "Production"
+    return BC_ENV_DEFAULT
 
 def load_cache():
     """Load MSAL cache for this user from PostgreSQL."""
@@ -149,7 +156,7 @@ def token_is_valid(access_token: str) -> bool:
         return False
     test_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/{BC_ENV}/ODataV4/"
+        f"{BC_TENANT}/{get_bc_env(vendor)}/ODataV4/"
         f"Company('{BC_COMPANY}')/Items?$top=1"
     )
     try:
@@ -944,7 +951,7 @@ def create_lot():
     
     bc_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/{BC_ENV}/ODataV4/"
+        f"{BC_TENANT}/{get_bc_env(vendor)}/ODataV4/"
         f"Company('{BC_COMPANY}')/Lot_Info_Card"
     )
     headers = {
