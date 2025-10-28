@@ -503,12 +503,27 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
             if not origin_country:
                 cc_match = re.findall(r"\b[A-Z]{2}\b", line)
                 if (filtered_cc := [c for c in cc_match if c != "MK"]): origin_country = filtered_cc[0]
+                
             if line == "Total Item":
+                # Try to take the next line with comma first
                 for k in range(j + 1, min(j + 4, len(lines))):
-                    if (m := re.search(r"[\d,]+\.\d{2}", lines[k])):
+                    if (m := re.search(r"[\d,]+\.\d{2}", lines[k+1])) and "," in m.group():
                         total_price = float(m.group().replace(",", ""))
                         break
+                else:
+                    # Fallback: take the first numeric value if no comma found
+                    for k in range(j + 1, min(j + 4, len(lines))):
+                        if (m := re.search(r"[\d,]+\.\d{2}", lines[k])):
+                            total_price = float(m.group().replace(",", ""))
+                            break
                 break
+
+            # if line == "Total Item":
+            #     for k in range(j + 1, min(j + 4, len(lines))):
+            #         if (m := re.search(r"[\d,]+\.\d{2}", lines[k])):
+            #             total_price = float(m.group().replace(",", ""))
+            #             break
+            #     break
 
         final_vendor_item_desc = f"{vendor_item_description} {package}".strip()
         package_description = ""
