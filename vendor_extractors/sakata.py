@@ -391,6 +391,13 @@ def extract_invoice_from_pdf(
             doc = fitz.open(source)
         else:
             raise ValueError("Source must be file path (str) or bytes.")
+        
+        first_page_text = doc[0].get_text()
+        header_po_match = re.search(r"\bPO[-\s#:]*(\d{5})\b", first_page_text, re.IGNORECASE)
+        header_po_match = header_po_match or re.search(
+            r"Purchase\s*order.*?(\d{5})", first_page_text, re.IGNORECASE | re.DOTALL
+        )
+        header_po = f"PO-{header_po_match.group(1)}" if header_po_match else fallback_po
 
         all_blocks = []
         for page in doc:
@@ -404,15 +411,36 @@ def extract_invoice_from_pdf(
         while i < len(all_blocks):
             b = all_blocks[i]
             txt = b[4].strip()
+            print(txt)
 
             if re.match(r"^\d+\s+\d{8}", txt) and ("Treated" in txt or "Untreated" in txt):
                 if current:
                     treatment_name = re.search(r"Treatment name:\s*(.*)", text_acc)
                     current["TreatmentName"] = treatment_name.group(1).strip() if treatment_name else None
                     
+                    # po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
+                    # current["PurchaseOrder"] = f"PO-{po_match.group(1)}" if po_match else fallback_po
+
+                    # Primary pattern: "PO-12345" etc.
                     po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
-                    current["PurchaseOrder"] = f"PO-{po_match.group(1)}" if po_match else fallback_po
-                    
+                    current["PurchaseOrder"] = (f"PO-{po_match.group(1)}" if po_match else header_po)
+
+                    # if po_match:
+                        
+
+                    #     current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
+                    # else:
+                    #     # Secondary fallback: find after "Purchase order" even several lines later
+                    #     po_match = re.search(
+                    #         r"Purchase\s*order[\s\S]*?(\d{5})",
+                    #         text_acc,
+                    #         re.IGNORECASE
+                    #     )
+                    #     if po_match:
+                    #         current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
+                    #     else:
+                    #         current["PurchaseOrder"] = fallback_po
+
                     try:
                         current["BCOptions"] = get_po_items(current["PurchaseOrder"], token) if current["PurchaseOrder"] else []
                     except Exception as e:
@@ -459,8 +487,29 @@ def extract_invoice_from_pdf(
         if current:
             treatment_name = re.search(r"Treatment name:\s*(.*)", text_acc)
             current["TreatmentName"] = treatment_name.group(1).strip() if treatment_name else None
+            
+            # po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
+            # current["PurchaseOrder"] = f"PO-{po_match.group(1)}" if po_match else fallback_po
+            
+            # Primary pattern: "PO-12345" etc.
             po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
-            current["PurchaseOrder"] = f"PO-{po_match.group(1)}" if po_match else fallback_po
+            current["PurchaseOrder"] = (f"PO-{po_match.group(1)}" if po_match else header_po)
+
+            # if po_match:
+            #     current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
+            # else:
+            #     # Secondary fallback: find after "Purchase order" even several lines later
+            #     po_match = re.search(
+            #         r"Purchase\s*order[\s\S]*?(\d{5})",
+            #         text_acc,
+            #         re.IGNORECASE
+            #     )
+            #     if po_match:
+            #         current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
+            #     else:
+            #         current["PurchaseOrder"] = fallback_po
+
+                    
             try:
                 current["BCOptions"] = get_po_items(current["PurchaseOrder"], token) if current["PurchaseOrder"] else []
             except Exception as e:
