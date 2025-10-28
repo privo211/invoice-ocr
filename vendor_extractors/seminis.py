@@ -489,7 +489,7 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
 
         package = vendor_lot = origin_country = vendor_batch = total_price = total_quantity = None
         
-        for j in range(trt_idx + 1, min(trt_idx + 15, len(lines))):
+        for j in range(trt_idx + 1, len(lines)):
             line = lines[j]
             if not package and (m := re.search(r"\d+\s+MK\s+\w+", line)): package = m.group().strip()
             if not vendor_lot and (m := re.search(r"\b\d{9}(?:/\d{2})?\b", line)): vendor_lot = m.group()
@@ -504,17 +504,27 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
                 cc_match = re.findall(r"\b[A-Z]{2}\b", line)
                 if (filtered_cc := [c for c in cc_match if c != "MK"]): origin_country = filtered_cc[0]
                 
-            if line == "Total Item":
-                # Try to take the next line with comma first
-                for k in range(j + 1, min(j + 4, len(lines))):
-                    if (m := re.search(r"[\d,]+\.\d{2}", lines[k+1])) and "," in m.group():
-                        total_price = float(m.group().replace(",", ""))
-                        break
-                else:
-                    # Fallback: take the first numeric value if no comma found
-                    for k in range(j + 1, min(j + 4, len(lines))):
-                        if (m := re.search(r"[\d,]+\.\d{2}", lines[k])):
-                            total_price = float(m.group().replace(",", ""))
+            # if line == "Total Item":
+            #     # Try to take the next line with comma first
+            #     for k in range(j + 1, min(j + 4, len(lines))):
+            #         if (m := re.search(r"[\d,]+\.\d{2}", lines[k+1])) and "," in m.group():
+            #             total_price = float(m.group().replace(",", ""))
+            #             break
+            #     else:
+            #         # Fallback: take the first numeric value if no comma found
+            #         for k in range(j + 1, min(j + 4, len(lines))):
+            #             if (m := re.search(r"[\d,]+\.\d{2}", lines[k])):
+            #                 total_price = float(m.group().replace(",", ""))
+            #                 break
+            #     break
+            
+            if line.strip() == "Total Item":
+                # Scan the next 5 lines for numbers
+                for k in range(j + 1, min(j + 6, len(lines))):
+                    if m := re.search(r"[\d,]+\.\d{2}", lines[k]):
+                        candidate = float(m.group().replace(",", ""))
+                        if candidate > 50:  # ignore ratios like 0.67
+                            total_price = candidate
                             break
                 break
 
