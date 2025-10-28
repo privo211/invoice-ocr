@@ -1322,8 +1322,15 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
         if "VendorItemNumber" in current and not desc_part1:
             desc_part1 = line
 
-        if desc_part1 and line.startswith("Flc."):
-            part2 = re.sub(r"HM.*$", "", line.replace("Flc.", "")).strip()
+        # if desc_part1 and line.startswith("Flc."):
+        #     part2 = re.sub(r"HM.*$", "", line.replace("Flc.", "")).strip()
+        #     current["VendorItemDescription"] = f"{desc_part1} {part2}"
+            
+        if desc_part1 and re.search(r"\bFoil\s+\d+\s*(Ks|MS)\b", line, re.IGNORECASE):
+            # Remove trailing HM codes or irrelevant text
+            part2 = re.sub(r"\bHM.*$", "", line, flags=re.IGNORECASE).strip()
+            # Remove any leading prefixes like "Flc." or "Plt.GCDI"
+            part2 = re.sub(r"^(Flc\.|Plt\.\w+)\s*", "", part2, flags=re.IGNORECASE)
             current["VendorItemDescription"] = f"{desc_part1} {part2}"
 
         if "VendorProductLot" not in current and (m_pl := re.search(r"\bPL\d{6}\b", line)):
@@ -1415,7 +1422,7 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
             if not is_report_document:
                 continue
 
-            # **THE FIX**: If it IS a report but has no text, it must be scanned. Use OCR.
+            # If it is a report but has no text, it must be scanned. Use OCR.
             if not text.strip():
                 print(f"INFO: Identified {filename} as a scanned seed analysis report. Running OCR.")
                 ocr_lines = extract_text_with_azure_ocr(pdf_bytes)
@@ -1587,6 +1594,8 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
     # --- ORIGINAL PARSING LOOP ---
     for idx, b in enumerate(all_blocks):
         block_text = b[4].strip()
+        
+        print(block_text)
 
         # Original logic: Batch lot is a primary trigger that flushes the previous item
         if re.fullmatch(r"[A-Z]\d{5}", block_text):
@@ -1610,10 +1619,19 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
             desc_part1 = ""
             continue
 
-        if desc_part1 and block_text.startswith("Flc."):
-            part2 = re.sub(r"HM.*$", "", block_text.replace("Flc.", "")).strip()
+        # if desc_part1 and block_text.startswith("Flc."):
+        #     part2 = re.sub(r"HM.*$", "", block_text.replace("Flc.", "")).strip()
+        #     current_item_data["VendorItemDescription"] = f"{desc_part1} {part2}"
+        #     continue
+        
+        if desc_part1 and re.search(r"\bFoil\s+\d+\s*(Ks|MS)\b", block_text, re.IGNORECASE):
+            # Remove trailing HM codes or irrelevant text
+            part2 = re.sub(r"\bHM.*$", "", block_text, flags=re.IGNORECASE).strip()
+            # Remove any leading prefixes like "Flc." or "Plt.GCDI"
+            part2 = re.sub(r"^(Flc\.|Plt\.\w+)\s*", "", part2, flags=re.IGNORECASE)
             current_item_data["VendorItemDescription"] = f"{desc_part1} {part2}"
             continue
+
 
         if "VendorItemDescription" not in current_item_data and desc_part1:
             current_item_data["VendorItemDescription"] = desc_part1
