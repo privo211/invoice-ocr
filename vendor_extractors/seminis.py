@@ -465,6 +465,7 @@ def _extract_seminis_packing_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[st
 def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packing_map: dict, pkg_desc_list: list[str]) -> List[Dict]:
     """Processes the extracted lines from a single Seminis invoice."""
     text_content = "\n".join(lines)
+    print(lines)
     text_content_upper = text_content.upper()
     vendor_invoice_no = po_number = None
     
@@ -478,9 +479,12 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
     block_starts = [amount_idx + 1] + [total_item_indices[i] + 3 for i in range(min(len(trt_indices) - 1, len(total_item_indices)))]
 
     for idx, trt_idx in enumerate(trt_indices):
-        desc_lines = lines[block_starts[idx]:trt_idx]
-        filtered = [l for l in desc_lines if not any(x in l for x in ["Invoice Number", "PO #", "Sales Order", "Delivery Nr", "Order Date", "Ship Date", "/", "Page"])]
-        vendor_item_description = " ".join(filtered).strip()
+        # desc_lines = lines[block_starts[idx]:trt_idx]
+        # filtered = [l for l in desc_lines if not any(x in l for x in ["Invoice Number", "PO #", "Sales Order", "Delivery Nr", "Order Date", "Ship Date", "/", "Page"])]
+        # vendor_item_description = " ".join(filtered).strip()
+        
+        vendor_item_description = lines[trt_idx - 1].strip()
+
         treatment_desc = re.sub(r"TRT:\s*", "", lines[trt_idx].strip()).strip()
 
         package = vendor_lot = origin_country = vendor_batch = total_price = total_quantity = None
@@ -501,7 +505,7 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
                 if (filtered_cc := [c for c in cc_match if c != "MK"]): origin_country = filtered_cc[0]
             if line == "Total Item":
                 for k in range(j + 1, min(j + 4, len(lines))):
-                    if (m := re.search(r"[\d,]+\.\d{2}", lines[k+1])):
+                    if (m := re.search(r"[\d,]+\.\d{2}", lines[k])):
                         total_price = float(m.group().replace(",", ""))
                         break
                 break
