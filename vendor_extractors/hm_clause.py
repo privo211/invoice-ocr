@@ -1163,7 +1163,6 @@ item_usage_counter = defaultdict(int)
 AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
 AZURE_KEY = os.getenv("AZURE_KEY")
 
-# --- This function remains from the new code, as it correctly handles in-memory OCR ---
 def extract_text_with_azure_ocr(pdf_bytes: bytes) -> List[str]:
     """
     Performs OCR on in-memory PDF bytes using Azure Form Recognizer.
@@ -1206,7 +1205,6 @@ def extract_text_with_azure_ocr(pdf_bytes: bytes) -> List[str]:
             raise RuntimeError("OCR analysis failed")
     raise TimeoutError("OCR timed out")
 
-# --- This OCR-specific parsing logic is unchanged, as it was consistent ---
 def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
     line_items = []
     current = {}
@@ -1214,7 +1212,6 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
     vendor_invoice_no = None
     po_number = None
     
-    # This function is being brought back from the original code to parse discounts from OCR text
     def extract_discounts_from_ocr_lines(lines: List[str]) -> Dict[str, List[float]]:
         discounts_by_item = defaultdict(list)
         prev_discount = None
@@ -1326,7 +1323,14 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
         #     part2 = re.sub(r"HM.*$", "", line.replace("Flc.", "")).strip()
         #     current["VendorItemDescription"] = f"{desc_part1} {part2}"
             
-        if desc_part1 and re.search(r"\bFoil\s+\d+\s*(Ks|MS)\b", line, re.IGNORECASE):
+        # if desc_part1 and re.search(r"\bFoil\s+\d+\s*(Ks|MS)\b", line, re.IGNORECASE):
+        #     # Remove trailing HM codes or irrelevant text
+        #     part2 = re.sub(r"\bHM.*$", "", line, flags=re.IGNORECASE).strip()
+        #     # Remove any leading prefixes like "Flc." or "Plt.GCDI"
+        #     part2 = re.sub(r"^(Flc\.|Plt\.\w+)\s*", "", part2, flags=re.IGNORECASE)
+        #     current["VendorItemDescription"] = f"{desc_part1} {part2}"
+        
+        if desc_part1 and re.search(r"\b\d+\s*(Ks|MS)\b", line, re.IGNORECASE):
             # Remove trailing HM codes or irrelevant text
             part2 = re.sub(r"\bHM.*$", "", line, flags=re.IGNORECASE).strip()
             # Remove any leading prefixes like "Flc." or "Plt.GCDI"
@@ -1624,7 +1628,15 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
         #     current_item_data["VendorItemDescription"] = f"{desc_part1} {part2}"
         #     continue
         
-        if desc_part1 and re.search(r"\bFoil\s+\d+\s*(Ks|MS)\b", block_text, re.IGNORECASE):
+        # if desc_part1 and re.search(r"\bFoil\s+\d+\s*(Ks|MS)\b", block_text, re.IGNORECASE):
+        #     # Remove trailing HM codes or irrelevant text
+        #     part2 = re.sub(r"\bHM.*$", "", block_text, flags=re.IGNORECASE).strip()
+        #     # Remove any leading prefixes like "Flc." or "Plt.GCDI"
+        #     part2 = re.sub(r"^(Flc\.|Plt\.\w+)\s*", "", part2, flags=re.IGNORECASE)
+        #     current_item_data["VendorItemDescription"] = f"{desc_part1} {part2}"
+        #     continue
+        
+        if desc_part1 and re.search(r"\b\d+\s*(Ks|MS)\b", block_text, re.IGNORECASE):
             # Remove trailing HM codes or irrelevant text
             part2 = re.sub(r"\bHM.*$", "", block_text, flags=re.IGNORECASE).strip()
             # Remove any leading prefixes like "Flc." or "Plt.GCDI"
@@ -1632,15 +1644,33 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
             current_item_data["VendorItemDescription"] = f"{desc_part1} {part2}"
             continue
 
-
         if "VendorItemDescription" not in current_item_data and desc_part1:
             current_item_data["VendorItemDescription"] = desc_part1
             
-        if "TotalPrice" not in current_item_data and (m_price := re.search(r"(?<!-)(\d[\d,]*\.\d{2})\s+N", block_text)):
-            current_item_data["TotalPrice"] = float(m_price.group(1).replace(",", ""))
+        # if "TotalPrice" not in current_item_data and (m_price := re.search(r"(?<!-)(\d[\d,]*\.\d{2})\s+N", block_text)):
+        #     current_item_data["TotalPrice"] = float(m_price.group(1).replace(",", ""))
         
-        if "TotalUpcharge" not in current_item_data and (m_upcharge := re.search(r"(\d[\d,]*\.\d{2})\s+Y", block_text)):
-            current_item_data["TotalUpcharge"] = float(m_upcharge.group(1).replace(",", ""))
+        # if "TotalUpcharge" not in current_item_data and (m_upcharge := re.search(r"(\d[\d,]*\.\d{2})\s+Y", block_text)):
+        #     current_item_data["TotalUpcharge"] = float(m_upcharge.group(1).replace(",", ""))
+        
+        if "TotalPrice" not in current_item_data and "TotalUpcharge" not in current_item_data:
+            # Case 1: Price and "N" are in the same block
+            if m_price := re.search(r"(?<!-)(\d[\d,]*\.\d{2})\s+N", block_text):
+                current_item_data["TotalPrice"] = float(m_price.group(1).replace(",", ""))
+            
+            # Case 2: Price and "Y" are in the same block
+            elif m_upcharge := re.search(r"(\d[\d,]*\.\d{2})\s+Y", block_text):
+                current_item_data["TotalUpcharge"] = float(m_upcharge.group(1).replace(",", ""))
+            
+            # Case 3: Price is in this block, "Y" is in the *next* block
+            elif (idx + 1 < len(all_blocks) and all_blocks[idx + 1][4].strip() == "Y"):
+                if m_val := re.search(r"(\d[\d,]*\.\d{2})", block_text):
+                    current_item_data["TotalUpcharge"] = float(m_val.group(1).replace(",", ""))
+            
+            # Case 4: Price is in this block, "N" is in the *next* block
+            elif (idx + 1 < len(all_blocks) and all_blocks[idx + 1][4].strip() == "N"):
+                if m_val := re.search(r"(\d[\d,]*\.\d{2})", block_text):
+                    current_item_data["TotalPrice"] = float(m_val.group(1).replace(",", ""))
 
         if "TotalQuantity" not in current_item_data and (m_qty := re.search(r"(\d+)\s*KS\b", block_text)):
             if (qty := int(m_qty.group(1))) > 0: current_item_data["TotalQuantity"] = qty
