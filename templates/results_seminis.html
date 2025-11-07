@@ -534,6 +534,44 @@
       }
     }
 
+        /**
+     * Helper function to get a numeric value from a contenteditable field.
+     * Returns 0 if the field is not found or is not a valid number.
+     */
+    function getNumericFieldValue(cardEl, fieldName) {
+      const el = cardEl.querySelector(`[data-field="${fieldName}"]`);
+      if (!el) return 0; // Default to 0 for fields like upcharge/discount if not present
+      
+      const text = el.textContent.trim().replace(/,/g, '');
+      if (text === '') return 0;
+      
+      const val = parseFloat(text);
+      return isNaN(val) ? 0 : val;
+    }
+
+    /**
+     * Recalculates the USD Actual Cost $ based on the formula:
+     * (Total Price + Total Upcharge - Total Discount) / Total Quantity
+     * and updates the field in the card.
+     */
+    function recalculateUSDCost(cardEl) {
+      const price = getNumericFieldValue(cardEl, 'TotalPrice');
+      const upcharge = getNumericFieldValue(cardEl, 'TotalUpcharge'); // Will be 0 if field doesn't exist
+      const discount = getNumericFieldValue(cardEl, 'TotalDiscount'); // Will be 0 if field doesn't exist
+      const quantity = getNumericFieldValue(cardEl, 'TotalQuantity');
+
+      const costField = cardEl.querySelector('[data-field="USD_Actual_Cost_$"]');
+      if (!costField) return; // Exit if the cost field isn't on the card
+
+      if (quantity > 0) {
+        // Apply the formula
+        const cost = (price + upcharge - discount) / quantity;
+        costField.textContent = cost.toFixed(4); // Match 4-decimal precision
+      } else {
+        costField.textContent = ''; // Clear if quantity is 0 or invalid
+      }
+    }
+
     window.addEventListener('DOMContentLoaded', () => {
       // --- THEME ---
       const themeBtn = document.getElementById('theme-toggle');
@@ -555,6 +593,24 @@
         const isDark = document.body.classList.toggle('dark-mode');
         localStorage.setItem('theme', isDark ? 'dark-mode' : '');
         applyTheme(isDark);
+      });
+
+      // --- AUTOCALCULATE USD ACTUAL COST ---
+      // Listen for changes on all fields that affect the cost calculation
+      document.querySelectorAll(
+        '[data-field="TotalPrice"],' +
+        '[data-field="TotalUpcharge"],' +
+        '[data-field="TotalDiscount"],' +
+        '[data-field="TotalQuantity"]'
+      ).forEach(field => {
+        field.addEventListener('blur', (e) => {
+          // Find the parent .card element for this field
+          const card = e.target.closest('.card');
+          if (card) {
+            // Recalculate the cost for this specific card
+            recalculateUSDCost(card);
+          }
+        });
       });
 
       // --- EVENT LISTENERS ---
