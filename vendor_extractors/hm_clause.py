@@ -1443,6 +1443,9 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
             if not (batch_match := re.search(r"\b([A-Z]\d{5,})\b", text)):
                 continue
             batch_key = batch_match.group(1)
+            
+            # Truncate the key to 6 chars to match the invoice batch lot key
+            batch_key = batch_match.group(1)[:6]
 
             if (match_pure := re.search(r"Pure Seed:\s*(\d+\.\d+)\s*%", text)) and \
                (match_inert := re.search(r"Inert Matter:\s*(\d+\.\d+)\s*%", text)):
@@ -1550,7 +1553,6 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
             po_number = f"PO-{m_po.group(1)}"
             break
 
-    # --- This section now uses the original logic from old_hm_clause.py.txt ---
     discount_amounts = extract_discounts(all_blocks)
     line_items = []
     current_item_data = {}
