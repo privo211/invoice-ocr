@@ -1417,8 +1417,9 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
             # Pass 1: Get text with Fitz and check if it's a report
             for page in doc:
                 page_text = page.get_text()
-                if "REPORT OF SEED ANALYSIS" in page_text.upper():
+                if "REPORT" in page_text.upper():
                     is_report_document = True
+                    print(page_text)
                 text += page_text + " " # Aggregate all text
             doc.close()
 
