@@ -1402,7 +1402,24 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
 
     return line_items
 
-# --- THIS IS THE CORRECTED FUNCTION ---
+def _choose_batch_key(report_text_upper: str, filename: str) -> str | None:
+    # 1) Prefer explicit labels in the report
+    m = re.search(r"(?:LOT\s*#|BATCH\s*#)\s*[:\-]?\s*([A-Z]\d{5,})", report_text_upper, re.IGNORECASE)
+    if m:
+        return m.group(1)[:6].upper()  # normalize to 6-char key
+
+    # 2) Try filename starting token
+    m = re.match(r"([A-Z]\d{5,})", os.path.basename(filename).upper())
+    if m:
+        return m.group(1)[:6].upper()
+
+    # 3) As a last resort, use the LAST code-looking token (true lot is often last)
+    codes = re.findall(r"\b([A-Z]\d{5,})\b", report_text_upper)
+    if codes:
+        return codes[-1][:6].upper()
+
+    return None
+
 def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]]) -> Dict[str, Dict]:
     """
     Extracts purity data. It now correctly uses OCR as a fallback for scanned reports.
@@ -1438,16 +1455,22 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
             if not text.strip():
                 continue
             
-            # Proceed with the proven regex parsing
-            text = text.replace('\n', ' ').replace('\r', ' ')
-            text = re.sub(r'\s{2,}', ' ', text)
+            # # Proceed with the proven regex parsing
+            # text = text.replace('\n', ' ').replace('\r', ' ')
+            # text = re.sub(r'\s{2,}', ' ', text)
             
-            if not (batch_match := re.search(r"\b([A-Z]\d{5,})\b", text)):
+            # if not (batch_match := re.search(r"\b([A-Z]\d{5,})\b", text)):
+            #     continue
+            # batch_key = batch_match.group(1)
+            
+            # # Truncate the key to 6 chars to match the invoice batch lot key
+            # batch_key = batch_match.group(1)[:6]
+            
+            # new
+            U = text.upper()
+            batch_key = _choose_batch_key(U, filename)
+            if not batch_key:
                 continue
-            batch_key = batch_match.group(1)
-            
-            # Truncate the key to 6 chars to match the invoice batch lot key
-            batch_key = batch_match.group(1)[:6]
 
             if (match_pure := re.search(r"Pure Seed:\s*(\d+\.\d+)\s*%", text)) and \
                (match_inert := re.search(r"Inert Matter:\s*(\d+\.\d+)\s*%", text)):
@@ -1470,13 +1493,29 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
             continue
     return purity_data
 
-# --- This function remains from the new code ---
+# def enrich_invoice_items_with_purity(items: List[Dict], purity_data: Dict[str, Dict]) -> List[Dict]:
+#     for item in items:
+#         if batch_lot := item.get("VendorBatchLot", ""):
+#             key = batch_lot[:6]
+#             if match := purity_data.get(key, {}):
+#                 item.update(match)
+#     return items
+
 def enrich_invoice_items_with_purity(items: List[Dict], purity_data: Dict[str, Dict]) -> List[Dict]:
     for item in items:
-        if batch_lot := item.get("VendorBatchLot", ""):
-            key = batch_lot[:6]
-            if match := purity_data.get(key, {}):
-                item.update(match)
+        lot = (item.get("VendorBatchLot") or "").upper()
+        if not lot:
+            continue
+
+        # 1) exact match (full lot, e.g., "K35088A1" if your reports ever carry a suffix)
+        data = purity_data.get(lot)
+
+        # 2) fallback to 6-char canonical key (e.g., "K35088")
+        if data is None and len(lot) >= 6:
+            data = purity_data.get(lot[:6])
+
+        if data:
+            item.update(data)
     return items
 
 # --- This is the original `extract_discounts` function, which is simpler and now restored ---
