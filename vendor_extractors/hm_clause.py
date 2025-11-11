@@ -1703,10 +1703,21 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
         print(block_text)
 
         # Original logic: Batch lot is a primary trigger that flushes the previous item
+        # if re.fullmatch(r"[A-Z]\d{5}", block_text):
+        #     if current_item_data:
+        #         flush_item()
+        #     current_item_data["VendorBatchLot"] = block_text
+        #     continue
+        
         if re.fullmatch(r"[A-Z]\d{5}", block_text):
-            if current_item_data:
-                flush_item()
-            current_item_data["VendorBatchLot"] = block_text
+            if "VendorBatchLot" not in current_item_data:
+                # first lot seen for this item — just attach it
+                current_item_data["VendorBatchLot"] = block_text
+            else:
+                # only start a new item if the current one is reasonably populated
+                if current_item_data.get("VendorItemNumber") or current_item_data.get("VendorItemDescription"):
+                    flush_item()
+                current_item_data["VendorBatchLot"] = block_text
             continue
 
         if not current_item_data:
