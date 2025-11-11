@@ -1479,10 +1479,16 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
                 purity_data[batch_key]["PureSeed"] = 99.99 if pure_seed == 100 else pure_seed
                 purity_data[batch_key]["InertMatter"] = 0.01 if pure_seed == 100 else float(match_inert.group(1))
                 
-                if date_matches := re.findall(r"(\d{1,2}/\d{1,2}/\d{4})(?=.*?REPORT OF SEED ANALYSIS)", text, re.IGNORECASE):
-                    if len(date_matches) >= 2:
-                        purity_data[batch_key]["GrowerGermDate"] = date_matches[-1]
-                        purity_data[batch_key]["GermDate"] = date_matches[-1]
+                # --- ADD inside extract_purity_analysis_reports_from_bytes, after batch_key is chosen ---
+                germ_date = _extract_germ_date_from_report(text)
+                if germ_date:
+                    purity_data[batch_key]["GrowerGermDate"] = germ_date
+                    purity_data[batch_key]["GermDate"] = germ_date
+                
+                # if date_matches := re.findall(r"(\d{1,2}/\d{1,2}/\d{4})(?=.*?REPORT OF SEED ANALYSIS)", text, re.IGNORECASE):
+                #     if len(date_matches) >= 2:
+                #         purity_data[batch_key]["GrowerGermDate"] = date_matches[-1]
+                #         purity_data[batch_key]["GermDate"] = date_matches[-1]
 
                 if match := re.search(r"%\s*Comments:\s*(?:[A-Za-z]+\s+)*(\d{2,3})\b", text):
                     germ = int(float(match.group(1)))
@@ -1500,6 +1506,37 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
 #             if match := purity_data.get(key, {}):
 #                 item.update(match)
 #     return items
+
+def _normalize_mdy(s: str) -> str:
+    m, d, y = re.match(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", s).groups()
+    y = int(y)
+    if y < 100:  # expand 2-digit year
+        y += 2000 if y < 50 else 1900
+    return f"{int(m)}/{int(d)}/{y}"
+
+def _extract_germ_date_from_report(txt: str) -> str | None:
+    """
+    Prefer 'Test Date', then 'Germination Date', else None.
+    Returns normalized M/D/YYYY.
+    """
+    # 1) Test Date
+    m = re.search(r"Test\s*Date[:\s]*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", txt, re.IGNORECASE)
+    if m:
+        return _normalize_mdy(m.group(1))
+
+    # 2) Germination Date (some labs use this label)
+    m = re.search(r"Germ(?:ination)?\s*Date[:\s]*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", txt, re.IGNORECASE)
+    if m:
+        return _normalize_mdy(m.group(1))
+
+    # 3) Fallback: choose the earliest-looking date near 'GERMINATION ANALYSIS'
+    gpos = re.search(r"GERMINATION\s+ANALYSIS", txt, re.IGNORECASE)
+    if gpos:
+        window = txt[max(0, gpos.start()-200): gpos.end()+200]
+        cands = re.findall(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", window)
+        if cands:
+            return _normalize_mdy(cands[0])
+    return None
 
 def enrich_invoice_items_with_purity(items: List[Dict], purity_data: Dict[str, Dict]) -> List[Dict]:
     for item in items:
