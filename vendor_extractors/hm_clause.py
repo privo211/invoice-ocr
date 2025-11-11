@@ -1529,11 +1529,13 @@ def _extract_germ_date_from_report(txt: str) -> str | None:
     # 1) Try direct 'Test Date' with anything (non-digits) between label and the date
     m = re.search(r"Test\s*Date[^0-9]{0,80}([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", flat, re.IGNORECASE)
     if m:
+        print("1- Test date extracted")
         return _norm(m.group(1))
 
     # 2) Try 'Germination Date'
     m = re.search(r"Germ(?:ination)?\s*Date[^0-9]{0,80}([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", flat, re.IGNORECASE)
     if m:
+        print("2 - Germination date extracted")
         return _norm(m.group(1))
 
     # 3) Proximity heuristic in the ORIGINAL (non-flattened) text:
@@ -1543,6 +1545,7 @@ def _extract_germ_date_from_report(txt: str) -> str | None:
         window = txt[lbl.end(): lbl.end() + 400]
         m = re.search(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", window)
         if m:
+            print("3 - Test date extracted")
             return _norm(m.group(1))
 
     # 4) Fallback: pick a date near 'GERMINATION ANALYSIS'
@@ -1551,6 +1554,7 @@ def _extract_germ_date_from_report(txt: str) -> str | None:
         window = txt[max(0, gpos.start()-250): gpos.end()+250]
         cands = re.findall(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", window)
         if cands:
+            print("4 - Test date extracted")
             return _norm(cands[0])
 
     return None
