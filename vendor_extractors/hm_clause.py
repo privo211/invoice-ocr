@@ -1555,7 +1555,7 @@ def _extract_germ_date_from_report(txt: str) -> str | None:
         cands = re.findall(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", window)
         if cands:
             print("4 - Test date extracted")
-            return _norm(cands[0])
+            return _norm(cands[1])
 
     return None
 
