@@ -1479,12 +1479,6 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
                 purity_data[batch_key]["PureSeed"] = 99.99 if pure_seed == 100 else pure_seed
                 purity_data[batch_key]["InertMatter"] = 0.01 if pure_seed == 100 else float(match_inert.group(1))
                 
-                # --- ADD inside extract_purity_analysis_reports_from_bytes, after batch_key is chosen ---
-                germ_date = _extract_germ_date_from_report(text)
-                if germ_date:
-                    purity_data[batch_key]["GrowerGermDate"] = germ_date
-                    purity_data[batch_key]["GermDate"] = germ_date
-                
                 # if date_matches := re.findall(r"(\d{1,2}/\d{1,2}/\d{4})(?=.*?REPORT OF SEED ANALYSIS)", text, re.IGNORECASE):
                 #     if len(date_matches) >= 2:
                 #         purity_data[batch_key]["GrowerGermDate"] = date_matches[-1]
@@ -1494,6 +1488,12 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
                     germ = int(float(match.group(1)))
                     purity_data[batch_key]["GrowerGerm"] = germ
                     purity_data[batch_key]["Germ"] = 98 if germ == 100 else germ
+                    
+            germ_date = _extract_germ_date_from_report(text)
+            if germ_date:
+                purity_data[batch_key]["GrowerGermDate"] = germ_date
+                purity_data[batch_key]["GermDate"] = germ_date
+                    
         except Exception as e:
             print(f"Could not process {filename} for purity analysis: {e}")
             continue
@@ -1516,26 +1516,43 @@ def _normalize_mdy(s: str) -> str:
 
 def _extract_germ_date_from_report(txt: str) -> str | None:
     """
-    Prefer 'Test Date', then 'Germination Date', else None.
-    Returns normalized M/D/YYYY.
+    Prefer 'Test Date' value even if it's on the next line/column.
+    Falls back to 'Germination Date', then proximity to the 'GERMINATION ANALYSIS' block.
+    Returns normalized M/D/YYYY or None.
     """
-    # 1) Test Date
-    m = re.search(r"Test\s*Date[:\s]*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", txt, re.IGNORECASE)
-    if m:
-        return _normalize_mdy(m.group(1))
+    # Normalize whitespace for easy regex matching
+    flat = re.sub(r"\s+", " ", txt)
 
-    # 2) Germination Date (some labs use this label)
-    m = re.search(r"Germ(?:ination)?\s*Date[:\s]*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", txt, re.IGNORECASE)
-    if m:
-        return _normalize_mdy(m.group(1))
+    def _norm(mdy: str) -> str:
+        return _normalize_mdy(mdy)
 
-    # 3) Fallback: choose the earliest-looking date near 'GERMINATION ANALYSIS'
+    # 1) Try direct 'Test Date' with anything (non-digits) between label and the date
+    m = re.search(r"Test\s*Date[^0-9]{0,80}([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", flat, re.IGNORECASE)
+    if m:
+        return _norm(m.group(1))
+
+    # 2) Try 'Germination Date'
+    m = re.search(r"Germ(?:ination)?\s*Date[^0-9]{0,80}([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", flat, re.IGNORECASE)
+    if m:
+        return _norm(m.group(1))
+
+    # 3) Proximity heuristic in the ORIGINAL (non-flattened) text:
+    #    Find the first date that appears AFTER the 'Test Date' label, within the next ~400 characters
+    lbl = re.search(r"Test\s*Date", txt, re.IGNORECASE)
+    if lbl:
+        window = txt[lbl.end(): lbl.end() + 400]
+        m = re.search(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", window)
+        if m:
+            return _norm(m.group(1))
+
+    # 4) Fallback: pick a date near 'GERMINATION ANALYSIS'
     gpos = re.search(r"GERMINATION\s+ANALYSIS", txt, re.IGNORECASE)
     if gpos:
-        window = txt[max(0, gpos.start()-200): gpos.end()+200]
+        window = txt[max(0, gpos.start()-250): gpos.end()+250]
         cands = re.findall(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", window)
         if cands:
-            return _normalize_mdy(cands[0])
+            return _norm(cands[0])
+
     return None
 
 def enrich_invoice_items_with_purity(items: List[Dict], purity_data: Dict[str, Dict]) -> List[Dict]:
