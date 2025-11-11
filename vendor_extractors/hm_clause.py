@@ -1419,6 +1419,7 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
                 page_text = page.get_text()
                 if "REPORT" in page_text.upper():
                     is_report_document = True
+                    print(f"{filename} as a seed analysis report:")
                     print(page_text)
                 text += page_text + " " # Aggregate all text
             doc.close()
