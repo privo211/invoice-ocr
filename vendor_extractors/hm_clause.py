@@ -1551,14 +1551,12 @@ def _extract_germ_date_from_report(txt: str) -> str | None:
     # 4) Fallback: pick a date near 'GERMINATION ANALYSIS'
     gpos = re.search(r"GERMINATION\s+ANALYSIS", txt, re.IGNORECASE)
     if gpos:
-        window = txt[max(0, gpos.start()-250): gpos.end()+250]
+        window = txt[max(0, gpos.start()-500): gpos.end()+500]
         cands = re.findall(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", window)
         if cands:
             print("4 - Test date extracted")
             if _norm(cands[1]):
                 return _norm(cands[1])
-            elif _norm(cands[0]):
-                return _norm(cands[0])
 
     return None
 
