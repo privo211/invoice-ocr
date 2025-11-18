@@ -1422,38 +1422,103 @@ def _choose_batch_key(report_text_upper: str, filename: str) -> str | None:
 
 def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]]) -> Dict[str, Dict]:
     """
-    Extracts purity data. It now correctly uses OCR as a fallback for scanned reports.
+    Extracts purity data. Correctly handles scanned documents by attempting OCR 
+    before filtering for report content.
     """
     purity_data = defaultdict(dict)
     for filename, pdf_bytes in pdf_files:
         try:
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             text = ""
-            is_report_document = False
             
-            # Pass 1: Get text with Fitz and check if it's a report
+            # Pass 1: Attempt to get native text
             for page in doc:
-                page_text = page.get_text()
-                if "REPORT" in page_text.upper():
-                    is_report_document = True
-                    print(f"{filename} as a seed analysis report:")
-                    print(page_text)
-                text += page_text + " " # Aggregate all text
+                text += page.get_text() + " " 
             doc.close()
 
-            # If the document is not a seed analysis report, skip it
-            if not is_report_document:
+            # Pass 2: If text is empty or very short, assume it's a scan and run OCR
+            if not text.strip():
+                print(f"INFO: {filename} appears to be a scanned document. Running OCR.")
+                try:
+                    ocr_lines = extract_text_with_azure_ocr(pdf_bytes)
+                    text = " ".join(ocr_lines)
+                except Exception as e:
+                    print(f"OCR failed for {filename}: {e}")
+                    continue
+
+            # Pass 3: Identify if this is actually a Seed Analysis Report
+            # We check for "REPORT" or "ANALYSIS" to be safe
+            if "REPORT" not in text.upper() and "ANALYSIS" not in text.upper():
+                continue
+            
+            print(f"Processing {filename} as a seed analysis report...")
+
+            # Proceed with parsing
+            U = text.upper()
+            batch_key = _choose_batch_key(U, filename)
+            if not batch_key:
+                print(f"Could not identify batch key for {filename}")
                 continue
 
-            # If it is a report but has no text, it must be scanned. Use OCR.
-            if not text.strip():
-                print(f"INFO: Identified {filename} as a scanned seed analysis report. Running OCR.")
-                ocr_lines = extract_text_with_azure_ocr(pdf_bytes)
-                text = " ".join(ocr_lines) # Replace empty text with OCR result
+            if (match_pure := re.search(r"Pure Seed:\s*(\d+\.\d+)\s*%", text)) and \
+               (match_inert := re.search(r"Inert Matter:\s*(\d+\.\d+)\s*%", text)):
+                
+                pure_seed = float(match_pure.group(1))
+                purity_data[batch_key]["PureSeed"] = 99.99 if pure_seed == 100 else pure_seed
+                purity_data[batch_key]["InertMatter"] = 0.01 if pure_seed == 100 else float(match_inert.group(1))
 
-            # If there's still no text, we can't process it.
-            if not text.strip():
-                continue
+                # Extract Grower Germ (often labelled as "% Comments: ... 85")
+                if match := re.search(r"%\s*Comments:\s*(?:[A-Za-z]+\s+)*(\d{2,3})\b", text):
+                    germ = int(float(match.group(1)))
+                    purity_data[batch_key]["GrowerGerm"] = germ
+                    purity_data[batch_key]["Germ"] = 98 if germ == 100 else germ
+            
+            # Extract Germ Date
+            germ_date = _extract_germ_date_from_report(text)
+            if germ_date:
+                purity_data[batch_key]["GrowerGermDate"] = germ_date
+                purity_data[batch_key]["GermDate"] = germ_date
+                    
+        except Exception as e:
+            print(f"Could not process {filename} for purity analysis: {e}")
+            continue
+            
+    return purity_data
+
+# def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]]) -> Dict[str, Dict]:
+#     """
+#     Extracts purity data. It now correctly uses OCR as a fallback for scanned reports.
+#     """
+#     purity_data = defaultdict(dict)
+#     for filename, pdf_bytes in pdf_files:
+#         try:
+#             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+#             text = ""
+#             is_report_document = False
+            
+#             # Pass 1: Get text with Fitz and check if it's a report
+#             for page in doc:
+#                 page_text = page.get_text()
+#                 if "REPORT" in page_text.upper():
+#                     is_report_document = True
+#                     print(f"{filename} as a seed analysis report:")
+#                     print(page_text)
+#                 text += page_text + " " # Aggregate all text
+#             doc.close()
+
+#             # If the document is not a seed analysis report, skip it
+#             if not is_report_document:
+#                 continue
+
+#             # If it is a report but has no text, it must be scanned. Use OCR.
+#             if not text.strip():
+#                 print(f"INFO: Identified {filename} as a scanned seed analysis report. Running OCR.")
+#                 ocr_lines = extract_text_with_azure_ocr(pdf_bytes)
+#                 text = " ".join(ocr_lines) # Replace empty text with OCR result
+
+#             # If there's still no text, we can't process it.
+#             if not text.strip():
+#                 continue
             
             # # Proceed with the proven regex parsing
             # text = text.replace('\n', ' ').replace('\r', ' ')
@@ -1467,37 +1532,37 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
             # batch_key = batch_match.group(1)[:6]
             
             # new
-            U = text.upper()
-            batch_key = _choose_batch_key(U, filename)
-            if not batch_key:
-                continue
+    #         U = text.upper()
+    #         batch_key = _choose_batch_key(U, filename)
+    #         if not batch_key:
+    #             continue
 
-            if (match_pure := re.search(r"Pure Seed:\s*(\d+\.\d+)\s*%", text)) and \
-               (match_inert := re.search(r"Inert Matter:\s*(\d+\.\d+)\s*%", text)):
+    #         if (match_pure := re.search(r"Pure Seed:\s*(\d+\.\d+)\s*%", text)) and \
+    #            (match_inert := re.search(r"Inert Matter:\s*(\d+\.\d+)\s*%", text)):
                 
-                pure_seed = float(match_pure.group(1))
-                purity_data[batch_key]["PureSeed"] = 99.99 if pure_seed == 100 else pure_seed
-                purity_data[batch_key]["InertMatter"] = 0.01 if pure_seed == 100 else float(match_inert.group(1))
+    #             pure_seed = float(match_pure.group(1))
+    #             purity_data[batch_key]["PureSeed"] = 99.99 if pure_seed == 100 else pure_seed
+    #             purity_data[batch_key]["InertMatter"] = 0.01 if pure_seed == 100 else float(match_inert.group(1))
                 
-                # if date_matches := re.findall(r"(\d{1,2}/\d{1,2}/\d{4})(?=.*?REPORT OF SEED ANALYSIS)", text, re.IGNORECASE):
-                #     if len(date_matches) >= 2:
-                #         purity_data[batch_key]["GrowerGermDate"] = date_matches[-1]
-                #         purity_data[batch_key]["GermDate"] = date_matches[-1]
+    #             # if date_matches := re.findall(r"(\d{1,2}/\d{1,2}/\d{4})(?=.*?REPORT OF SEED ANALYSIS)", text, re.IGNORECASE):
+    #             #     if len(date_matches) >= 2:
+    #             #         purity_data[batch_key]["GrowerGermDate"] = date_matches[-1]
+    #             #         purity_data[batch_key]["GermDate"] = date_matches[-1]
 
-                if match := re.search(r"%\s*Comments:\s*(?:[A-Za-z]+\s+)*(\d{2,3})\b", text):
-                    germ = int(float(match.group(1)))
-                    purity_data[batch_key]["GrowerGerm"] = germ
-                    purity_data[batch_key]["Germ"] = 98 if germ == 100 else germ
+    #             if match := re.search(r"%\s*Comments:\s*(?:[A-Za-z]+\s+)*(\d{2,3})\b", text):
+    #                 germ = int(float(match.group(1)))
+    #                 purity_data[batch_key]["GrowerGerm"] = germ
+    #                 purity_data[batch_key]["Germ"] = 98 if germ == 100 else germ
                     
-            germ_date = _extract_germ_date_from_report(text)
-            if germ_date:
-                purity_data[batch_key]["GrowerGermDate"] = germ_date
-                purity_data[batch_key]["GermDate"] = germ_date
+    #         germ_date = _extract_germ_date_from_report(text)
+    #         if germ_date:
+    #             purity_data[batch_key]["GrowerGermDate"] = germ_date
+    #             purity_data[batch_key]["GermDate"] = germ_date
                     
-        except Exception as e:
-            print(f"Could not process {filename} for purity analysis: {e}")
-            continue
-    return purity_data
+    #     except Exception as e:
+    #         print(f"Could not process {filename} for purity analysis: {e}")
+    #         continue
+    # return purity_data
 
 # def enrich_invoice_items_with_purity(items: List[Dict], purity_data: Dict[str, Dict]) -> List[Dict]:
 #     for item in items:
