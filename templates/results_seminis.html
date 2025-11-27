@@ -651,6 +651,12 @@
             const opts = await res.json();
             select.innerHTML = '';
 
+            // --- Re-add the placeholder option ---
+            const placeholder = document.createElement('option');
+            placeholder.value = "";
+            placeholder.textContent = "- Manually select an Item No. from the list -";
+            select.append(placeholder);
+
             opts.forEach(o => {
               const optEl = document.createElement('option');
               optEl.value = o.No;
