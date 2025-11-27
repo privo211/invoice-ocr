@@ -168,46 +168,115 @@ def token_is_valid(access_token: str) -> bool:
     except requests.exceptions.RequestException:
         return False
 
+# def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | None:
+#     """
+#     Finds the best BC Item Number by matching vendor description against BC options.
+#     This version tokenizes strings to find the best match based on word overlap.
+#     """
+#     if not vendor_desc or not bc_options:
+#         return None
+
+#     # Helper function to clean and split a string into a set of words
+#     def clean_and_tokenize(text: str) -> set:
+#         # Convert to lowercase, remove punctuation/special characters, and split into words
+#         text = text.lower()
+#         text = re.sub(r'[^\w\s]', '', text)
+#         return set(text.split())
+
+#     vendor_words = clean_and_tokenize(vendor_desc)
+    
+#     best_match_no = None
+#     highest_score = 0
+
+#     for option in bc_options:
+#         bc_desc = option.get("Description", "")
+#         if not bc_desc:
+#             continue
+            
+#         bc_words = clean_and_tokenize(bc_desc)
+        
+#         # Calculate score based on the number of common words
+#         common_words = vendor_words.intersection(bc_words)
+#         score = len(common_words)
+
+#         # If this option has a better score, it becomes the new best match
+#         if score > highest_score:
+#             highest_score = score
+#             best_match_no = option.get("No")
+            
+
+#     # We require at least 1 words to match to be confident.
+#     if highest_score >= 1:
+        
+#         return best_match_no
+    
+#     return None
+
 def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | None:
     """
     Finds the best BC Item Number by matching vendor description against BC options.
-    This version tokenizes strings to find the best match based on word overlap.
+    Includes logic to handle split words (e.g., "KEY WEST" -> "KEYWEST") and checks for ties.
     """
     if not vendor_desc or not bc_options:
         return None
 
-    # Helper function to clean and split a string into a set of words
-    def clean_and_tokenize(text: str) -> set:
+    # Helper function to clean and split a string into a list of words (preserves order)
+    def clean_and_tokenize(text: str) -> list[str]:
         # Convert to lowercase, remove punctuation/special characters, and split into words
         text = text.lower()
         text = re.sub(r'[^\w\s]', '', text)
-        return set(text.split())
+        return text.split()
 
-    vendor_words = clean_and_tokenize(vendor_desc)
+    vendor_tokens = clean_and_tokenize(vendor_desc)
     
     best_match_no = None
     highest_score = 0
+    is_tie = False
 
     for option in bc_options:
         bc_desc = option.get("Description", "")
         if not bc_desc:
             continue
             
-        bc_words = clean_and_tokenize(bc_desc)
+        bc_tokens = clean_and_tokenize(bc_desc)
         
-        # Calculate score based on the number of common words
-        common_words = vendor_words.intersection(bc_words)
-        score = len(common_words)
+        score = 0
+        matched_bc_indices = set()
 
-        # If this option has a better score, it becomes the new best match
+        # 1. Basic Token Matching (Exact Match)
+        for v_tok in vendor_tokens:
+            for idx, b_tok in enumerate(bc_tokens):
+                if idx in matched_bc_indices: continue
+                
+                if b_tok == v_tok:
+                    score += 10
+                    matched_bc_indices.add(idx)
+                    break
+        
+        # 2. Concatenation Match (Fixes "KEY WEST" -> "KEYWEST")
+        # Check if any TWO consecutive vendor tokens combine to make ONE BC token
+        i = 0
+        while i < len(vendor_tokens) - 1:
+            combined = vendor_tokens[i] + vendor_tokens[i+1]
+            for k, b_tok in enumerate(bc_tokens):
+                if k in matched_bc_indices: continue
+                
+                if combined == b_tok:
+                    score += 15 # High bonus for matching a complex split word
+                    matched_bc_indices.add(k)
+                    break
+            i += 1
+
+        # Tie-breaking logic
         if score > highest_score:
             highest_score = score
             best_match_no = option.get("No")
-            
+            is_tie = False
+        elif score == highest_score and score > 0:
+            is_tie = True
 
-    # We require at least 1 words to match to be confident.
-    if highest_score >= 1:
-        
+    # We require at least one decent match (score >= 10) AND no ties to auto-select.
+    if highest_score >= 10 and not is_tie:
         return best_match_no
     
     return None
