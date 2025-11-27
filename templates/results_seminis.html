@@ -270,7 +270,7 @@
                     <div class="field-box po-field" contenteditable="true" data-item-idx="{{ item_idx }}">{{ item.PurchaseOrder or '' }}</div>
                   </dd>
 
-                  <dt class="col-sm-4">Select BC Item No.</dt>
+                  <!--<dt class="col-sm-4">Select BC Item No.</dt>
                   <dd class="col-sm-8">
                     <select class="field-box form-select bc-item-select" data-item-idx="{{ item_idx }}" data-field="BCItemNo">
                       {% if not item.BCOptions %}<option value="">— Enter a PO to see options —</option>{% endif %}
@@ -285,6 +285,28 @@
                       
                       <option value="" {% if not item.BCItemNo or item.BCItemNo == 'Other' %}selected{% endif %}>— Choose an Item No. —</option>
                        </select>
+                  </dd>-->
+
+                  <dt class="col-sm-4">Select BC Item No.</dt>
+                  <dd class="col-sm-8">
+                    <select class="field-box form-select bc-item-select" data-item-idx="{{ item_idx }}" data-field="BCItemNo">
+                      
+                      <option value="" {% if not item.SuggestedBCItemNo %}selected{% endif %}>
+                        - Manually select an Item No. from the list -
+                      </option>
+
+                      {% for opt in item.BCOptions %}
+                        <option value="{{ opt.No }}" {% if item.SuggestedBCItemNo == opt.No %}selected{% endif %}>
+                          {{ opt.No }} — {{ opt.Description }}
+                        </option>
+                      {% endfor %}
+                      
+                      <option value="Other">Other</option>
+                    </select>
+
+                    <select id="bc-input-{{ item_idx }}" class="field-box form-select mt-1" style="{% if item.BCItemNo == 'Other' or item.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}">
+                      <option value="" {% if not item.BCItemNo or item.BCItemNo == 'Other' %}selected{% endif %}>— Choose an Item No. —</option>
+                    </select>
                   </dd>
 
                   <dt class="col-sm-4">KTT #</dt>
