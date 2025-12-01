@@ -224,7 +224,8 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
     def clean_and_tokenize(text: str) -> list[str]:
         # Convert to lowercase, remove punctuation/special characters, and split into words
         text = text.lower()
-        text = re.sub(r'[^\w\s]', '', text)
+        # text = re.sub(r'[^\w\s]', '', text)
+        text = re.sub(r'[^\w\s]', ' ', text)
         return text.split()
 
     vendor_tokens = clean_and_tokenize(vendor_desc)
@@ -253,6 +254,15 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
                     matched_bc_indices.add(idx)
                     break
         
+        # --- ID Substring Match ---
+                # If a token is alphanumeric and long enough (e.g. "08767143"), check substrings
+                # This helps if Vendor has "EX08767143" and BC has "08767143"
+                elif len(b_tok) > 4 and len(v_tok) > 4:
+                    if b_tok in v_tok or v_tok in b_tok:
+                        score += 20 # Higher weight for specific IDs
+                        matched_bc_indices.add(idx)
+                        break
+                    
         # 2. Concatenation Match (Fixes "KEY WEST" -> "KEYWEST")
         # Check if any TWO consecutive vendor tokens combine to make ONE BC token
         i = 0
