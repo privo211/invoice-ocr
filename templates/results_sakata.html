@@ -316,12 +316,12 @@
                     <dd class="col-sm-8">
                       <select class="field-box form-select bc-item-select" data-item-idx="{{ item_idx }}" data-field="BCItemNo">
                         
-                        <option value="" {% if not item.SuggestedBCItemNo %}selected{% endif %}>
+                        <option value="" {% if not lot.SuggestedBCItemNo %}selected{% endif %}>
                           - Manually select an Item No. from the list -
                         </option>
 
-                        {% for opt in item.BCOptions %}
-                          <option value="{{ opt.No }}" {% if item.SuggestedBCItemNo == opt.No %}selected{% endif %}>
+                        {% for opt in lot.BCOptions %}
+                          <option value="{{ opt.No }}" {% if lot.SuggestedBCItemNo == opt.No %}selected{% endif %}>
                             {{ opt.No }} — {{ opt.Description }}
                           </option>
                         {% endfor %}
@@ -329,8 +329,8 @@
                         <option value="Other">Other</option>
                       </select>
 
-                      <select id="bc-input-{{ item_idx }}" class="field-box form-select mt-1" style="{% if item.BCItemNo == 'Other' or item.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}">
-                        <option value="" {% if not item.BCItemNo or item.BCItemNo == 'Other' %}selected{% endif %}>— Choose an Item No. —</option>
+                      <select id="bc-input-{{ item_idx }}" class="field-box form-select mt-1" style="{% if lot.BCItemNo == 'Other' or lot.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}">
+                        <option value="" {% if not lot.BCItemNo or lot.BCItemNo == 'Other' %}selected{% endif %}>— Choose an Item No. —</option>
                       </select>
                     </dd>
 
