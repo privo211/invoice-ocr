@@ -8,6 +8,7 @@ import re
 import fitz
 import requests
 from datetime import datetime, timedelta
+import difflib
 from difflib import get_close_matches
 import msal
 from dotenv import load_dotenv
@@ -212,81 +213,158 @@ def token_is_valid(access_token: str) -> bool:
     
 #     return None
 
+# --------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
+# def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | None:
+#     """
+#     Finds the best BC Item Number by matching vendor description against BC options.
+#     Includes logic to handle split words (e.g., "KEY WEST" -> "KEYWEST") and checks for ties.
+#     """
+#     if not vendor_desc or not bc_options:
+#         return None
+
+#     # Helper function to clean and split a string into a list of words (preserves order)
+#     def clean_and_tokenize(text: str) -> list[str]:
+#         # Convert to lowercase, remove punctuation/special characters, and split into words
+#         text = text.lower()
+#         # text = re.sub(r'[^\w\s]', '', text)
+#         text = re.sub(r'[^\w\s]', ' ', text)
+#         return text.split()
+
+#     vendor_tokens = clean_and_tokenize(vendor_desc)
+    
+#     best_match_no = None
+#     highest_score = 0
+#     is_tie = False
+
+#     for option in bc_options:
+#         bc_desc = option.get("Description", "")
+#         if not bc_desc:
+#             continue
+            
+#         bc_tokens = clean_and_tokenize(bc_desc)
+        
+#         score = 0
+#         matched_bc_indices = set()
+
+#         # 1. Basic Token Matching (Exact Match)
+#         for v_tok in vendor_tokens:
+#             for idx, b_tok in enumerate(bc_tokens):
+#                 if idx in matched_bc_indices: continue
+                
+#                 if b_tok == v_tok:
+#                     score += 10
+#                     matched_bc_indices.add(idx)
+#                     break
+        
+#         # --- ID Substring Match ---
+#                 # If a token is alphanumeric and long enough (e.g. "08767143"), check substrings
+#                 # This helps if Vendor has "EX08767143" and BC has "08767143"
+#                 elif len(b_tok) > 4 and len(v_tok) > 4:
+#                     if b_tok in v_tok or v_tok in b_tok:
+#                         score += 20 # Higher weight for specific IDs
+#                         matched_bc_indices.add(idx)
+#                         break
+                    
+#         # 2. Concatenation Match (Fixes "KEY WEST" -> "KEYWEST")
+#         # Check if any TWO consecutive vendor tokens combine to make ONE BC token
+#         i = 0
+#         while i < len(vendor_tokens) - 1:
+#             combined = vendor_tokens[i] + vendor_tokens[i+1]
+#             for k, b_tok in enumerate(bc_tokens):
+#                 if k in matched_bc_indices: continue
+                
+#                 if combined == b_tok:
+#                     score += 15 # High bonus for matching a complex split word
+#                     matched_bc_indices.add(k)
+#                     break
+#             i += 1
+
+#         # Tie-breaking logic
+#         if score > highest_score:
+#             highest_score = score
+#             best_match_no = option.get("No")
+#             is_tie = False
+#         elif score == highest_score and score > 0:
+#             is_tie = True
+
+#     # We require at least one decent match (score >= 10) AND no ties to auto-select.
+#     if highest_score >= 10 and not is_tie:
+#         return best_match_no
+    
+#     return None
+
 def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | None:
     """
-    Finds the best BC Item Number by matching vendor description against BC options.
-    Includes logic to handle split words (e.g., "KEY WEST" -> "KEYWEST") and checks for ties.
+    Finds the best BC Item Number using a hybrid approach:
+    1. Fuzzy String Similarity (Handles 'HYB' vs 'HYBRID', word reordering)
+    2. ID Substring Matching (Crucial for codes like SV9010SA or EX08767143)
+    3. No Match Penalties (Picks the best winner even if score is close)
     """
     if not vendor_desc or not bc_options:
         return None
 
-    # Helper function to clean and split a string into a list of words (preserves order)
-    def clean_and_tokenize(text: str) -> list[str]:
-        # Convert to lowercase, remove punctuation/special characters, and split into words
-        text = text.lower()
-        # text = re.sub(r'[^\w\s]', '', text)
-        text = re.sub(r'[^\w\s]', ' ', text)
-        return text.split()
+    # Normalization helper: Lowercase and space-separated punctuation
+    def normalize(text):
+        return re.sub(r'[^\w\s]', ' ', text.lower())
 
-    vendor_tokens = clean_and_tokenize(vendor_desc)
+    norm_vendor = normalize(vendor_desc)
+    # Create a set of tokens for ID checking
+    vendor_tokens = set(norm_vendor.split())
     
     best_match_no = None
-    highest_score = 0
-    is_tie = False
+    best_score = 0
 
     for option in bc_options:
         bc_desc = option.get("Description", "")
         if not bc_desc:
             continue
-            
-        bc_tokens = clean_and_tokenize(bc_desc)
         
+        bc_no = option.get("No", "")
+        norm_bc = normalize(bc_desc)
+        bc_tokens = set(norm_bc.split())
+
+        # --- Scoring Logic ---
         score = 0
-        matched_bc_indices = set()
 
-        # 1. Basic Token Matching (Exact Match)
-        for v_tok in vendor_tokens:
-            for idx, b_tok in enumerate(bc_tokens):
-                if idx in matched_bc_indices: continue
-                
-                if b_tok == v_tok:
-                    score += 10
-                    matched_bc_indices.add(idx)
-                    break
+        # 1. Fuzzy Similarity (Base Score 0-100)
+        # Sort words to ensure "Corn Sweet" matches "Sweet Corn"
+        sorted_vendor = " ".join(sorted(norm_vendor.split()))
+        sorted_bc = " ".join(sorted(norm_bc.split()))
         
-        # --- ID Substring Match ---
-                # If a token is alphanumeric and long enough (e.g. "08767143"), check substrings
-                # This helps if Vendor has "EX08767143" and BC has "08767143"
-                elif len(b_tok) > 4 and len(v_tok) > 4:
-                    if b_tok in v_tok or v_tok in b_tok:
-                        score += 20 # Higher weight for specific IDs
-                        matched_bc_indices.add(idx)
-                        break
-                    
-        # 2. Concatenation Match (Fixes "KEY WEST" -> "KEYWEST")
-        # Check if any TWO consecutive vendor tokens combine to make ONE BC token
-        i = 0
-        while i < len(vendor_tokens) - 1:
-            combined = vendor_tokens[i] + vendor_tokens[i+1]
-            for k, b_tok in enumerate(bc_tokens):
-                if k in matched_bc_indices: continue
+        # difflib calculates how many characters match
+        fuzzy_ratio = difflib.SequenceMatcher(None, sorted_vendor, sorted_bc).ratio()
+        score += fuzzy_ratio * 100 
+
+        # 2. Critical ID Match (Huge Boost +200)
+        # Check if any unique vendor token (like SV9010SA) exists in the BC tokens
+        # We skip short common words (len < 4) to avoid boosting on "corn" or "bag"
+        id_match_found = False
+        for v_tok in vendor_tokens:
+            if len(v_tok) < 4: continue 
+            
+            # Check against all BC tokens
+            for b_tok in bc_tokens:
+                if len(b_tok) < 4: continue
                 
-                if combined == b_tok:
-                    score += 15 # High bonus for matching a complex split word
-                    matched_bc_indices.add(k)
+                # Check for substring match (e.g. Vendor "SV9010SA" vs BC "SV9010SA")
+                if v_tok == b_tok or v_tok in b_tok or b_tok in v_tok:
+                    score += 200 # Massive boost overrides text mismatches
+                    id_match_found = True
                     break
-            i += 1
+            if id_match_found: break
 
-        # Tie-breaking logic
-        if score > highest_score:
-            highest_score = score
-            best_match_no = option.get("No")
-            is_tie = False
-        elif score == highest_score and score > 0:
-            is_tie = True
+        # 3. Selection (Winner Takes All)
+        # We update if this score is strictly better. 
+        # This implicitly handles ties by keeping the first high-scoring one found.
+        if score > best_score:
+            best_score = score
+            best_match_no = bc_no
 
-    # We require at least one decent match (score >= 10) AND no ties to auto-select.
-    if highest_score >= 10 and not is_tie:
+    # Threshold: 
+    # A score > 200 means we found a hard ID match (SV9010SA).
+    # A score > 45 means we found decent text similarity (e.g. "Sweet Corn" vs "Corn").
+    if best_score > 45:
         return best_match_no
     
     return None
