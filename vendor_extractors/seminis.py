@@ -502,7 +502,10 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
                         except ValueError: total_quantity = None
             if not origin_country:
                 cc_match = re.findall(r"\b[A-Z]{2}\b", line)
-                if (filtered_cc := [c for c in cc_match if c != "MK"]): origin_country = filtered_cc[0]
+                # Filter out MK, LB (pounds), KG, EA, etc. to prevent them from being seen as Country
+                filtered_cc = [c for c in cc_match if c not in ["MK", "LB", "KG", "MT", "EA", "OZ"]]
+                if filtered_cc: 
+                    origin_country = filtered_cc[0]
                 
             # if line == "Total Item":
             #     # Try to take the next line with comma first
@@ -632,18 +635,43 @@ def extract_seminis_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_desc
     
     return grouped_results
 
+# def find_best_seminis_package_description(vendor_desc: str, pkg_desc_list: list[str]) -> str:
+#     """Finds the best matching package description for Seminis items."""
+#     if not vendor_desc or not pkg_desc_list:
+#         return ""
+
+#     # Seminis specific logic: e.g., "80 MK" -> "80,000 SEEDS"
+#     if m := re.search(r"(\d+)\s*(MK)\b", vendor_desc.upper()):
+#         seed_count = int(m.group(1)) * 1000
+#         candidate = f"{seed_count:,} SEEDS"
+#         if candidate in pkg_desc_list:
+#             return candidate
+
+#     # Fallback to general fuzzy matching
+#     matches = get_close_matches(vendor_desc.upper(), pkg_desc_list, n=1, cutoff=0.6)
+#     return matches[0] if matches else ""
+
 def find_best_seminis_package_description(vendor_desc: str, pkg_desc_list: list[str]) -> str:
     """Finds the best matching package description for Seminis items."""
     if not vendor_desc or not pkg_desc_list:
         return ""
+    
+    normalized_desc = vendor_desc.upper()
 
-    # Seminis specific logic: e.g., "80 MK" -> "80,000 SEEDS"
-    if m := re.search(r"(\d+)\s*(MK)\b", vendor_desc.upper()):
+    # 1. Seminis logic: "80 MK" -> "80,000 SEEDS"
+    if m := re.search(r"(\d+)\s*(MK)\b", normalized_desc):
         seed_count = int(m.group(1)) * 1000
         candidate = f"{seed_count:,} SEEDS"
         if candidate in pkg_desc_list:
             return candidate
 
+    # 2. Seminis logic: "50 LB" -> "50 LB"
+    # Matches "50 LB", "50LB", "50 LB BAG"
+    if m := re.search(r"(\d+)\s*LB\b", normalized_desc):
+        candidate = f"{m.group(1)} LB"
+        if candidate in pkg_desc_list:
+            return candidate
+
     # Fallback to general fuzzy matching
-    matches = get_close_matches(vendor_desc.upper(), pkg_desc_list, n=1, cutoff=0.6)
+    matches = get_close_matches(normalized_desc, pkg_desc_list, n=1, cutoff=0.6)
     return matches[0] if matches else ""
