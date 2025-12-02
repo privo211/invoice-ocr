@@ -286,7 +286,7 @@
                   <dd class="col-sm-8">
                     <select class="field-box form-select bc-item-select" data-item-idx="{{ item_idx }}" data-field="BCItemNo">
                       
-                      <option value="" {% if not item.SuggestedBCItemNo %}selected{% endif %}>
+                      <option value="" style="color: red; font-weight: bold;" {% if not item.SuggestedBCItemNo %}selected{% endif %}>
                         - Manually select an Item No. from the list -
                       </option>
 
@@ -668,9 +668,32 @@
       });
 
       // For BC Item dropdowns
+      //document.querySelectorAll('.bc-item-select').forEach(sel => {
+        //sel.addEventListener('change', () => toggleManualBcInput(sel));
+        //toggleManualBcInput(sel);
+      //});
+
+      // For BC Item dropdowns
       document.querySelectorAll('.bc-item-select').forEach(sel => {
-        sel.addEventListener('change', () => toggleManualBcInput(sel));
+        // Function to update color based on value
+        const updateColor = () => {
+          if (sel.value === "") {
+            sel.style.color = "red";
+            sel.style.fontWeight = "bold";
+          } else {
+            sel.style.color = "";
+            sel.style.fontWeight = "";
+          }
+        };
+
+        sel.addEventListener('change', () => {
+          toggleManualBcInput(sel);
+          updateColor(); // Update color on change
+        });
+
+        // Initialize
         toggleManualBcInput(sel);
+        updateColor(); 
       });
 
       // For treatment lookup modals

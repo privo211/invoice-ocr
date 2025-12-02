@@ -291,7 +291,7 @@
                   <dd class="col-sm-8">
                     <select class="field-box form-select bc-item-select" data-item-idx="{{ item_idx }}" data-field="BCItemNo">
                       
-                      <option value="" {% if not item.SuggestedBCItemNo %}selected{% endif %}>
+                      <option value="" style="color: red; font-weight: bold;" {% if not item.SuggestedBCItemNo %}selected{% endif %}>
                         - Manually select an Item No. from the list -
                       </option>
 
