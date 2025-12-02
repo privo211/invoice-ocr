@@ -1896,7 +1896,9 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
             tu = item.get("TotalUpcharge", 0.0) or 0.0
             td = item.get("TotalDiscount", 0.0) or 0.0
             qty = item.get("TotalQuantity") or 0
-            item["USD_Actual_Cost_$"] = round(((tp + tu - td) / qty), 4) if qty > 0 else None
+            # item["USD_Actual_Cost_$"] = round(((tp + tu - td) / qty), 4) if qty > 0 else None
+            item["USD_Actual_Cost_$"] = "{:.4f}".format((tp + tu - td) / qty) if qty > 0 else None
+            
 
     return line_items
 

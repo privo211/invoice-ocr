@@ -559,7 +559,8 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
 
         tp = item.get("TotalPrice") or 0.0
         qty = item.get("TotalQuantity")
-        item["USD_Actual_Cost_$"] = round((tp / qty), 4) if qty and qty > 0 else None
+        # item["USD_Actual_Cost_$"] = round((tp / qty), 4) if qty and qty > 0 else None
+        item["USD_Actual_Cost_$"] = "{:.4f}".format(tp / qty) if qty and qty > 0 else None
         items.append(item)
     return items
 

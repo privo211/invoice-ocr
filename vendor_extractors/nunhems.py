@@ -390,7 +390,8 @@ def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_ma
     # recompute cost and normalize treatment
     for c in combined.values():
         if c.get("TotalPrice") and c.get("TotalQuantity"):
-            c["USD_Actual_Cost_$"] = round(c["TotalPrice"] / c["TotalQuantity"], 4)
+            # c["USD_Actual_Cost_$"] = round(c["TotalPrice"] / c["TotalQuantity"], 4)
+            c["USD_Actual_Cost_$"] = "{:.4f}".format(c["TotalPrice"] / c["TotalQuantity"])
         c["Treatment"] = "Untreated"
     return list(combined.values())
 
