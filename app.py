@@ -297,8 +297,8 @@ def token_is_valid(access_token: str) -> bool:
 def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | None:
     """
     Finds the best BC Item Number using a hybrid approach with strict validation:
-    1. Fuzzy String Similarity (Handles 'HYB' vs 'HYBRID', word reordering)
-    2. ID Substring Matching (Crucial for codes like SV9010SA or EX08767143)
+    1. Fuzzy String Similarity (Base Score 0-100)
+    2. ID Substring Matching (Bonus +50) -> STRICTLY for Numeric/Alphanumeric codes
     3. Tie-Breaking: If multiple items have the same top score, return None (Manual).
     4. Strict Threshold: Only accepts matches with very high confidence.
     """
@@ -338,20 +338,23 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
         fuzzy_ratio = difflib.SequenceMatcher(None, sorted_vendor, sorted_bc).ratio()
         score += fuzzy_ratio * 100 
 
-        # 2. Critical ID Match (Huge Boost +200)
-        # Check if any unique vendor token (like SV9010SA) exists in the BC tokens
-        # We skip short common words (len < 4) to avoid boosting on "corn" or "bag"
+        # 2. Critical ID Match (Bonus +50)
+        # Only matches if the token is NOT purely alphabetic (must contain digits)
         id_match_found = False
         for v_tok in vendor_tokens:
-            if len(v_tok) < 4: continue 
+            # Skip short tokens (< 4 chars) OR purely alphabetic words (e.g. "UNTREATED", "HYBRID")
+            if len(v_tok) < 4 or v_tok.isalpha(): 
+                continue 
             
             # Check against all BC tokens
             for b_tok in bc_tokens:
-                if len(b_tok) < 4: continue
+                # BC tokens must also be long enough and not just words
+                if len(b_tok) < 4 or b_tok.isalpha(): 
+                    continue
                 
                 # Check for substring match (e.g. Vendor "SV9010SA" vs BC "SV9010SA")
                 if v_tok == b_tok or v_tok in b_tok or b_tok in v_tok:
-                    score += 200 # Massive boost overrides text mismatches
+                    score += 50 # Reduced bonus
                     id_match_found = True
                     break
             if id_match_found: break
@@ -360,9 +363,9 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
         if score > best_score:
             best_score = score
             best_match_no = bc_no
-            is_tie = False  # New clear winner found, tie broken
+            is_tie = False
         elif score == best_score and score > 0:
-            is_tie = True   # We have a tie at the top score
+            is_tie = True
 
     # --- Strict Acceptance Criteria ---
     
@@ -371,9 +374,8 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
         return None
 
     # 2. Threshold check:
-    # - Score > 200: Confirmed ID match (Very High Confidence)
-    # - Score >= 90: Near perfect text match (High Confidence)
-    # Anything less defaults to None (Manual Selection)
+    # Score >= 90: High confidence. 
+    # (Example: 40 fuzzy + 50 ID match = 90, OR 90+ fuzzy match)
     if best_score >= 90:
         return best_match_no
     
