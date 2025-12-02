@@ -374,9 +374,9 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
         return None
 
     # 2. Threshold check:
-    # Score >= 90: High confidence. 
+    # Score >= 60: High confidence. 
     # (Example: 40 fuzzy + 50 ID match = 90, OR 90+ fuzzy match)
-    if best_score >= 90:
+    if best_score >= 60:
         return best_match_no
     
     return None
