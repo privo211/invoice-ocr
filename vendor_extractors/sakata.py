@@ -1022,6 +1022,154 @@ def extract_seed_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]])
             
     return report_map
 
+# @timed_func("extract_invoice_from_pdf")
+# def extract_invoice_from_pdf(
+#     source: Union[str, bytes],
+#     fallback_po: str = "",
+#     token: str = ""
+# ) -> List[Dict]:
+#     """
+#     Extracts Sakata invoice data from a single PDF source (path or bytes).
+#     """
+#     doc = None
+#     try:
+#         if isinstance(source, bytes):
+#             doc = fitz.open(stream=source, filetype="pdf")
+#         elif isinstance(source, str):
+#             doc = fitz.open(source)
+#         else:
+#             raise ValueError("Source must be file path (str) or bytes.")
+        
+#         first_page_text = doc[0].get_text()
+#         header_po_match = re.search(r"\bPO[-\s#:]*(\d{5})\b", first_page_text, re.IGNORECASE)
+#         header_po_match = header_po_match or re.search(
+#             r"Purchase\s*order.*?(\d{5})", first_page_text, re.IGNORECASE | re.DOTALL
+#         )
+#         header_po = f"PO-{header_po_match.group(1)}" if header_po_match else fallback_po
+
+#         all_blocks = []
+#         for page in doc:
+#             all_blocks.extend(sorted(page.get_text("blocks"), key=lambda b: (b[1], b[0])))
+
+#         items: List[Dict] = []
+#         current = None
+#         text_acc = ""
+#         i = 0
+
+#         while i < len(all_blocks):
+#             b = all_blocks[i]
+#             txt = b[4].strip()
+#             print(txt)
+
+#             if re.match(r"^\d+\s+\d{8}", txt) and ("Treated" in txt or "Untreated" in txt):
+#                 if current:
+#                     treatment_name = re.search(r"Treatment name:\s*(.*)", text_acc)
+#                     current["TreatmentName"] = treatment_name.group(1).strip() if treatment_name else None
+                    
+#                     # po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
+#                     # current["PurchaseOrder"] = f"PO-{po_match.group(1)}" if po_match else fallback_po
+
+#                     # Primary pattern: "PO-12345" etc.
+#                     po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
+#                     current["PurchaseOrder"] = (f"PO-{po_match.group(1)}" if po_match else header_po)
+
+#                     # if po_match:
+                        
+
+#                     #     current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
+#                     # else:
+#                     #     # Secondary fallback: find after "Purchase order" even several lines later
+#                     #     po_match = re.search(
+#                     #         r"Purchase\s*order[\s\S]*?(\d{5})",
+#                     #         text_acc,
+#                     #         re.IGNORECASE
+#                     #     )
+#                     #     if po_match:
+#                     #         current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
+#                     #     else:
+#                     #         current["PurchaseOrder"] = fallback_po
+
+#                     try:
+#                         current["BCOptions"] = get_po_items(current["PurchaseOrder"], token) if current["PurchaseOrder"] else []
+#                     except Exception as e:
+#                         current["BCOptions"] = [{"No": "ERROR", "Description": str(e)}]
+#                     items.append(current)
+
+#                 item_y0 = b[1]
+#                 item_line_acc = txt
+#                 j = i + 1
+#                 while j < len(all_blocks) and abs(all_blocks[j][1] - item_y0) < 10:
+#                     item_line_acc += " " + all_blocks[j][4].strip()
+#                     j += 1
+
+#                 price_nums = re.findall(r"\d{1,3}(?:,\d{3})*\.\d{2}", item_line_acc)
+#                 total_price = float(price_nums[-1].replace(",", "")) if price_nums else None
+#                 parts = item_line_acc.split()
+#                 item_no = parts[1]
+#                 ui = parts.index("EA") if "EA" in parts else len(parts)
+#                 desc = " ".join(parts[2:ui])
+#                 m_pkg = re.search(r"(\d+)(?=\s*[Mm]\b|\s*[Ll][Bb]\b|M$|LB$)", desc)
+#                 pkg_qty = int(m_pkg.group(1)) if m_pkg else None
+#                 shipped = int(float(parts[ui + 2])) if len(parts) > ui + 2 else None
+                
+#                 usd_actual_cost = None
+#                 if all(v is not None and v != 0 for v in [pkg_qty, shipped, total_price]):
+#                     # usd_actual_cost = round((total_price / (shipped * pkg_qty)), 4)
+#                     usd_actual_cost = "{:.4f}".format(total_price / (shipped * pkg_qty))
+#                     print(f"USD Actual Cost: {usd_actual_cost}: {total_price} / ({shipped} * {pkg_qty})")
+
+#                 current = {
+#                     "VendorItemNumber": item_no, "VendorDescription": desc, "QtyShipped": shipped,
+#                     "USD_Actual_Cost_$": usd_actual_cost, "PackageDescription": find_best_package_description(desc),
+#                     "TreatmentName": None, "PurchaseOrder": "", "TotalPrice": total_price, "Lots": []
+#                 }
+#                 text_acc = item_line_acc + "\n"
+#                 i = j
+#                 continue
+
+#             if current:
+#                 text_acc += txt + "\n"
+#                 if re.match(r"^\d{6}-\d{3}", txt):
+#                     current["Lots"].append(b[4])
+#             i += 1
+
+#         if current:
+#             treatment_name = re.search(r"Treatment name:\s*(.*)", text_acc)
+#             current["TreatmentName"] = treatment_name.group(1).strip() if treatment_name else None
+            
+#             # po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
+#             # current["PurchaseOrder"] = f"PO-{po_match.group(1)}" if po_match else fallback_po
+            
+#             # Primary pattern: "PO-12345" etc.
+#             po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
+#             current["PurchaseOrder"] = (f"PO-{po_match.group(1)}" if po_match else header_po)
+
+#             # if po_match:
+#             #     current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
+#             # else:
+#             #     # Secondary fallback: find after "Purchase order" even several lines later
+#             #     po_match = re.search(
+#             #         r"Purchase\s*order[\s\S]*?(\d{5})",
+#             #         text_acc,
+#             #         re.IGNORECASE
+#             #     )
+#             #     if po_match:
+#             #         current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
+#             #     else:
+#             #         current["PurchaseOrder"] = fallback_po
+
+                    
+#             try:
+#                 current["BCOptions"] = get_po_items(current["PurchaseOrder"], token) if current["PurchaseOrder"] else []
+#             except Exception as e:
+#                 current["BCOptions"] = [{"No": "ERROR", "Description": str(e)}]
+#             items.append(current)
+
+#         return items
+#     finally:
+#         if doc:
+#             doc.close()
+
 @timed_func("extract_invoice_from_pdf")
 def extract_invoice_from_pdf(
     source: Union[str, bytes],
@@ -1040,12 +1188,36 @@ def extract_invoice_from_pdf(
         else:
             raise ValueError("Source must be file path (str) or bytes.")
         
+        # --- PO EXTRACTION LOGIC ---
+        # Capture the header text from the first page
         first_page_text = doc[0].get_text()
-        header_po_match = re.search(r"\bPO[-\s#:]*(\d{5})\b", first_page_text, re.IGNORECASE)
-        header_po_match = header_po_match or re.search(
-            r"Purchase\s*order.*?(\d{5})", first_page_text, re.IGNORECASE | re.DOTALL
+        
+        # 1. Attempt to capture the "Purchase order" block which may contain multiple PO numbers
+        m_multi = re.search(
+            r"Purchase\s+order\s*[:\-]?(.*?)(?:Terms of payment|Ship to|Sales order|Customer reference)", 
+            first_page_text, re.IGNORECASE | re.DOTALL
         )
-        header_po = f"PO-{header_po_match.group(1)}" if header_po_match else fallback_po
+        
+        header_pos = []
+        if m_multi:
+            # Find all 5-digit sequences in that block
+            header_pos = re.findall(r"\b(\d{5})\b", m_multi.group(1))
+        
+        if header_pos:
+            # Case A: Local multi-search found POs -> Join them
+            header_po = " | ".join(f"PO-{n}" for n in header_pos)
+        elif fallback_po:
+            # Case B: Local multi-search failed, but we have a fallback
+            # This prevents the single-match logic below from truncating the list to just one PO.
+            header_po = fallback_po
+        else:
+            # Case C: No fallback and no multi-match -> Try to find at least one PO locally
+            header_po_match = re.search(r"\bPO[-\s#:]*(\d{5})\b", first_page_text, re.IGNORECASE)
+            header_po_match = header_po_match or re.search(
+                r"Purchase\s*order.*?(\d{5})", first_page_text, re.IGNORECASE | re.DOTALL
+            )
+            header_po = f"PO-{header_po_match.group(1)}" if header_po_match else ""
+        # ---------------------------
 
         all_blocks = []
         for page in doc:
@@ -1059,35 +1231,18 @@ def extract_invoice_from_pdf(
         while i < len(all_blocks):
             b = all_blocks[i]
             txt = b[4].strip()
-            print(txt)
+            # print(txt)
 
             if re.match(r"^\d+\s+\d{8}", txt) and ("Treated" in txt or "Untreated" in txt):
                 if current:
                     treatment_name = re.search(r"Treatment name:\s*(.*)", text_acc)
                     current["TreatmentName"] = treatment_name.group(1).strip() if treatment_name else None
                     
-                    # po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
-                    # current["PurchaseOrder"] = f"PO-{po_match.group(1)}" if po_match else fallback_po
-
-                    # Primary pattern: "PO-12345" etc.
+                    # Check for item-specific PO (comment line)
                     po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
+                    
+                    # Use specific PO if found, otherwise default to the Multi-PO header string
                     current["PurchaseOrder"] = (f"PO-{po_match.group(1)}" if po_match else header_po)
-
-                    # if po_match:
-                        
-
-                    #     current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
-                    # else:
-                    #     # Secondary fallback: find after "Purchase order" even several lines later
-                    #     po_match = re.search(
-                    #         r"Purchase\s*order[\s\S]*?(\d{5})",
-                    #         text_acc,
-                    #         re.IGNORECASE
-                    #     )
-                    #     if po_match:
-                    #         current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
-                    #     else:
-                    #         current["PurchaseOrder"] = fallback_po
 
                     try:
                         current["BCOptions"] = get_po_items(current["PurchaseOrder"], token) if current["PurchaseOrder"] else []
@@ -1114,8 +1269,8 @@ def extract_invoice_from_pdf(
                 
                 usd_actual_cost = None
                 if all(v is not None and v != 0 for v in [pkg_qty, shipped, total_price]):
-                    # usd_actual_cost = round((total_price / (shipped * pkg_qty)), 4)
-                    usd_actual_cost = "{:.4f}".format(total_price / (shipped * pkg_qty))
+                    # Format as string to preserve trailing zeros
+                    usd_actual_cost = f"{(total_price / (shipped * pkg_qty)):.4f}"
                     print(f"USD Actual Cost: {usd_actual_cost}: {total_price} / ({shipped} * {pkg_qty})")
 
                 current = {
@@ -1137,28 +1292,9 @@ def extract_invoice_from_pdf(
             treatment_name = re.search(r"Treatment name:\s*(.*)", text_acc)
             current["TreatmentName"] = treatment_name.group(1).strip() if treatment_name else None
             
-            # po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
-            # current["PurchaseOrder"] = f"PO-{po_match.group(1)}" if po_match else fallback_po
-            
-            # Primary pattern: "PO-12345" etc.
             po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
             current["PurchaseOrder"] = (f"PO-{po_match.group(1)}" if po_match else header_po)
 
-            # if po_match:
-            #     current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
-            # else:
-            #     # Secondary fallback: find after "Purchase order" even several lines later
-            #     po_match = re.search(
-            #         r"Purchase\s*order[\s\S]*?(\d{5})",
-            #         text_acc,
-            #         re.IGNORECASE
-            #     )
-            #     if po_match:
-            #         current["PurchaseOrder"] = f"PO-{po_match.group(1)}"
-            #     else:
-            #         current["PurchaseOrder"] = fallback_po
-
-                    
             try:
                 current["BCOptions"] = get_po_items(current["PurchaseOrder"], token) if current["PurchaseOrder"] else []
             except Exception as e:
@@ -1168,7 +1304,7 @@ def extract_invoice_from_pdf(
         return items
     finally:
         if doc:
-            doc.close()
+            doc.close()         
 
 @timed_func("extract_sakata_data_from_bytes")
 def extract_sakata_data_from_bytes(pdf_files: list[tuple[str, bytes]], token: str = "") -> dict[str, list[dict]]:
