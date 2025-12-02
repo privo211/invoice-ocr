@@ -716,9 +716,32 @@
       });
 
       // For BC Item dropdowns
+      //document.querySelectorAll('.bc-item-select').forEach(sel => {
+        //sel.addEventListener('change', () => toggleManualBcInput(sel));
+        //toggleManualBcInput(sel);
+      //});
+
+      // For BC Item dropdowns
       document.querySelectorAll('.bc-item-select').forEach(sel => {
-        sel.addEventListener('change', () => toggleManualBcInput(sel));
+        // Function to update color based on value
+        const updateColor = () => {
+          if (sel.value === "") {
+            sel.style.color = "red";
+            sel.style.fontWeight = "bold";
+          } else {
+            sel.style.color = "";
+            sel.style.fontWeight = "";
+          }
+        };
+
+        sel.addEventListener('change', () => {
+          toggleManualBcInput(sel);
+          updateColor(); // Update color on change
+        });
+
+        // Initialize
         toggleManualBcInput(sel);
+        updateColor(); 
       });
 
       // For treatment lookup modals
