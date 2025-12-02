@@ -1114,7 +1114,8 @@ def extract_invoice_from_pdf(
                 
                 usd_actual_cost = None
                 if all(v is not None and v != 0 for v in [pkg_qty, shipped, total_price]):
-                    usd_actual_cost = round((total_price / (shipped * pkg_qty)), 4)
+                    # usd_actual_cost = round((total_price / (shipped * pkg_qty)), 4)
+                    usd_actual_cost = "{:.4f}".format(total_price / (shipped * pkg_qty))
                     print(f"USD Actual Cost: {usd_actual_cost}: {total_price} / ({shipped} * {pkg_qty})")
 
                 current = {
