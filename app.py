@@ -354,7 +354,7 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
                 
                 # Check for substring match (e.g. Vendor "SV9010SA" vs BC "SV9010SA")
                 if v_tok == b_tok or v_tok in b_tok or b_tok in v_tok:
-                    score += 50 # Reduced bonus
+                    score += 61 # Reduced bonus
                     id_match_found = True
                     break
             if id_match_found: break
