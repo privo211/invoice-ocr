@@ -491,7 +491,10 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
         
         for j in range(trt_idx + 1, len(lines)):
             line = lines[j]
-            if not package and (m := re.search(r"\d+\s+MK\s+\w+", line)): package = m.group().strip()
+            # if not package and (m := re.search(r"\d+\s+MK\s+\w+", line)): package = m.group().strip()
+            # Updated to match MK or LB (e.g., "50 LB BAG")
+            if not package and (m := re.search(r"\d+\s+(?:MK|LB)\s+\w+", line, re.IGNORECASE)): 
+                package = m.group().strip()
             if not vendor_lot and (m := re.search(r"\b\d{9}(?:/\d{2})?\b", line)): vendor_lot = m.group()
             if not vendor_batch and (m := re.search(r"\b(\d{10})\b", line)):
                 vendor_batch = m.group(1)
