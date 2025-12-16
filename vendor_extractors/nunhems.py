@@ -333,7 +333,7 @@ def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_ma
                     vendor_lot = m.group(1)
                 qty_match = re.search(r"\|\s*([\d,]+)\s*\|", lines[j])
                 if qty_match:
-                    total_qty = int(qty_match.group(1).replace(",", ""))
+                    total_qty = int(float(qty_match.group(1).replace(",", "")))
                 if "ORIGIN" in lines[j]:
                     print(lines[j])
                     origin_country = convert_to_alpha2(lines[j].split("ORIGIN")[-1].strip())
