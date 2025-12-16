@@ -390,6 +390,7 @@
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="TotalPrice" contenteditable="true">
                       {{ item.TotalPrice or '' }}
+                      {{ "{:,.2f}".format(item.TotalPrice) if item.TotalPrice else '' }}
                     </div>
                   </dd>
 
@@ -397,6 +398,7 @@
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="TotalQuantity" contenteditable="true">
                       {{ item.TotalQuantity or '' }}
+                      {{ "{:,}".format(item.TotalQuantity) if item.TotalQuantity else '' }}
                     </div>
                   </dd>
 
@@ -423,6 +425,7 @@
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="SeedCount" contenteditable="true">
                       {{ item.SeedCountPerLB or '' }}
+                      {{ "{:,}".format(item.SeedCountPerLB) if item.SeedCountPerLB else '' }}
                     </div>
                   </dd>
 
@@ -877,15 +880,15 @@
             OriginCountry:          getFieldValue(card, 'OriginCountry'),
             CurrentGerm:            getFieldValue(card, 'Germ'),
             CurrentGermDate:        getFieldValue(card, 'GermDate'),
-            SeedCount:              getFieldValue(card, 'SeedCount'),
+            SeedCount:              getFieldValue(card, 'SeedCount').replace(/,/g, ''),
             USD_Actual_Cost_$:      getFieldValue(card, 'USD_Actual_Cost_$'),
             GrowerGerm:             getFieldValue(card, 'GrowerGerm'),
             GrowerGermDate:         getFieldValue(card, 'GrowerGermDate'),
             Purity:                 getFieldValue(card, 'Purity'),
             Inert:                  getFieldValue(card, 'Inert'),
             PackageDescription:     getFieldValue(card, 'PackageDescription'),
-            TotalQuantity:          getFieldValue(card, 'TotalQuantity'),
-            TotalPrice:             getFieldValue(card, 'TotalPrice')
+            TotalQuantity:          getFieldValue(card, 'TotalQuantity').replace(/,/g, ''),
+            TotalPrice:             getFieldValue(card, 'TotalPrice').replace(/,/g, ''),
         };
         
         if (!data.BCItemNo || !data.VendorLotNo) {
