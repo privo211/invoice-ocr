@@ -612,7 +612,7 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
                 if lot_no and batch_no:
                     agg_key = (lot_no, batch_no)
             
-            elif vendor in ["sakata", "nunhems"]:
+            elif vendor in ["sakata"]:
                 if lot_no:
                     agg_key = (lot_no,)
 
