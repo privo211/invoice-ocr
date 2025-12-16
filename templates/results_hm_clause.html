@@ -425,18 +425,12 @@
                   <dt class="col-sm-4">Seed Count</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="SeedCount" contenteditable="true">
-                      {{ item.SeedCount }}
-                    </div>
-                    <div class="field-box" data-field="SeedCount" contenteditable="true">
                       {{ "{:,}".format(item.SeedCount) if item.SeedCount is not none else '' }}
                     </div>
                   </dd>
 
                   <dt class="col-sm-4">Original Received Qty.</dt>
                   <dd class="col-sm-8">
-                    <div class="field-box" data-field="TotalQuantity" contenteditable="true">
-                      {{ item.TotalQuantity }}
-                    </div>
                     <div class="field-box" data-field="TotalQuantity" contenteditable="true">
                       {{ "{:,}".format(item.TotalQuantity) if item.TotalQuantity is not none else '' }}
                     </div>
@@ -445,9 +439,6 @@
                   <dt class="col-sm-4">Total Price</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="TotalPrice" contenteditable="true">
-                      {{ item.TotalPrice }}
-                    </div>
-                    <div class="field-box" data-field="TotalPrice" contenteditable="true">
                       {{ "{:,.2f}".format(item.TotalPrice) if item.TotalPrice is not none else '' }}
                     </div>
                   </dd>
@@ -455,18 +446,12 @@
                   <dt class="col-sm-4">Total Upcharge</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="TotalUpcharge" contenteditable="true">
-                      {{ item.TotalUpcharge }}
-                    </div>
-                    <div class="field-box" data-field="TotalUpcharge" contenteditable="true">
                       {{ "{:,.2f}".format(item.TotalUpcharge) if item.TotalUpcharge is not none else '' }}
                     </div>
                   </dd>
 
                   <dt class="col-sm-4">Total Discount</dt>
                   <dd class="col-sm-8">
-                    <div class="field-box" data-field="TotalDiscount" contenteditable="true">
-                      {{ item.TotalDiscount }}
-                    </div>
                     <div class="field-box" data-field="TotalDiscount" contenteditable="true">
                       {{ "{:,.2f}".format(item.TotalDiscount) if item.TotalDiscount is not none else '' }}
                     </div>

@@ -469,7 +469,6 @@
                     <dt class="col-sm-4">Seed Count</dt>
                     <dd class="col-sm-8">
                       <div class="field-box" data-field="SeedCount" contenteditable="true">
-                        {{ lot.SeedCount }}
                         {{ "{:,}".format(lot.SeedCount) if lot.SeedCount is not none else '' }}
                       </div>
                     </dd>
@@ -477,7 +476,6 @@
                     <dt class="col-sm-4">Original Received Qty.</dt>
                     <dd class="col-sm-8">
                       <div class="field-box" data-field="TotalQuantity" contenteditable="true">
-                        {{ lot.TotalQuantity }}
                         {{ "{:,.4f}".format(lot.TotalQuantity|float) if lot.TotalQuantity else '' }}
                       </div>
                     </dd>
@@ -485,7 +483,6 @@
                     <dt class="col-sm-4">Total Price</dt>
                     <dd class="col-sm-8">
                       <div class="field-box" data-field="TotalPrice" contenteditable="true">
-                        {{ lot.TotalPrice }}
                         {{ "{:,.2f}".format(lot.TotalPrice) if lot.TotalPrice is not none else '' }}
                       </div>
                     </dd>
