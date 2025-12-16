@@ -97,8 +97,12 @@
 #                 # Purity
 #                 if re.match(r"Pure\s*seeds?", ln, re.IGNORECASE):
 #                     found_floats = []
+#                     # Scan next 10 lines. Removed "Inert matter" from break condition.
 #                     for j in range(i+1, min(i+10, len(lines))):
-#                         if "Lot/Batch" in lines[j] or "Inert matter" in lines[j]: break
+#                         # Only break if we hit a new section unrelated to the table columns
+#                         if "Lot/Batch" in lines[j] or "Remarks:" in lines[j]: break
+                        
+#                         # Extract percentages
 #                         matches = re.findall(r"(\d{1,3}(?:\.\d+)?)%?", lines[j])
 #                         for m in matches:
 #                             try: found_floats.append(float(m))
@@ -106,11 +110,14 @@
                     
 #                     if len(found_floats) >= 1:
 #                         pure = found_floats[0]
+#                         # If a second number exists, assume it's inert; otherwise default 0.0
 #                         inert = found_floats[1] if len(found_floats) > 1 else 0.0
-#                         # CORRECTION: Force 99.99/0.01 if Purity is 100%
+                        
+#                         # Apply 100% logic
 #                         if pure == 100.0:
 #                             pure = 99.99
 #                             inert = 0.01
+                        
 #                         quality_map[current_lot]["PureSeeds"] = pure
 #                         quality_map[current_lot]["Inert"] = inert
 
@@ -167,7 +174,7 @@
 #                 # 1. Look Backward (for when S/C is above the lot line)
 #                 start_back = max(0, i - 10)
 #                 for j in range(i, start_back, -1):
-#                     if j < i and re.search(r"\b\d{11}\b", lines[j]): break # Stop if we hit previous lot
+#                     if j < i and re.search(r"\b\d{11}\b", lines[j]): break 
                     
 #                     if "S/C" in lines[j]:
 #                         if match := re.search(r"([\d,]+)\s*LBS", lines[j]):
@@ -185,7 +192,7 @@
 
 #                 # 2. Look Forward (Standard)
 #                 for j in range(i, min(i + 12, len(lines))):
-#                     if j > i and re.search(r"\b\d{11}\b", lines[j]): break # Stop at next lot
+#                     if j > i and re.search(r"\b\d{11}\b", lines[j]): break 
 
 #                     if "S/C" in lines[j]:
 #                         if match := re.search(r"([\d,]+)\s*LBS", lines[j]):
@@ -212,9 +219,10 @@
 #     items = []
     
 #     # Identify Item Headers by SDS quantity
+#     # CORRECTION: Added negative lookahead (?!\/LB) to ensure we don't pick up "SDS/LB" from lot lines.
 #     item_header_indices = []
 #     for i, line in enumerate(lines):
-#         if re.search(r"(\d+[\d,]*)\s+SDS", line):
+#         if re.search(r"(\d+[\d,]*)\s+SDS(?!\/LB)", line):
 #             item_header_indices.append(i)
     
 #     for idx, start_i in enumerate(item_header_indices):
@@ -223,12 +231,10 @@
 #         block_lines = lines[start_i-2 : end_i] 
 #         block_text = "\n".join(block_lines)
         
-#         # Packaging Context from Header (e.g. 6,000,000 SDS)
 #         sds_line = lines[start_i]
 #         packaging_context_match = re.search(r"([\d,]+)\s+SDS", sds_line)
 #         packaging_context_str = f"{packaging_context_match.group(1)} SDS" if packaging_context_match else ""
 
-#         # Description
 #         desc_part1 = lines[start_i - 1].strip() if start_i > 0 else ""
 #         desc_part2 = lines[start_i + 1].strip() if start_i + 1 < len(lines) else ""
 #         if re.match(r"^\d+$", desc_part1): desc_part1 = ""
@@ -238,7 +244,6 @@
 #         vendor_item_description = re.sub(r"\d+\s+BUCKET.*?SDS", packaging_context_str, vendor_item_description)
 #         vendor_item_description = re.sub(r"\s+", " ", vendor_item_description).strip()
 
-#         # Treatment
 #         treatment = "Untreated"
 #         if "TREATED" in block_text.upper() or "THIRAM" in block_text.upper():
 #             for l in block_lines[:10]:
@@ -246,7 +251,6 @@
 #                     treatment = l.strip()
 #                     break
 
-#         # Unit Price Extraction
 #         unit_price = 0.0
 #         price_match = re.search(r"(\d{1,3}(?:,\d{3})*\.\d{2})\s+.*?(?:1000|TH|M)", block_text, re.DOTALL)
 #         if price_match:
@@ -258,7 +262,6 @@
             
 #             if lot_match:
 #                 vendor_lot = lot_match.group(1)
-#                 # CORRECTION: Strictly cast to int to avoid ".0"
 #                 lot_qty = int(float(lot_match.group(2).replace(",", "")))
                 
 #                 origin_country = None
@@ -328,6 +331,7 @@
 #             invoice_items = _process_single_nunhems_invoice(lines, quality_map, germ_map, packing_map, pkg_desc_list)
 #             if invoice_items:
 #                 grouped_results[filename] = invoice_items
+    
 #     return grouped_results
 
 # def find_best_nunhems_package_description(vendor_desc: str, pkg_desc_list: list[str]) -> str:
@@ -521,7 +525,7 @@ def _extract_nunhems_packing_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[st
                 # 1. Look Backward (for when S/C is above the lot line)
                 start_back = max(0, i - 10)
                 for j in range(i, start_back, -1):
-                    if j < i and re.search(r"\b\d{11}\b", lines[j]): break 
+                    if j < i and re.search(r"\b\d{11}\b", lines[j]): break # Stop if we hit previous lot
                     
                     if "S/C" in lines[j]:
                         if match := re.search(r"([\d,]+)\s*LBS", lines[j]):
@@ -539,7 +543,7 @@ def _extract_nunhems_packing_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[st
 
                 # 2. Look Forward (Standard)
                 for j in range(i, min(i + 12, len(lines))):
-                    if j > i and re.search(r"\b\d{11}\b", lines[j]): break 
+                    if j > i and re.search(r"\b\d{11}\b", lines[j]): break # Stop at next lot
 
                     if "S/C" in lines[j]:
                         if match := re.search(r"([\d,]+)\s*LBS", lines[j]):
@@ -563,10 +567,13 @@ def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_ma
     if m := re.search(r"Customer\s+P\.?O\.?\s+Number[:\s]+([\s\S]*?)\b(\d{5})\b", text_content, re.IGNORECASE):
         po_number = f"PO-{m.group(2)}"
 
+    # Check for Kamterter address to force specific package description
+    is_kamterter = "KAMTERTER" in text_content.upper()
+
     items = []
     
     # Identify Item Headers by SDS quantity
-    # CORRECTION: Added negative lookahead (?!\/LB) to ensure we don't pick up "SDS/LB" from lot lines.
+    # Negative lookahead (?!\/LB) to ensure we don't pick up "SDS/LB" from lot lines
     item_header_indices = []
     for i, line in enumerate(lines):
         if re.search(r"(\d+[\d,]*)\s+SDS(?!\/LB)", line):
@@ -603,7 +610,6 @@ def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_ma
         if price_match:
             unit_price = float(price_match.group(1).replace(",", ""))
         
-        # Extract Lots
         for l_line in block_lines:
             lot_match = re.search(r"(\d{11})\s*\|\s*([\d,]+)\s*\|", l_line)
             
@@ -620,7 +626,9 @@ def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_ma
                 packing_info = packing_map.get(vendor_lot, {})
                 
                 # Package Description Logic
-                if packaging_context_str:
+                if is_kamterter:
+                    package_description = "SUBCON BULK-MS"
+                elif packaging_context_str:
                     pkg_candidate = packaging_context_str.replace("SDS", "SEEDS").replace(",", "")
                     try:
                         formatted_pkg = f"{int(pkg_candidate.split()[0]):,} SEEDS"
@@ -633,7 +641,6 @@ def _process_single_nunhems_invoice(lines: List[str], quality_map: dict, germ_ma
                 else:
                     package_description = find_best_nunhems_package_description(vendor_item_description, pkg_desc_list)
 
-                # Calculations
                 total_line_price = 0.0
                 calculated_cost = 0.0
                 if unit_price:
@@ -678,7 +685,6 @@ def extract_nunhems_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_desc
             invoice_items = _process_single_nunhems_invoice(lines, quality_map, germ_map, packing_map, pkg_desc_list)
             if invoice_items:
                 grouped_results[filename] = invoice_items
-    
     return grouped_results
 
 def find_best_nunhems_package_description(vendor_desc: str, pkg_desc_list: list[str]) -> str:
