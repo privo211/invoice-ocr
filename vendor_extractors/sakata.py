@@ -880,12 +880,12 @@ def parse_lot_block(raw_text: str) -> Dict:
         lot_no = parts[0].strip()
         
         # 1. Extract specific lot quantity from line 2
-        total_qty = None
+        ship_qty = None
         if len(parts) > 1:
             try:
                 # Remove commas and attempt conversion
                 q_str = parts[1].replace(",", "").strip()
-                total_qty = float(q_str)
+                ship_qty = float(q_str)
             except ValueError:
                 # If parts[1] is not a number (e.g. "WL"), keep total_qty as None
                 pass
@@ -944,7 +944,7 @@ def parse_lot_block(raw_text: str) -> Dict:
             "VendorLotNo": lot_no, "CurrentGerm": current_germ, "GermDate": germ_date,
             "SeedCount": seed_count, "SeedSize": seed_size, "GrowerGerm": None,
             "GrowerGermDate": None, "Purity": None, "OriginCountry": bc_origin,
-            "SproutCount": sprout, "Inert": None, "TotalQuantity": total_qty
+            "SproutCount": sprout, "Inert": None
         }
     except Exception as e:
         return {"error": str(e), "raw": raw_text}
@@ -1268,15 +1268,18 @@ def extract_invoice_from_pdf(
                 shipped = int(float(parts[ui + 2])) if len(parts) > ui + 2 else None
                 
                 usd_actual_cost = None
+                org_rec_qty = None
+                
                 if all(v is not None and v != 0 for v in [pkg_qty, shipped, total_price]):
                     # Format as string to preserve trailing zeros
+                    org_rec_qty = f"{(shipped * pkg_qty):.4f}"
                     usd_actual_cost = f"{(total_price / (shipped * pkg_qty)):.4f}"
                     print(f"USD Actual Cost: {usd_actual_cost}: {total_price} / ({shipped} * {pkg_qty})")
 
                 current = {
                     "VendorItemNumber": item_no, "VendorDescription": desc, "QtyShipped": shipped,
                     "USD_Actual_Cost_$": usd_actual_cost, "PackageDescription": find_best_package_description(desc),
-                    "TreatmentName": None, "PurchaseOrder": "", "TotalPrice": total_price, "Lots": []
+                    "TreatmentName": None, "PurchaseOrder": "", "TotalPrice": total_price, "Lots": [], "TotalQuantity": org_rec_qty
                 }
                 text_acc = item_line_acc + "\n"
                 i = j
@@ -1284,7 +1287,11 @@ def extract_invoice_from_pdf(
 
             if current:
                 text_acc += txt + "\n"
-                if re.match(r"^\d{6}-\d{3}", txt):
+                # if re.match(r"^\d{6}-\d{3}", txt):
+                #     current["Lots"].append(b[4])
+                if re.match(r"^\d{6}-[\d-]+", txt):
+                    current["Lots"].append(b[4])
+                elif re.match(r"^\d{6}-\d{3}", txt):
                     current["Lots"].append(b[4])
             i += 1
 
