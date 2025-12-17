@@ -20,6 +20,7 @@ def extract_text_with_azure_ocr(pdf_bytes: bytes) -> List[str]:
         "Ocp-Apim-Subscription-Key": AZURE_KEY,
         "Content-Type": "application/pdf"
     }
+    print(f"DEBUG: Starting Azure OCR...")
     response = requests.post(
         f"{AZURE_ENDPOINT}formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31",
         headers=headers,
@@ -27,6 +28,7 @@ def extract_text_with_azure_ocr(pdf_bytes: bytes) -> List[str]:
     )
 
     if response.status_code != 202:
+        print(f"DEBUG: OCR request failed: {response.text}")
         raise RuntimeError(f"OCR request failed: {response.text}")
 
     result_url = response.headers["Operation-Location"]
@@ -47,9 +49,11 @@ def extract_text_with_azure_ocr(pdf_bytes: bytes) -> List[str]:
                         lines.append(content)
                 lines.append("--- PAGE BREAK ---")
             
+            print(f"DEBUG: OCR Success. Extracted {len(lines)} lines.")
             return lines
 
         elif result.get("status") == "failed":
+            print("DEBUG: OCR analysis failed status.")
             raise RuntimeError("OCR analysis failed")
     raise TimeoutError("OCR timed out")
 
@@ -60,7 +64,6 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
     vendor_invoice_no = None
     po_number = None
     
-    # Aggregated text for robust searching
     full_ocr_text = " ".join(lines)
 
     def extract_discounts_from_ocr_lines(lines: List[str]) -> Dict[str, List[float]]:
@@ -104,14 +107,12 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
 
     discounts_by_item = extract_discounts_from_ocr_lines(lines)
 
-    # 1. Try finding Invoice No. in individual lines (Strict Digits Only)
     for line in lines:
         if m_invoice := re.search(r"Invoice\s*(?:No\.?|#|Number)?\s*[:\.]?\s*(\d{5,})", line, re.IGNORECASE):
             vendor_invoice_no = m_invoice.group(1)
             print(f"DEBUG: Found Invoice No (OCR Line): {vendor_invoice_no}")
             break
             
-    # 2. Fallback: Search in full aggregated text (Strict Digits Only)
     if not vendor_invoice_no:
         if m_invoice := re.search(r"Invoice\s*(?:No\.?|#|Number)?\s*[:\.]?\s*(\d{5,})", full_ocr_text, re.IGNORECASE):
             vendor_invoice_no = m_invoice.group(1)
@@ -248,36 +249,36 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
     return line_items
 
 def _choose_batch_key(report_text_upper: str, filename: str) -> str | None:
-    # 1) Prefer explicit labels in the report
-    m = re.search(r"(?:LOT\s*#|BATCH\s*#)\s*[:\-]?\s*([A-Z]\d{5,})", report_text_upper, re.IGNORECASE)
+    # 1) Prefer explicit labels
+    m = re.search(r"(?:LOT|BATCH)\s*(?:#|NO\.?)?\s*[^A-Z0-9]*([A-Z]{1,2}\d{5,})", report_text_upper, re.IGNORECASE)
     if m:
-        return m.group(1)[:6].upper()
+        return m.group(1).upper()
 
-    # 2) Try filename starting token
-    m = re.match(r"([A-Z]\d{5,})", os.path.basename(filename).upper())
+    # 2) Try filename
+    m = re.match(r"([A-Z]{1,2}\d{5,})", os.path.basename(filename).upper())
     if m:
-        return m.group(1)[:6].upper()
+        return m.group(1).upper()
 
-    # 3) As a last resort, use the LAST code-looking token
-    codes = re.findall(r"\b([A-Z]\d{5,})\b", report_text_upper)
+    # 3) Last resort: use last code-looking token
+    codes = re.findall(r"\b([A-Z]{1,2}\d{5,})\b", report_text_upper)
     if codes:
-        return codes[-1][:6].upper()
-
+        for c in reversed(codes): 
+             if c.startswith('K') or c.startswith('PL'):
+                 return c.upper()
+        return codes[-1].upper()
     return None
 
 def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]]) -> Dict[str, Dict]:
     purity_data = defaultdict(dict)
     for filename, pdf_bytes in pdf_files:
+        print(f"DEBUG: Checking file: {filename}")
         try:
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             text = ""
-            
-            # Pass 1: Attempt to get native text
             for page in doc:
                 text += page.get_text() + " " 
             doc.close()
 
-            # Pass 2: If text is empty/short or missing keywords, assume scan -> OCR
             is_valid_report_text = "REPORT" in text.upper() or "ANALYSIS" in text.upper()
             if not text.strip() or not is_valid_report_text:
                 print(f"INFO: {filename} missing keywords/text. Attempting OCR.")
@@ -288,25 +289,22 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
                     print(f"OCR failed for {filename}: {e}")
                     continue
 
-            # Pass 3: Identify if this is actually a Seed Analysis Report
             if "REPORT" not in text.upper() and "ANALYSIS" not in text.upper():
                 print(f"DEBUG: Skipping {filename} - Not a report/analysis doc.")
                 continue
             
-            # Extract Batch/Lot Key
             U = text.upper()
             batch_key = _choose_batch_key(U, filename)
             if not batch_key:
                 print(f"DEBUG: Could not identify batch key for {filename}")
                 continue
             
+            print(f"DEBUG: Identified Report for Batch/Lot: {batch_key}")
             keys_to_store = [batch_key]
             if len(batch_key) > 6:
                 keys_to_store.append(batch_key[:6])
 
             data_found = {}
-            
-            # Purity/Inert
             match_pure = re.search(r"Pure Seed[^0-9]*(\d+(?:\.\d+)?)[^0-9%]*%", text, re.IGNORECASE)
             match_inert = re.search(r"Inert Matter[^0-9]*(\d+(?:\.\d+)?)[^0-9%]*%", text, re.IGNORECASE)
 
@@ -315,17 +313,18 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
                 data_found["PureSeed"] = 99.99 if pure_seed == 100 else pure_seed
                 data_found["InertMatter"] = 0.01 if pure_seed == 100 else float(match_inert.group(1))
 
-            # Grower Germ
             if match := re.search(r"%\s*Comments:\s*(?:[A-Za-z]+\s+)*(\d{2,3})\b", text, re.IGNORECASE | re.DOTALL):
                 germ = int(float(match.group(1)))
                 data_found["GrowerGerm"] = germ
                 data_found["Germ"] = 98 if germ == 100 else germ
             
-            # Germ Date
             germ_date = _extract_germ_date_from_report(text)
             if germ_date:
                 data_found["GrowerGermDate"] = germ_date
                 data_found["GermDate"] = germ_date
+                print(f"DEBUG: Extracted Germ Date: {germ_date}")
+            else:
+                print("DEBUG: Failed to extract Germ Date.")
 
             if data_found:
                 for k in keys_to_store:
@@ -349,41 +348,45 @@ def _normalize_mdy(s: str) -> str:
 def _extract_germ_date_from_report(txt: str) -> str | None:
     """
     Extracts the germ date. Smartly handles 'Date Issued' vs 'Test Date'.
+    Fallbacks to 'Date Issued' if 'Test Date' is missing.
     """
     flat = re.sub(r"\s+", " ", txt)
     def _norm(mdy: str) -> str:
         return _normalize_mdy(mdy)
 
-    # 1. Attempt to find "Date Issued" to avoid confusing it with Test Date
+    # 1. Identify 'Date Issued' (Expanded window to 300 chars to catch far-away values)
     date_issued = None
-    m_issued = re.search(r"Date\s*Issued[^0-9]{0,30}([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", flat, re.IGNORECASE)
+    m_issued = re.search(r"Date\s*Issued[^0-9]{0,300}([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", flat, re.IGNORECASE)
     if m_issued:
         date_issued = _norm(m_issued.group(1))
+        print(f"DEBUG: Found Date Issued: {date_issued}")
 
-    # 2. Try direct 'Test Date'
-    # We find all matches for Test Date patterns
-    # If a match equals the Date Issued, we skip it and look for the next one.
-    matches = re.findall(r"(?:Test|Germ(?:ination)?)\s*Date[^0-9]{0,80}([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", flat, re.IGNORECASE)
-    
-    for date_str in matches:
-        norm_date = _norm(date_str)
-        # If we found a Date Issued and this date is the same, it's likely the merged column header problem. Skip.
-        if date_issued and norm_date == date_issued:
-            continue
-        return norm_date # Return the first date that isn't the Issue Date
-
-    # 3. Fallback: Proximity heuristic for 'Test Date'
-    lbl = re.search(r"Test\s*Date", txt, re.IGNORECASE)
-    if lbl:
-        window = txt[lbl.end(): lbl.end() + 400]
-        m = re.search(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", window)
-        if m: 
-            norm_date = _norm(m.group(1))
+    # 2. Find "Test Date" label and look AHEAD for all valid dates (Expanded window to 500 chars)
+    label_match = re.search(r"(?:Test|Germ(?:ination)?)\s*Date", flat, re.IGNORECASE)
+    if label_match:
+        window_size = 500
+        search_window = flat[label_match.end(): label_match.end() + window_size]
+        found_dates = re.findall(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", search_window)
+        print(f"DEBUG: Dates found after 'Test Date' label: {found_dates}")
+        
+        for date_str in found_dates:
+            norm_date = _norm(date_str)
             if date_issued and norm_date == date_issued:
-                # Try finding a second date in the same window
-                m2 = re.search(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", window[m.end():])
-                if m2: return _norm(m2.group(1))
+                print(f"DEBUG: Skipping date {norm_date} because it matches Date Issued.")
+                continue
             return norm_date
+
+    # 3. Fallback: Return 'Date Issued' if nothing else worked
+    if date_issued:
+        print(f"DEBUG: Fallback to Date Issued: {date_issued}")
+        return date_issued
+        
+    # 4. Final Resort: Just grab the second date pattern found in the whole text
+    # This covers cases where labels are scrambled or missing
+    any_dates = re.findall(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", flat)
+    if any_dates:
+        print(f"DEBUG: Last Resort - picking second date found: {any_dates[0]}")
+        return _norm(any_dates[1])
 
     return None
 
@@ -449,7 +452,6 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
     po_number = None
     full_text = ""
 
-    # Collect & sort blocks from pages that are not the warranty page
     for page in doc:
         if "limitation of warranty and liability" in page.get_text("text").lower():
             continue
@@ -460,11 +462,9 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
         sorted_blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
         all_blocks.extend(sorted_blocks)
         for b in sorted_blocks:
-            full_text += b[4] + " " # Append with space to ensure separation
+            full_text += b[4] + " "
     doc.close()
     
-    # --- INVOICE EXTRACTION LOGIC ---
-    # 1. Try block-level search (Strict Digits Only)
     for block in all_blocks:
         text = block[4].strip()
         if m_invoice := re.search(r"Invoice\s*(?:No\.?|#|Number)?\s*[:\.]?\s*(\d{5,})", text, re.IGNORECASE):
@@ -472,13 +472,11 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
             print(f"DEBUG: Found Invoice No (Block): {vendor_invoice_no}")
             break
     
-    # 2. Fallback: Search full text if block search failed (Strict Digits Only)
     if not vendor_invoice_no:
         if m_invoice := re.search(r"Invoice\s*(?:No\.?|#|Number)?\s*[:\.]?\s*(\d{5,})", full_text, re.IGNORECASE):
             vendor_invoice_no = m_invoice.group(1)
             print(f"DEBUG: Found Invoice No (FullText): {vendor_invoice_no}")
 
-    # Extract PO No.
     if m_po := re.search(r"Customer PO No\.\s*.*?(\d{5})", full_text, re.IGNORECASE):
         po_number = f"PO-{m_po.group(1)}"
 
@@ -528,7 +526,6 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
     for idx, b in enumerate(all_blocks):
         block_text = b[4].strip()
 
-        # Batch lot trigger
         if re.fullmatch(r"[A-Z]\d{5}", block_text):
             if "VendorBatchLot" not in current_item_data:
                 current_item_data["VendorBatchLot"] = block_text
