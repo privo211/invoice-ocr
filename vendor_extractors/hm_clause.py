@@ -105,17 +105,14 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
 
     discounts_by_item = extract_discounts_from_ocr_lines(lines)
 
-    # STRICT INVOICE NUMBER REGEX (Digits Only)
     for line in lines:
         if m_invoice := re.search(r"Invoice\s*(?:No\.?|#|Number)?\s*[:\.]?\s*(\d{5,})", line, re.IGNORECASE):
             vendor_invoice_no = m_invoice.group(1)
-            print(f"DEBUG: Found Invoice No (OCR Line): {vendor_invoice_no}")
             break
             
     if not vendor_invoice_no:
         if m_invoice := re.search(r"Invoice\s*(?:No\.?|#|Number)?\s*[:\.]?\s*(\d{5,})", full_ocr_text, re.IGNORECASE):
             vendor_invoice_no = m_invoice.group(1)
-            print(f"DEBUG: Found Invoice No (OCR FullText): {vendor_invoice_no}")
 
     for line in lines:
         m_po = re.search(r"Customer PO No\.\s*.*?(\d{5})", line, re.IGNORECASE)
@@ -181,12 +178,8 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
             part2 = re.sub(r"\bHM.*$", "", line, flags=re.IGNORECASE).strip()
             part2 = re.sub(r"^(Flc\.|Plt\.\w+)\s*", "", part2, flags=re.IGNORECASE)
             
-            # --- FIX: Stop capturing description after the unit (Ks/MS) ---
-            # This prevents the Quantity column (e.g., "60 KS") from being appended to the description
-            # if it appears later on the same line.
             unit_match = re.search(r"\b\d+\s*(Ks|MS)\b", part2, re.IGNORECASE)
             if unit_match:
-                # Keep everything up to the end of "30 Ks"
                 part2 = part2[:unit_match.end()]
             
             current["VendorItemDescription"] = f"{desc_part1} {part2}"
@@ -254,6 +247,8 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
         qty = item.get("TotalQuantity")
         item["USD_Actual_Cost_$"] = round(((tp + tu - td) / qty), 4) if qty and qty > 0 else None
 
+    # Fix: Return only line_items to match signature expected by caller (caller expects List or Dict, but if called by extract_hm_clause_invoice... we need just list here)
+    # Actually, the caller `extract_hm_clause_invoice_data_from_bytes` handles the tuple packing.
     return line_items
 
 def _choose_batch_key(report_text_upper: str, filename: str) -> str | None:
@@ -334,7 +329,7 @@ def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]
 def _normalize_mdy(s: str) -> str:
     m, d, y = re.match(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", s).groups()
     y = int(y)
-    if y < 100:  # expand 2-digit year
+    if y < 100:
         y += 2000 if y < 50 else 1900
     return f"{int(m)}/{int(d)}/{y}"
 
@@ -422,13 +417,19 @@ def extract_discounts(blocks: List) -> List[Tuple[str, float]]:
                     prev_discount = current_discount
     return discounts
 
-def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
+def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> Tuple[List[Dict], Dict]:
     """
-    Extracts invoice data from in-memory PDF bytes using the ORIGINAL parsing logic.
+    Extracts invoice data from in-memory PDF bytes.
+    Returns:
+        - List of extracted items
+        - Dictionary with extraction metadata (page_count, method)
     """
     item_usage_counter.clear()
     
-    extraction_info = {'page_count': 0, 'method': 'PyMuPDF'}
+    extraction_info = {
+        'page_count': 0,
+        'method': 'PyMuPDF' # Default
+    }
     
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     extraction_info['page_count'] = doc.page_count
@@ -437,33 +438,38 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
     vendor_invoice_no = None
     po_number = None
     full_text = ""
+    
+    ocr_triggered = False
 
     for page in doc:
         if "limitation of warranty and liability" in page.get_text("text").lower():
             continue
         blocks = page.get_text("blocks")
+        
+        # Fallback to OCR if page is blank or image-based
         if not blocks or not any(b[4].strip() for b in blocks):
-            doc.close()
+            ocr_triggered = True
+            doc.close() # Close doc before handing off bytes
             ocr_lines = extract_text_with_azure_ocr(pdf_bytes)
             extraction_info['method'] = 'Azure OCR'
             return extract_items_from_ocr_lines(ocr_lines), extraction_info
+            
         sorted_blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
         all_blocks.extend(sorted_blocks)
         for b in sorted_blocks:
             full_text += b[4] + " "
     doc.close()
     
+    # ... Standard PyMuPDF Extraction Logic ...
     for block in all_blocks:
         text = block[4].strip()
         if m_invoice := re.search(r"Invoice\s*(?:No\.?|#|Number)?\s*[:\.]?\s*(\d{5,})", text, re.IGNORECASE):
             vendor_invoice_no = m_invoice.group(1)
-            print(f"DEBUG: Found Invoice No (Block): {vendor_invoice_no}")
             break
     
     if not vendor_invoice_no:
         if m_invoice := re.search(r"Invoice\s*(?:No\.?|#|Number)?\s*[:\.]?\s*(\d{5,})", full_text, re.IGNORECASE):
             vendor_invoice_no = m_invoice.group(1)
-            print(f"DEBUG: Found Invoice No (FullText): {vendor_invoice_no}")
 
     if m_po := re.search(r"Customer PO No\.\s*.*?(\d{5})", full_text, re.IGNORECASE):
         po_number = f"PO-{m_po.group(1)}"
@@ -541,7 +547,6 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
             part2 = re.sub(r"\bHM.*$", "", block_text, flags=re.IGNORECASE).strip()
             part2 = re.sub(r"^(Flc\.|Plt\.\w+)\s*", "", part2, flags=re.IGNORECASE)
             
-            # --- FIX: Stop capturing description after the unit (Ks/MS) ---
             unit_match = re.search(r"\b\d+\s*(Ks|MS)\b", part2, re.IGNORECASE)
             if unit_match:
                 part2 = part2[:unit_match.end()]
@@ -591,15 +596,18 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> List[Dict]:
     flush_item()
     
     item_counter = defaultdict(int)
+    discounts_by_item = defaultdict(list)
+    for item_num, amount in discount_amounts:
+        discounts_by_item[item_num].append(amount)
+
     for item in line_items:
-        if not (item_num := item.get("VendorItemNumber")):
-            continue
-        occurrence_idx = item_counter[item_num]
-        item_counter[item_num] += 1
-        if occurrence_idx < len(discounts_by_item.get(item_num, [])):
-            item["TotalDiscount"] = discounts_by_item[item_num][occurrence_idx]
-        else:
-            item["TotalDiscount"] = None
+        if item_num := item.get("VendorItemNumber"):
+            occurrence_idx = item_counter[item_num]
+            item_counter[item_num] += 1
+            if occurrence_idx < len(discounts_by_item.get(item_num, [])):
+                item["TotalDiscount"] = discounts_by_item[item_num][occurrence_idx]
+            else:
+                item["TotalDiscount"] = None
     
     for item in line_items:
         tp = item.get("TotalPrice") or 0.0
@@ -622,8 +630,9 @@ def extract_hm_clause_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             continue
 
         try:
-            items = extract_hm_clause_invoice_data_from_bytes(pdf_bytes)
+            items, info = extract_hm_clause_invoice_data_from_bytes(pdf_bytes)
             
+            # --- LOGGING ---
             po_number = items[0].get("PurchaseOrder") if items else None
             log_processing_event(
                 vendor='HM Clause',
