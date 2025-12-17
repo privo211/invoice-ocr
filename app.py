@@ -294,13 +294,101 @@ def token_is_valid(access_token: str) -> bool:
     
 #     return None
 
-def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | None:
+# def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | None:
+#     """
+#     Finds the best BC Item Number using a hybrid approach with strict validation:
+#     1. Fuzzy String Similarity (Base Score 0-100)
+#     2. ID Substring Matching (Bonus +50) -> STRICTLY for Numeric/Alphanumeric codes
+#     3. Tie-Breaking: If multiple items have the same top score, return None (Manual).
+#     4. Strict Threshold: Only accepts matches with very high confidence.
+#     """
+#     if not vendor_desc or not bc_options:
+#         return None
+
+#     # Normalization helper: Lowercase and space-separated punctuation
+#     def normalize(text):
+#         return re.sub(r'[^\w\s]', ' ', text.lower())
+
+#     norm_vendor = normalize(vendor_desc)
+#     # Create a set of tokens for ID checking
+#     vendor_tokens = set(norm_vendor.split())
+    
+#     best_match_no = None
+#     best_score = 0
+#     is_tie = False
+
+#     for option in bc_options:
+#         bc_desc = option.get("Description", "")
+#         if not bc_desc:
+#             continue
+        
+#         bc_no = option.get("No", "")
+#         norm_bc = normalize(bc_desc)
+#         bc_tokens = set(norm_bc.split())
+
+#         # --- Scoring Logic ---
+#         score = 0
+
+#         # 1. Fuzzy Similarity (Base Score 0-100)
+#         # Sort words to ensure "Corn Sweet" matches "Sweet Corn"
+#         sorted_vendor = " ".join(sorted(norm_vendor.split()))
+#         sorted_bc = " ".join(sorted(norm_bc.split()))
+        
+#         # difflib calculates how many characters match
+#         fuzzy_ratio = difflib.SequenceMatcher(None, sorted_vendor, sorted_bc).ratio()
+#         score += fuzzy_ratio * 100 
+
+#         # 2. Critical ID Match (Bonus +50)
+#         # Only matches if the token is NOT purely alphabetic (must contain digits)
+#         id_match_found = False
+#         for v_tok in vendor_tokens:
+#             # Skip short tokens (< 4 chars) OR purely alphabetic words (e.g. "UNTREATED", "HYBRID")
+#             if len(v_tok) < 4 or v_tok.isalpha(): 
+#                 continue 
+            
+#             # Check against all BC tokens
+#             for b_tok in bc_tokens:
+#                 # BC tokens must also be long enough and not just words
+#                 if len(b_tok) < 4 or b_tok.isalpha(): 
+#                     continue
+                
+#                 # Check for substring match (e.g. Vendor "SV9010SA" vs BC "SV9010SA")
+#                 if v_tok == b_tok or v_tok in b_tok or b_tok in v_tok:
+#                     score += 61 # Reduced bonus
+#                     id_match_found = True
+#                     break
+#             if id_match_found: break
+
+#         # 3. Selection & Tie Detection
+#         if score > best_score:
+#             best_score = score
+#             best_match_no = bc_no
+#             is_tie = False
+#         elif score == best_score and score > 0:
+#             is_tie = True
+
+#     # --- Strict Acceptance Criteria ---
+    
+#     # 1. If there's a tie (ambiguity), force manual selection
+#     if is_tie:
+#         return None
+
+#     # 2. Threshold check:
+#     # Score >= 60: High confidence. 
+#     # (Example: 40 fuzzy + 50 ID match = 90, OR 90+ fuzzy match)
+#     if best_score >= 60:
+#         return best_match_no
+    
+#     return None
+
+def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: str = None) -> str | None:
     """
     Finds the best BC Item Number using a hybrid approach with strict validation:
     1. Fuzzy String Similarity (Base Score 0-100)
     2. ID Substring Matching (Bonus +50) -> STRICTLY for Numeric/Alphanumeric codes
     3. Tie-Breaking: If multiple items have the same top score, return None (Manual).
-    4. Strict Threshold: Only accepts matches with very high confidence.
+    4. Strict Threshold: Only accepts matches with very high confidence, 
+       UNLESS vendor is HM Clause, where we lower the threshold.
     """
     if not vendor_desc or not bc_options:
         return None
@@ -374,9 +462,13 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | N
         return None
 
     # 2. Threshold check:
-    # Score >= 60: High confidence. 
-    # (Example: 40 fuzzy + 50 ID match = 90, OR 90+ fuzzy match)
-    if best_score >= 60:
+    # Default: Score >= 60 (High confidence)
+    # HM Clause exception: Score >= 30 (Lower confidence due to single keyword matches)
+    threshold = 60
+    if vendor == "hm_clause":
+        threshold = 30
+    
+    if best_score >= threshold:
         return best_match_no
     
     return None
@@ -638,8 +730,12 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
 
                 if desc_key and "[COMBINED]" not in existing_item[desc_key]:
                     current_desc = existing_item[desc_key]
-                    modified_desc = re.sub(r"\s+[\d,]+\s+\w+$", "", current_desc).strip()
-                    existing_item[desc_key] = f"{modified_desc} [COMBINED]"
+                    if vendor == "hm_clause":
+                        # For HM Clause, preserve the full description (including "Pail 30 Ks")
+                        existing_item[desc_key] = f"{current_desc} [COMBINED]"
+                    else:
+                        modified_desc = re.sub(r"\s+[\d,]+\s+\w+$", "", current_desc).strip()
+                        existing_item[desc_key] = f"{modified_desc} [COMBINED]"
                 
                 existing_qty = float(existing_item.get("TotalQuantity", 0) or 0)
                 existing_price = float(existing_item.get("TotalPrice", 0) or 0)
@@ -920,7 +1016,7 @@ def index():
                         
                         # Find the best matching BC item
                         vendor_desc = item.get("VendorDescription", "") # Corrected key from VendorItemDescription
-                        item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
+                        item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"], vendor=vendor)
                         
                 except Exception as e:
                     app.logger.error(f"Failed to fetch PO items: {e}")
@@ -967,7 +1063,7 @@ def index():
                     item["BCOptions"] = []
                     
                 vendor_desc = item.get("VendorItemDescription", "")
-                item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
+                item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"], vendor=vendor)
                 
                 # Find and add the best package description
                 item["PackageDescription"] = find_best_hm_clause_package_description(vendor_desc, pkg_descs)
@@ -1010,7 +1106,7 @@ def index():
             for item in all_items_flat:
                 item["BCOptions"] = po_items_for_all if item.get("PurchaseOrder") else []
                 vendor_desc = item.get("VendorItemDescription", "")
-                item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
+                item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"], vendor=vendor)
                 #item["PackageDescription"] = find_best_seminis_package_description(vendor_desc, pkg_descs)
 
             # 6. Render the template
@@ -1050,7 +1146,7 @@ def index():
             for item in all_items_flat:
                 item["BCOptions"] = po_items_for_all if item.get("PurchaseOrder") else []
                 vendor_desc = item.get("VendorItemDescription", "")
-                item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"])
+                item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"], vendor=vendor)
             
             # 6. Render the template
             return render_template(

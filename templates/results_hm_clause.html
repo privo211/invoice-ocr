@@ -439,21 +439,21 @@
                   <dt class="col-sm-4">Total Price</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="TotalPrice" contenteditable="true">
-                      {{ "{:,.2f}".format(item.TotalPrice) if item.TotalPrice is not none else '' }}
+                      {{ "{:,.2f}".format(item.TotalPrice) if item.TotalPrice is not none else 'None' }}
                     </div>
                   </dd>
 
                   <dt class="col-sm-4">Total Upcharge</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="TotalUpcharge" contenteditable="true">
-                      {{ "{:,.2f}".format(item.TotalUpcharge) if item.TotalUpcharge is not none else '' }}
+                      {{ "{:,.2f}".format(item.TotalUpcharge) if item.TotalUpcharge is not none else 'None' }}
                     </div>
                   </dd>
 
                   <dt class="col-sm-4">Total Discount</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="TotalDiscount" contenteditable="true">
-                      {{ "{:,.2f}".format(item.TotalDiscount) if item.TotalDiscount is not none else '' }}
+                      {{ "{:,.2f}".format(item.TotalDiscount) if item.TotalDiscount is not none else 'None' }}
                     </div>
                   </dd>
 
