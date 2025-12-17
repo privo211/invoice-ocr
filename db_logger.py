@@ -42,24 +42,36 @@ def init_db():
     db.commit()
     cur.close()
     close_db()
-
+    
 def log_processing_event(vendor, filename, extraction_info, po_number=None):
-    """Logs a single document processing event to the database."""
-    sql = """
-        INSERT INTO processing_log (vendor, po_number, filename, extraction_method, page_count, line_count)
-        VALUES (%s, %s, %s, %s, %s, %s);
-    """
+    """Logs a single document processing event and prunes old logs (keeps last 100)."""
     db = get_db()
     cur = db.cursor()
     try:
-        cur.execute(sql, (
+        # 1. Insert new log
+        insert_sql = """
+            INSERT INTO processing_log (vendor, po_number, filename, extraction_method, page_count)
+            VALUES (%s, %s, %s, %s, %s);
+        """
+        cur.execute(insert_sql, (
             vendor,
             po_number,
             filename,
-            extraction_info.get('method'),
-            extraction_info.get('page_count'),
-            len(extraction_info.get('lines', []))
+            extraction_info.get('method', 'Unknown'),
+            extraction_info.get('page_count', 0)
         ))
+        
+        # 2. Prune: Delete all but the latest 100 entries
+        prune_sql = """
+            DELETE FROM processing_log 
+            WHERE id NOT IN (
+                SELECT id FROM processing_log 
+                ORDER BY timestamp DESC 
+                LIMIT 100
+            );
+        """
+        cur.execute(prune_sql)
+        
         db.commit()
     except Exception as e:
         db.rollback()
@@ -95,13 +107,13 @@ def get_log_stats():
         'ocr_percent': round((ocr / total) * 100, 1) if total > 0 else 0
     }
 
-def get_paginated_logs(page=1, per_page=20):
-    """Retrieves a paginated list of all log entries."""
+def get_paginated_logs(page=1, per_page=50):
+    """Retrieves a paginated list of log entries."""
     offset = (page - 1) * per_page
     db = get_db()
     cur = db.cursor()
     cur.execute("""
-        SELECT timestamp, vendor, po_number, filename, extraction_method, page_count, line_count
+        SELECT timestamp, vendor, po_number, filename, extraction_method, page_count
         FROM processing_log
         ORDER BY timestamp DESC
         LIMIT %s OFFSET %s;
