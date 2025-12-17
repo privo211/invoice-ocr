@@ -473,199 +473,10 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: st
     
     return None
 
-# --------------------------------------------------------------------------------------
-# --------------------------------------------------------------------------------------# 
-# --------------------------------------------------------------------------------------
-# def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict]) -> str | None:
-#     """
-#     Finds the best BC Item Number using a hybrid approach:
-#     1. Fuzzy String Similarity (Handles 'HYB' vs 'HYBRID', word reordering)
-#     2. ID Substring Matching (Crucial for codes like SV9010SA or EX08767143)
-#     3. No Match Penalties (Picks the best winner even if score is close)
-#     """
-#     if not vendor_desc or not bc_options:
-#         return None
-
-#     # Normalization helper: Lowercase and space-separated punctuation
-#     def normalize(text):
-#         return re.sub(r'[^\w\s]', ' ', text.lower())
-
-#     norm_vendor = normalize(vendor_desc)
-#     # Create a set of tokens for ID checking
-#     vendor_tokens = set(norm_vendor.split())
-    
-#     best_match_no = None
-#     best_score = 0
-
-#     for option in bc_options:
-#         bc_desc = option.get("Description", "")
-#         if not bc_desc:
-#             continue
-        
-#         bc_no = option.get("No", "")
-#         norm_bc = normalize(bc_desc)
-#         bc_tokens = set(norm_bc.split())
-
-#         # --- Scoring Logic ---
-#         score = 0
-
-#         # 1. Fuzzy Similarity (Base Score 0-100)
-#         # Sort words to ensure "Corn Sweet" matches "Sweet Corn"
-#         sorted_vendor = " ".join(sorted(norm_vendor.split()))
-#         sorted_bc = " ".join(sorted(norm_bc.split()))
-        
-#         # difflib calculates how many characters match
-#         fuzzy_ratio = difflib.SequenceMatcher(None, sorted_vendor, sorted_bc).ratio()
-#         score += fuzzy_ratio * 100 
-
-#         # 2. Critical ID Match (Huge Boost +200)
-#         # Check if any unique vendor token (like SV9010SA) exists in the BC tokens
-#         # We skip short common words (len < 4) to avoid boosting on "corn" or "bag"
-#         id_match_found = False
-#         for v_tok in vendor_tokens:
-#             if len(v_tok) < 4: continue 
-            
-#             # Check against all BC tokens
-#             for b_tok in bc_tokens:
-#                 if len(b_tok) < 4: continue
-                
-#                 # Check for substring match (e.g. Vendor "SV9010SA" vs BC "SV9010SA")
-#                 if v_tok == b_tok or v_tok in b_tok or b_tok in v_tok:
-#                     score += 200 # Massive boost overrides text mismatches
-#                     id_match_found = True
-#                     break
-#             if id_match_found: break
-
-#         # 3. Selection (Winner Takes All)
-#         # We update if this score is strictly better. 
-#         # This implicitly handles ties by keeping the first high-scoring one found.
-#         if score > best_score:
-#             best_score = score
-#             best_match_no = bc_no
-
-#     # Threshold: 
-#     # A score > 200 means we found a hard ID match (SV9010SA).
-#     # A score > 45 means we found decent text similarity (e.g. "Sweet Corn" vs "Corn").
-#     if best_score > 45:
-#         return best_match_no
-    
-#     return None
-
-# def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
-#     """
-#     Aggregates quantities and prices for duplicate lots based on the vendor.
-#     - For HM Clause & Seminis: Duplicates are identified by (Lot No + Batch No).
-#     - For Sakata & Nunhems: Duplicates are identified by Lot No only.
-#     - If aggregated, the Vendor Item Description is cleaned and marked as '[COMBINED]'.
-#     """
-    
-#     if vendor == "sakata":
-#         flattened_results = {}
-#         for filename, items_list in grouped_results.items():
-#             flat_lots_list = []
-#             for item in items_list:
-#                 # Lots are nested; loop through them
-#                 for lot in item.get("Lots", []):
-#                     # Start with parent item's data, excluding the "Lots" key itself
-#                     combined_lot = {k: v for k, v in item.items() if k != "Lots"}
-                    
-#                     # Update/overwrite with the specific lot's data
-#                     combined_lot.update(lot)
-
-#                     # Ensure TotalQuantity is set for aggregation, using QtyShipped from the parent
-#                     if 'TotalQuantity' not in combined_lot:
-#                          combined_lot['TotalQuantity'] = item.get('QtyShipped')
-
-#                     flat_lots_list.append(combined_lot)
-            
-#             if flat_lots_list:
-#                 flattened_results[filename] = flat_lots_list
-                
-#         # Replace the original nested structure with the new flattened one for processing
-#         grouped_results = flattened_results
-        
-#     unique_items_map = {}  # key: (lot_no, [batch_no]), value: item_dict
-#     processed_grouped_results = {}
-
-#     lot_keys = ["VendorLot", "VendorLotNo", "VendorProductLot"]
-#     batch_keys = ["VendorBatchLot", "VendorBatchNo"]
-#     desc_keys = ["VendorItemDescription", "VendorDescription"]
-
-#     for filename, items_list in grouped_results.items():
-#         processed_items_for_file = []
-#         for item in items_list:
-#             agg_key = None
-#             lot_no = next((item.get(key) for key in lot_keys if item.get(key)), None)
-
-#             if vendor in ["hm_clause", "seminis"]:
-#                 batch_no = next((item.get(key) for key in batch_keys if item.get(key)), None)
-#                 if lot_no and batch_no:
-#                     agg_key = (lot_no, batch_no)
-            
-#             elif vendor in ["sakata", "nunhems"]:
-#                 if lot_no:
-#                     agg_key = (lot_no,)
-
-#             if not agg_key:
-#                 processed_items_for_file.append(item)
-#                 continue
-
-#             try:
-#                 current_qty = float(item.get("TotalQuantity", 0) or 0)
-#                 current_price = float(item.get("TotalPrice", 0) or 0)
-#             except (ValueError, TypeError):
-#                 processed_items_for_file.append(item)
-#                 continue
-
-#             if agg_key in unique_items_map:
-#                 # It's a duplicate, so update the existing item
-#                 existing_item = unique_items_map[agg_key]
-
-#                 # Find the description key to modify
-#                 desc_key = next((key for key in desc_keys if key in existing_item), None)
-
-#                 # Modify description only once when the first duplicate is found
-#                 if desc_key and "[COMBINED]" not in existing_item[desc_key]:
-#                     current_desc = existing_item[desc_key]
-#                     # Remove quantity suffix (e.g., " 10,000 SDS")
-#                     modified_desc = re.sub(r"\s+[\d,]+\s+\w+$", "", current_desc).strip()
-#                     existing_item[desc_key] = f"{modified_desc} [COMBINED]"
-                
-#                 # Aggregate quantity and price
-#                 existing_qty = float(existing_item.get("TotalQuantity", 0) or 0)
-#                 existing_price = float(existing_item.get("TotalPrice", 0) or 0)
-#                 existing_item["TotalQuantity"] = existing_qty + current_qty
-#                 existing_item["TotalPrice"] = existing_price + current_price
-                
-#                 # Recalculate the unit cost
-#                 new_total_qty = existing_item["TotalQuantity"]
-#                 new_total_price = existing_item["TotalPrice"]
-#                 cost_key = "USD_Actual_Cost_$"
-#                 if "USD_Actual_Cost_$" not in existing_item:
-#                     cost_key = next((k for k in existing_item if "Cost" in k), "USD_Actual_Cost_$")
-
-#                 if new_total_qty > 0:
-#                     existing_item[cost_key] = round(new_total_price / new_total_qty, 4)
-#             else:
-#                 # This is a new unique item
-#                 item["TotalQuantity"] = current_qty
-#                 item["TotalPrice"] = current_price
-#                 unique_items_map[agg_key] = item
-#                 processed_items_for_file.append(item)
-
-#         if processed_items_for_file:
-#             processed_grouped_results[filename] = processed_items_for_file
-
-#     return processed_grouped_results
-
 def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
     """
     Aggregates quantities and prices for duplicate lots based on the vendor.
-    - For HM Clause & Seminis: Duplicates are identified by (Lot No + Batch No).
-    - For Sakata & Nunhems: Duplicates are identified by Lot No only.
-    - If aggregated, the Vendor Item Description is cleaned and marked as '[COMBINED]'.
     """
-    
     if vendor == "sakata":
         flattened_results = {}
         for filename, items_list in grouped_results.items():
@@ -680,7 +491,6 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
             
             if flat_lots_list:
                 flattened_results[filename] = flat_lots_list
-                
         grouped_results = flattened_results
         
     unique_items_map = {}
@@ -705,8 +515,6 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
                     agg_key = (lot_no, batch_no)
             
             elif vendor in ["sakata"]:
-                # if lot_no:
-                #     agg_key = (lot_no,)
                 item_no = item.get("VendorItemNumber")
                 if lot_no and item_no:
                     agg_key = (lot_no, item_no)
@@ -728,20 +536,30 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
                 existing_item = unique_items_map[agg_key]
                 desc_key = next((key for key in desc_keys if key in existing_item), None)
 
-                if desc_key and "[COMBINED]" not in existing_item[desc_key]:
-                    current_desc = existing_item[desc_key]
-                    if vendor == "hm_clause":
-                        # For HM Clause, preserve the full description (including "Pail 30 Ks")
-                        existing_item[desc_key] = f"{current_desc} [COMBINED]"
-                    else:
-                        modified_desc = re.sub(r"\s+[\d,]+\s+\w+$", "", current_desc).strip()
-                        existing_item[desc_key] = f"{modified_desc} [COMBINED]"
+                # --- FIX: Smarter Description Merging ---
+                if desc_key:
+                    existing_desc = existing_item.get(desc_key, "")
+                    new_desc = item.get(desc_key, "")
+                    
+                    # If we haven't already marked it as combined, prepare the base description
+                    if "[COMBINED]" not in existing_desc:
+                        # For HM Clause: Pick the LONGEST description. 
+                        # This avoids cases where the first item has a truncated desc ("Pump...") 
+                        # but the second item has the full one ("Pump... Pail 30 Ks").
+                        best_desc = existing_desc
+                        if len(new_desc) > len(existing_desc):
+                            best_desc = new_desc
+                        
+                        if vendor == "hm_clause":
+                            existing_item[desc_key] = f"{best_desc} [COMBINED]"
+                        else:
+                            # Standard logic for others
+                            modified_desc = re.sub(r"\s+[\d,]+\s+\w+$", "", best_desc).strip()
+                            existing_item[desc_key] = f"{modified_desc} [COMBINED]"
                 
                 existing_qty = float(existing_item.get("TotalQuantity", 0) or 0)
                 existing_price = float(existing_item.get("TotalPrice", 0) or 0)
                 existing_item["TotalQuantity"] = existing_qty + current_qty
-                
-                # CORRECTED: Always sum the TotalPrice for all vendors during aggregation
                 existing_item["TotalPrice"] = existing_price + current_price
                 
                 new_total_qty = existing_item["TotalQuantity"]
@@ -750,7 +568,6 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
                 if cost_key not in existing_item:
                     cost_key = next((k for k in existing_item if "Cost" in k), "USD_Actual_Cost_$")
 
-                # CORRECTED: Added specific cost recalculation logic for Sakata
                 if new_total_qty > 0:
                     if vendor == "sakata":
                         pkg_qty = None
@@ -762,7 +579,7 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
                             total_seed_units = new_total_qty * pkg_qty
                             if total_seed_units > 0:
                                 existing_item[cost_key] = round(new_total_price / total_seed_units, 4)
-                    else: # Logic for other vendors
+                    else:
                         if new_total_price:
                             existing_item[cost_key] = round(new_total_price / new_total_qty, 4)
             else:
@@ -775,6 +592,124 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
             processed_grouped_results[filename] = processed_items_for_file
 
     return processed_grouped_results
+
+# def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
+#     """
+#     Aggregates quantities and prices for duplicate lots based on the vendor.
+#     - For HM Clause & Seminis: Duplicates are identified by (Lot No + Batch No).
+#     - For Sakata & Nunhems: Duplicates are identified by Lot No only.
+#     - If aggregated, the Vendor Item Description is cleaned and marked as '[COMBINED]'.
+#     """
+    
+#     if vendor == "sakata":
+#         flattened_results = {}
+#         for filename, items_list in grouped_results.items():
+#             flat_lots_list = []
+#             for item in items_list:
+#                 for lot in item.get("Lots", []):
+#                     combined_lot = {k: v for k, v in item.items() if k != "Lots"}
+#                     combined_lot.update(lot)
+#                     if 'TotalQuantity' not in combined_lot:
+#                          combined_lot['TotalQuantity'] = item.get('QtyShipped')
+#                     flat_lots_list.append(combined_lot)
+            
+#             if flat_lots_list:
+#                 flattened_results[filename] = flat_lots_list
+                
+#         grouped_results = flattened_results
+        
+#     unique_items_map = {}
+#     processed_grouped_results = {}
+
+#     lot_keys = ["VendorLot", "VendorLotNo", "VendorProductLot"]
+#     batch_keys = ["VendorBatchLot", "VendorBatchNo"]
+#     desc_keys = ["VendorItemDescription", "VendorDescription"]
+
+#     for filename, items_list in grouped_results.items():
+#         processed_items_for_file = []
+#         for item in items_list:
+#             agg_key = None
+            
+#             lot_no_raw = next((item.get(key) for key in lot_keys if item.get(key)), None)
+#             lot_no = lot_no_raw.strip() if lot_no_raw else None
+
+#             if vendor in ["hm_clause", "seminis"]:
+#                 batch_no_raw = next((item.get(key) for key in batch_keys if item.get(key)), None)
+#                 batch_no = batch_no_raw.strip() if batch_no_raw else None
+#                 if lot_no and batch_no:
+#                     agg_key = (lot_no, batch_no)
+            
+#             elif vendor in ["sakata"]:
+#                 # if lot_no:
+#                 #     agg_key = (lot_no,)
+#                 item_no = item.get("VendorItemNumber")
+#                 if lot_no and item_no:
+#                     agg_key = (lot_no, item_no)
+#                 elif lot_no:
+#                     agg_key = (lot_no,)
+
+#             if not agg_key:
+#                 processed_items_for_file.append(item)
+#                 continue
+
+#             try:
+#                 current_qty = float(item.get("TotalQuantity", 0) or 0)
+#                 current_price = float(item.get("TotalPrice", 0) or 0)
+#             except (ValueError, TypeError):
+#                 processed_items_for_file.append(item)
+#                 continue
+
+#             if agg_key in unique_items_map:
+#                 existing_item = unique_items_map[agg_key]
+#                 desc_key = next((key for key in desc_keys if key in existing_item), None)
+
+#                 if desc_key and "[COMBINED]" not in existing_item[desc_key]:
+#                     current_desc = existing_item[desc_key]
+#                     if vendor == "hm_clause":
+#                         # For HM Clause, preserve the full description (including "Pail 30 Ks")
+#                         existing_item[desc_key] = f"{current_desc} [COMBINED]"
+#                     else:
+#                         modified_desc = re.sub(r"\s+[\d,]+\s+\w+$", "", current_desc).strip()
+#                         existing_item[desc_key] = f"{modified_desc} [COMBINED]"
+                
+#                 existing_qty = float(existing_item.get("TotalQuantity", 0) or 0)
+#                 existing_price = float(existing_item.get("TotalPrice", 0) or 0)
+#                 existing_item["TotalQuantity"] = existing_qty + current_qty
+                
+#                 # CORRECTED: Always sum the TotalPrice for all vendors during aggregation
+#                 existing_item["TotalPrice"] = existing_price + current_price
+                
+#                 new_total_qty = existing_item["TotalQuantity"]
+#                 new_total_price = existing_item["TotalPrice"]
+#                 cost_key = "USD_Actual_Cost_$"
+#                 if cost_key not in existing_item:
+#                     cost_key = next((k for k in existing_item if "Cost" in k), "USD_Actual_Cost_$")
+
+#                 # CORRECTED: Added specific cost recalculation logic for Sakata
+#                 if new_total_qty > 0:
+#                     if vendor == "sakata":
+#                         pkg_qty = None
+#                         desc = existing_item.get("VendorDescription", "")
+#                         if m_pkg := re.search(r"(\d+)(?=\s*[Mm]\b|\s*[Ll][Bb]\b|M$|LB$)", desc):
+#                             pkg_qty = int(m_pkg.group(1))
+
+#                         if pkg_qty and pkg_qty > 0:
+#                             total_seed_units = new_total_qty * pkg_qty
+#                             if total_seed_units > 0:
+#                                 existing_item[cost_key] = round(new_total_price / total_seed_units, 4)
+#                     else: # Logic for other vendors
+#                         if new_total_price:
+#                             existing_item[cost_key] = round(new_total_price / new_total_qty, 4)
+#             else:
+#                 item["TotalQuantity"] = current_qty
+#                 item["TotalPrice"] = current_price
+#                 unique_items_map[agg_key] = item
+#                 processed_items_for_file.append(item)
+
+#         if processed_items_for_file:
+#             processed_grouped_results[filename] = processed_items_for_file
+
+#     return processed_grouped_results
 
 @app.route("/api/items")
 def api_items():
