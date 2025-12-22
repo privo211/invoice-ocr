@@ -1,152 +1,3 @@
-<!--<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Processing Logs & Stats</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
-  <style>
-    :root { --primary-color: #008bc4; }
-    /* Manual dark mode CSS removed in favor of Bootstrap 5.3 native support */
-    
-    .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: 2rem; }
-    .header h2 { color: var(--primary-color); }
-    
-    /* Ensure buttons look good in both modes */
-    .btn-theme, .btn-back { 
-        background-color: var(--primary-color); 
-        color: white; 
-        border: none; 
-        padding: 0.5rem 1rem; 
-        border-radius: 4px; 
-        text-decoration: none; 
-    }
-  </style>
-</head>
-<body>
-  <div class="container mt-4">
-    <div class="header">
-      <div class="d-flex align-items-center">
-        <img id="stokes-logo" src="{{ url_for('static', filename='stokes_logo_rect.png') }}" alt="Logo" style="height: 50px; margin-right: 1rem;" />
-        <h2>Processing Logs & Statistics</h2>
-      </div>
-      <div>
-        <button id="theme-toggle" class="btn-theme">Dark Mode</button>
-        <a href="/" class="btn-back">Go Back</a>
-      </div>
-    </div>
-
-    <div class="row mb-4">
-      <div class="col-md-3">
-        <div class="card text-center p-3">
-          <div class="card-body">
-            <h5 class="card-title">Total Documents</h5>
-            <p class="card-text fs-2 fw-bold">{{ stats.total }}</p>
-          </div>
-        </div>
-      </div>
-      <div class="col-md-3">
-        <div class="card text-center p-3">
-          <div class="card-body">
-            <h5 class="card-title">Text Extraction</h5>
-            <p class="card-text fs-2 fw-bold">{{ stats.text }}</p>
-          </div>
-        </div>
-      </div>
-      <div class="col-md-3">
-        <div class="card text-center p-3">
-          <div class="card-body">
-            <h5 class="card-title">AI OCR Extraction</h5>
-            <p class="card-text fs-2 fw-bold">{{ stats.ocr }}</p>
-          </div>
-        </div>
-      </div>
-      <div class="col-md-3">
-        <div class="card text-center p-3">
-          <div class="card-body">
-            <h5 class="card-title">AI OCR Usage</h5>
-            <p class="card-text fs-2 fw-bold">{{ stats.ocr_percent }}%</p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card p-3">
-        <h4 class="mb-3">Log History (Last 100 Jobs)</h4>
-        <div class="table-responsive">
-            <table class="table table-striped table-hover">
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Vendor</th>
-                        <th>PO Number</th>
-                        <th>Filename</th>
-                        <th>Extraction</th>
-                        <th>Pages</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for log in logs %}
-                    <tr>
-                        <td>{{ log[0].strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                        <td>{{ log[1] }}</td>
-                        <td>{{ log[2] or 'N/A' }}</td>
-                        <td>{{ log[3] }}</td>
-                        <td>
-                            <span class="badge {{ 'bg-primary' if log[4] == 'Azure OCR' else 'bg-secondary' }}">
-                                {{ log[4] }}
-                            </span>
-                        </td>
-                        <td>{{ log[5] }}</td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="6" class="text-center">No logs found.</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        <nav>
-            <ul class="pagination justify-content-center">
-                {% if total_pages > 1 %}
-                    {% for i in range(1, total_pages + 1) %}
-                        <li class="page-item {% if i == current_page %}active{% endif %}">
-                            <a class="page-link" href="{{ url_for('logs', page=i) }}">{{ i }}</a>
-                        </li>
-                    {% endfor %}
-                {% endif %}
-            </ul>
-        </nav>
-    </div>
-  </div>
-  <script>
-    // Theme toggle logic using Bootstrap 5.3 native 'data-bs-theme'
-    const toggleButton = document.getElementById('theme-toggle');
-    const logo = document.getElementById('stokes-logo');
-    
-    function applyTheme(isDark) {
-      // Set the attribute on the HTML element
-      document.documentElement.setAttribute('data-bs-theme', isDark ? 'dark' : 'light');
-      
-      toggleButton.textContent = isDark ? 'Light Mode' : 'Dark Mode';
-      logo.src = isDark ? "{{ url_for('static', filename='stokes_logo_rect_white.png') }}" : "{{ url_for('static', filename='stokes_logo_rect.png') }}";
-    }
-
-    const isDark = localStorage.getItem('theme') === 'dark';
-    applyTheme(isDark);
-
-    toggleButton.addEventListener('click', () => {
-      const currentTheme = document.documentElement.getAttribute('data-bs-theme');
-      const newThemeIsDark = currentTheme !== 'dark';
-      
-      localStorage.setItem('theme', newThemeIsDark ? 'dark' : 'light');
-      applyTheme(newThemeIsDark);
-    });
-  </script>
-</body>
-</html>-->
-
 <!doctype html>
 <html lang="en">
 <head>
@@ -163,12 +14,29 @@
     .btn-theme, .btn-back { 
         background-color: var(--primary-color); 
         color: white; 
-        border: none;
-        padding: 0.5rem 1rem; 
-        border-radius: 4px;
-        min-width: 60px;
-        min-height: 38px; 
-        text-decoration: none;
+        border: none; 
+        border-radius: 4px; 
+        text-decoration: none; 
+        
+        /* Flexbox ensures exact dimensions and centering */
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        
+        /* Fixed Dimensions */
+        width: 120px; 
+        height: 40px;
+        
+        font-size: 1rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+
+    /* Hover effect */
+    .btn-theme:hover, .btn-back:hover {
+        background-color: #006da0; /* Slightly darker for interaction feedback */
+        color: white;
     }
   </style>
 </head>
@@ -179,8 +47,7 @@
         <img id="stokes-logo" src="{{ url_for('static', filename='stokes_logo_rect.png') }}" alt="Logo" style="height: 50px; margin-right: 1rem;" />
         <h2>Processing Logs & Statistics</h2>
       </div>
-      <div>
-        <button id="theme-toggle" class="btn-theme">Dark Mode</button>
+      <div class="d-flex gap-2"> <button id="theme-toggle" class="btn-theme">Dark Mode</button>
         <a href="/" class="btn-back">Home</a>
       </div>
     </div>
