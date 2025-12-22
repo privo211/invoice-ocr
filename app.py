@@ -898,6 +898,14 @@ def logs():
                            total_pages=total_pages,
                            user_name=session.get("user_name"))
 
+# Admin route to fix stats manually on production ---
+@app.route("/fix-stats")
+@login_required
+def fix_stats():
+    """Manual trigger to fix statistics synchronization issues."""
+    message = db_logger.recalculate_stats()
+    return f"<h1>Stats Maintenance</h1><p>{message}</p><p><a href='/logs'>Back to Logs</a></p>"
+
 # Main route
 @app.route("/", methods=["GET", "POST"])
 @login_required

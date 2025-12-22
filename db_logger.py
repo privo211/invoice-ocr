@@ -23,48 +23,70 @@ def close_db(e=None):
     if db is not None:
         db.close()
 
-def _backfill_stats_from_logs(cur):
+def recalculate_stats():
     """
-    Helper to calculate stats from the existing processing_log table.
-    Used to initialize lifetime_stats if they are found to be empty or out of sync.
+    Public function to forcibly recalculate all stats from the processing_log.
+    Call this manually to fix desynchronized counts.
     """
-    print("Backfilling lifetime_stats from existing logs...")
-    cur.execute("""
-        SELECT 
-            COUNT(*) AS total_docs,
-            COALESCE(SUM(page_count), 0) AS total_pages,
-            COUNT(*) FILTER (WHERE extraction_method = 'Azure OCR') AS ocr_docs,
-            COALESCE(SUM(page_count) FILTER (WHERE extraction_method = 'Azure OCR'), 0) AS ocr_pages,
-            COUNT(*) FILTER (WHERE extraction_method = 'PyMuPDF') AS text_docs,
-            COALESCE(SUM(page_count) FILTER (WHERE extraction_method = 'PyMuPDF'), 0) AS text_pages
-        FROM processing_log;
-    """)
-    row = cur.fetchone()
-    if row:
-        total_docs, total_pages, ocr_docs, ocr_pages, text_docs, text_pages = row
+    db = get_db()
+    cur = db.cursor()
+    status_msg = ""
+    try:
+        cur.execute("""
+            SELECT 
+                COUNT(*) AS total_docs,
+                COALESCE(SUM(page_count), 0) AS total_pages,
+                
+                COUNT(*) FILTER (WHERE extraction_method ILIKE '%OCR%') AS ocr_docs,
+                COALESCE(SUM(page_count) FILTER (WHERE extraction_method ILIKE '%OCR%'), 0) AS ocr_pages,
+                
+                COUNT(*) FILTER (WHERE extraction_method ILIKE 'Py%') AS text_docs,
+                COALESCE(SUM(page_count) FILTER (WHERE extraction_method ILIKE 'Py%'), 0) AS text_pages
+            FROM processing_log;
+        """)
+        row = cur.fetchone()
         
-        # We use UPSERT (ON CONFLICT DO UPDATE) to ensure we overwrite any stale 0s
-        updates = [
-            ('total_documents', total_docs),
-            ('total_pages', total_pages),
-            ('ocr_count', ocr_docs),
-            ('ocr_pages', ocr_pages),
-            ('text_count', text_docs),
-            ('text_pages', text_pages)
-        ]
-        
-        for key, val in updates:
-            cur.execute("""
-                INSERT INTO lifetime_stats (metric_key, metric_value) 
-                VALUES (%s, %s) 
-                ON CONFLICT (metric_key) 
-                DO UPDATE SET metric_value = EXCLUDED.metric_value;
-            """, (key, val))
-        
-        print(f"Stats updated: {total_docs} docs, {total_pages} pages.")
+        if row:
+            total_docs, total_pages, ocr_docs, ocr_pages, text_docs, text_pages = row
+            
+            updates = [
+                ('total_documents', total_docs),
+                ('total_pages', total_pages),
+                ('ocr_count', ocr_docs),
+                ('ocr_pages', ocr_pages),
+                ('text_count', text_docs),
+                ('text_pages', text_pages)
+            ]
+            
+            for key, val in updates:
+                cur.execute("""
+                    INSERT INTO lifetime_stats (metric_key, metric_value) 
+                    VALUES (%s, %s) 
+                    ON CONFLICT (metric_key) 
+                    DO UPDATE SET metric_value = EXCLUDED.metric_value;
+                """, (key, val))
+            
+            db.commit()
+            status_msg = (
+                f"Success! Recalculated stats:<br>"
+                f"Total Docs: {total_docs}<br>"
+                f"Total Pages: {total_pages}<br>"
+                f"OCR Docs: {ocr_docs} ({ocr_pages} pages)<br>"
+                f"Text Docs: {text_docs} ({text_pages} pages)"
+            )
+        else:
+            status_msg = "No logs found to calculate stats from."
+            
+    except Exception as e:
+        db.rollback()
+        status_msg = f"Error calculating stats: {str(e)}"
+    finally:
+        cur.close()
+    
+    return status_msg
 
 def init_db():
-    """Initializes the database: log table and persistent stats table."""
+    """Initializes the database tables."""
     db = get_db()
     cur = db.cursor()
     
@@ -81,7 +103,7 @@ def init_db():
         );
     """)
 
-    # 2. Lifetime Stats (Persistent Counters)
+    # 2. Lifetime Stats
     cur.execute("""
         CREATE TABLE IF NOT EXISTS lifetime_stats (
             metric_key VARCHAR(50) PRIMARY KEY,
@@ -89,27 +111,11 @@ def init_db():
         );
     """)
     
-    # Initialize keys with 0 if they don't exist
+    # Initialize defaults
     keys = ['total_documents', 'ocr_count', 'text_count', 'total_pages', 'ocr_pages', 'text_pages']
     for key in keys:
         cur.execute("INSERT INTO lifetime_stats (metric_key, metric_value) VALUES (%s, 0) ON CONFLICT (metric_key) DO NOTHING;", (key,))
     
-    db.commit()
-
-    # 3. Smart Backfill Logic
-    # Check if we have 0 pages recorded, which indicates the stats are from the old version
-    cur.execute("SELECT metric_value FROM lifetime_stats WHERE metric_key = 'total_pages';")
-    res = cur.fetchone()
-    current_pages = res[0] if res else 0
-    
-    # Also check if we have any logs at all
-    cur.execute("SELECT COUNT(*) FROM processing_log;")
-    log_count = cur.fetchone()[0]
-
-    # If we have logs but 0 pages recorded, we need to re-sync
-    if current_pages == 0 and log_count > 0:
-        _backfill_stats_from_logs(cur)
-
     db.commit()
     cur.close()
     close_db()
@@ -126,10 +132,12 @@ def log_processing_event(vendor, filename, extraction_info, po_number=None):
         cur.execute("UPDATE lifetime_stats SET metric_value = metric_value + 1 WHERE metric_key = 'total_documents';")
         cur.execute("UPDATE lifetime_stats SET metric_value = metric_value + %s WHERE metric_key = 'total_pages';", (pages,))
         
-        if method == 'Azure OCR':
+        # Fuzzy match for method type
+        if 'OCR' in method:
             cur.execute("UPDATE lifetime_stats SET metric_value = metric_value + 1 WHERE metric_key = 'ocr_count';")
             cur.execute("UPDATE lifetime_stats SET metric_value = metric_value + %s WHERE metric_key = 'ocr_pages';", (pages,))
-        elif method == 'PyMuPDF':
+        else:
+            # Assume Text/PyMuPDF for anything else (catches PyMuPDF, PyMaPOF, etc)
             cur.execute("UPDATE lifetime_stats SET metric_value = metric_value + 1 WHERE metric_key = 'text_count';")
             cur.execute("UPDATE lifetime_stats SET metric_value = metric_value + %s WHERE metric_key = 'text_pages';", (pages,))
 
@@ -172,7 +180,7 @@ def get_log_stats():
     text_pages = stats_map.get('text_pages', 0)
     
     # Calculate Percentage based on PAGES
-    ocr_percent_pages = round((ocr_pages / total_pages) * 100, 1) if total_pages > 0 else 0
+    ocr_percent_pages = round((ocr_pages / total_pages) * 100, 1) if total_pages > 0 else 0.0
     
     return {
         'total': total_docs,
