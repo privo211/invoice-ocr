@@ -16,9 +16,8 @@ from functools import wraps
 from multiprocessing import Pool, cpu_count
 from vendor_extractors.sakata import load_package_descriptions, get_po_items
 from vendor_extractors.hm_clause import extract_hm_clause_data_from_bytes, find_best_hm_clause_package_description
-#from vendor_extractors.seminis import extract_seminis_invoice_data, find_best_seminis_package_description
 from vendor_extractors.seminis import extract_seminis_data_from_bytes, find_best_seminis_package_description
-#from vendor_extractors.nunhems import extract_nunhems_invoice_data, find_best_nunhems_package_description
+from vendor_extractors.syngenta import extract_syngenta_data_from_bytes
 from vendor_extractors.nunhems import extract_nunhems_data_from_bytes, find_best_nunhems_package_description
 import time
 import logging
@@ -514,7 +513,7 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
                 if lot_no and batch_no:
                     agg_key = (lot_no, batch_no)
             
-            elif vendor in ["sakata"]:
+            elif vendor in ["sakata", "syngenta"]:
                 item_no = item.get("VendorItemNumber")
                 if lot_no and item_no:
                     agg_key = (lot_no, item_no)
@@ -1094,6 +1093,65 @@ def index():
             # 6. Render the template
             return render_template(
                 "results_nunhems.html",
+                items=final_grouped_results,
+                treatments1=treatments1,
+                treatments2=treatments2,
+                pkg_descs=pkg_descs
+            )
+
+        elif vendor == "syngenta":
+            # 1. Load shared data from Business Central
+            pkg_descs = load_package_descriptions(user_token)
+            treatments1 = load_treatments("Lot_Treatments_Card_Excel", user_token)
+            treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
+
+            # 2. Extract Data using the new Syngenta module
+            grouped_results = extract_syngenta_data_from_bytes(pdf_files, pkg_descs)
+            
+            # 3. Aggregate duplicates (combines split lots if any)
+            final_grouped_results = aggregate_duplicate_lots(grouped_results, vendor="syngenta")
+
+            # 4. Flatten results to process POs efficiently
+            all_items_flat = [item for items_list in final_grouped_results.values() for item in items_list]
+            
+            # 5. Fetch PO Items for all unique POs found
+            all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
+            
+            po_items_map = {} # Cache local to this request to avoid re-fetching same PO
+            if all_pos:
+                try:
+                    # get_po_items handles pipes "|" but let's fetch them individually or batched to be safe
+                    # The existing get_po_items in sakata.py handles the lookup
+                    full_po_string = "|".join(all_pos)
+                    # We fetch all at once. The helper caches results so repeated calls are cheap.
+                    # However, get_po_items returns a list for a specific PO input. 
+                    # If we pass multiple POs separated by |, it returns the combined list.
+                    # We need to assign the specific subset to each item.
+                    
+                    # Better approach: Fetch specifically for each item
+                    pass 
+                except Exception as e:
+                    app.logger.error(f"Failed to pre-fetch PO items: {e}")
+
+            # 6. Enrich items with BC Options and Suggestions
+            for item in all_items_flat:
+                po = item.get("PurchaseOrder")
+                if po:
+                    try:
+                        # This uses the cached get_po_items function from sakata.py
+                        item["BCOptions"] = get_po_items(po, user_token)
+                    except Exception as e:
+                        item["BCOptions"] = [{"No": "ERROR", "Description": str(e)}]
+                else:
+                    item["BCOptions"] = []
+
+                # Find best match based on description
+                vendor_desc = item.get("VendorItemDescription", "")
+                item["SuggestedBCItemNo"] = find_best_bc_item_match(vendor_desc, item["BCOptions"], vendor=vendor)
+
+            # 7. Render Template
+            return render_template(
+                "results_syngenta.html",
                 items=final_grouped_results,
                 treatments1=treatments1,
                 treatments2=treatments2,
