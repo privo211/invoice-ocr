@@ -127,6 +127,7 @@
       height: calc(1.5rem + 0.75rem);
       line-height: 1.5;
     }
+    /* modal sizing & centering */
     .modal-dialog {
       max-width: 60%;
       width: 45%;
@@ -193,6 +194,7 @@
       color: var(--text-color);
       opacity: 0.6;
     }
+
     .btn-auth {
       background: var(--primary-color);
       color: white;
@@ -207,6 +209,7 @@
     .btn-auth:hover {
       opacity: 0.9;
     }
+
     .lot-checkbox {
       position: absolute;
       top: 0.8rem;
@@ -225,6 +228,7 @@
       transform: scale(1.3);
       margin-right: 0.5rem;
     }
+
   </style>
 </head>
 <body>
@@ -248,14 +252,11 @@
 
   <div class="container">
     {% if items %}
-      {% set item_counter = namespace(value=0) %}
-
       {% for filename, item_list in items.items() %}
         <h3>📄 {{ filename }} - Vendor Invoice No.: {{ item_list[0].VendorInvoiceNo or 'N/A' }}</h3>
         <div class="row row-cols-1 row-cols-md-2 g-4">
           {% for item in item_list %}
-            {% set item_idx = item_counter.value %}
-            
+            {% set item_idx = loop.index0 %}
             <div class="col">
               <div class="card h-100 p-3" data-item-idx="{{ item_idx }}">
                 <div class="item-header">{{ item.VendorItemNumber }} – {{ item.VendorItemDescription }}</div>
@@ -265,12 +266,26 @@
                     <div class="field-box po-field" contenteditable="true" data-item-idx="{{ item_idx }}">{{ item.PurchaseOrder or '' }}</div>
                   </dd>
 
-                  <dt class="col-sm-4">Select BC Item No.</dt>
+                  <!--<dt class="col-sm-4">Select BC Item No.</dt>
                   <dd class="col-sm-8">
                     <select class="field-box form-select bc-item-select" data-item-idx="{{ item_idx }}" data-field="BCItemNo">
-                      <option value="" style="color: red; font-weight: bold;" {% if not item.SuggestedBCItemNo %}selected{% endif %}>
-                        - Manually select an Item No. from the list -
+                      {% if not item.BCOptions %}<option value="">— Enter a PO to see options —</option>{% endif %}
+                      {% for opt in item.BCOptions %}<option value="{{ opt.No }}">{{ opt.No }} — {{ opt.Description }}</option>{% endfor %}
+                      <option value="Other">Other</option>
+                    </select>
+                    <select id="bc-input-{{ item_idx }}" class="field-box form-select mt-1" style="{% if item.BCItemNo == 'Other' or item.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}">
+                      
+                      <option value="" {% if not item.BCItemNo or item.BCItemNo == 'Other' %}selected{% endif %}>
+                        — Choose an Item No. —
                       </option>
+
+                    </select>
+                  </dd>-->
+
+                  <!--<dt class="col-sm-4">Select BC Item No.</dt>
+                  <dd class="col-sm-8">
+                    <select class="field-box form-select bc-item-select" data-item-idx="{{ item_idx }}" data-field="BCItemNo">
+                      {% if not item.BCOptions %}<option value="">— Enter a PO to see options —</option>{% endif %}
                       {% for opt in item.BCOptions %}
                         <option value="{{ opt.No }}" {% if item.SuggestedBCItemNo == opt.No %}selected{% endif %}>
                           {{ opt.No }} — {{ opt.Description }}
@@ -278,6 +293,29 @@
                       {% endfor %}
                       <option value="Other">Other</option>
                     </select>
+                    <select id="bc-input-{{ item_idx }}" class="field-box form-select mt-1" style="{% if item.BCItemNo == 'Other' or item.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}">
+
+                      <option value="" {% if not item.BCItemNo or item.BCItemNo == 'Other' %}selected{% endif %}>— Choose an Item No. —</option>
+                      </select>
+                  </dd>-->
+
+                  <dt class="col-sm-4">Select BC Item No.</dt>
+                  <dd class="col-sm-8">
+                    <select class="field-box form-select bc-item-select" data-item-idx="{{ item_idx }}" data-field="BCItemNo">
+                      
+                      <option value="" style="color: red; font-weight: bold;" {% if not item.SuggestedBCItemNo %}selected{% endif %}>
+                        - Manually select an Item No. from the list -
+                      </option>
+
+                      {% for opt in item.BCOptions %}
+                        <option value="{{ opt.No }}" {% if item.SuggestedBCItemNo == opt.No %}selected{% endif %}>
+                          {{ opt.No }} — {{ opt.Description }}
+                        </option>
+                      {% endfor %}
+                      
+                      <option value="Other">Other</option>
+                    </select>
+
                     <select id="bc-input-{{ item_idx }}" class="field-box form-select mt-1" style="{% if item.BCItemNo == 'Other' or item.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}">
                       <option value="" {% if not item.BCItemNo or item.BCItemNo == 'Other' %}selected{% endif %}>— Choose an Item No. —</option>
                     </select>
@@ -310,7 +348,7 @@
                         id="td1-{{ item_idx }}"
                         class="form-control"
                         data-field="TreatmentsDescription"
-                        value="" 
+                        value="{{ item.TreatmentsDescription or '' }}"
                       />
                       <button
                         class="btn btn-outline-secondary btn-sm lookup-btn"
@@ -330,7 +368,7 @@
                         id="td2-{{ item_idx }}"
                         class="form-control"
                         data-field="TreatmentsDescription2"
-                        value=""
+                        value="{{ item.TreatmentsDescription2 or '' }}"
                       />
                       <button
                         class="btn btn-outline-secondary btn-sm lookup-btn"
@@ -454,13 +492,9 @@
                 </dl>
               </div>
             </div>
-            
-            {% set item_counter.value = item_counter.value + 1 %}
-            
           {% endfor %}
         </div>
       {% endfor %}
-      
       <div class="text-center my-4">
         {% if session.get("user_token") %}
           <button id="create-lots-btn" class="btn btn-success btn-lg">
@@ -475,6 +509,7 @@
     {% endif %}
   </div>
 
+  <!-- Lookup Modals -->
   {% for modal_id, treatments in {1:treatments1, 2:treatments2}.items() %}
   <div class="modal fade" id="lookup-modal-{{modal_id}}" tabindex="-1">
     <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
@@ -553,33 +588,46 @@
       }
     }
 
+    /**
+     * Helper function to get a numeric value from a contenteditable field.
+     * Returns 0 if the field is not found or is not a valid number.
+     */
     function getNumericFieldValue(cardEl, fieldName) {
       const el = cardEl.querySelector(`[data-field="${fieldName}"]`);
-      if (!el) return 0; 
+      if (!el) return 0; // Default to 0 for fields like upcharge/discount if not present
+      
       const text = el.textContent.trim().replace(/,/g, '');
       if (text === '') return 0;
+      
       const val = parseFloat(text);
       return isNaN(val) ? 0 : val;
     }
 
+    /**
+     * Recalculates the USD Actual Cost $ based on the formula:
+     * (Total Price + Total Upcharge - Total Discount) / Total Quantity
+     * and updates the field in the card.
+     */
     function recalculateUSDCost(cardEl) {
       const price = getNumericFieldValue(cardEl, 'TotalPrice');
-      const upcharge = getNumericFieldValue(cardEl, 'TotalUpcharge'); 
-      const discount = getNumericFieldValue(cardEl, 'TotalDiscount'); 
+      const upcharge = getNumericFieldValue(cardEl, 'TotalUpcharge'); // Will be 0 if field doesn't exist
+      const discount = getNumericFieldValue(cardEl, 'TotalDiscount'); // Will be 0 if field doesn't exist
       const quantity = getNumericFieldValue(cardEl, 'TotalQuantity');
 
       const costField = cardEl.querySelector('[data-field="USD_Actual_Cost_$"]');
-      if (!costField) return; 
+      if (!costField) return; // Exit if the cost field isn't on the card
 
       if (quantity > 0) {
+        // Apply the formula
         const cost = (price + upcharge - discount) / quantity;
-        costField.textContent = cost.toFixed(4); 
+        costField.textContent = cost.toFixed(4); // Match 4-decimal precision
       } else {
-        costField.textContent = ''; 
+        costField.textContent = ''; // Clear if quantity is 0 or invalid
       }
     }
 
     window.addEventListener('DOMContentLoaded', () => {
+      // --- THEME ---
       const themeBtn = document.getElementById('theme-toggle');
       const logo = document.getElementById('stokes-logo');
       
@@ -601,6 +649,8 @@
         applyTheme(isDark);
       });
 
+      // --- AUTOCALCULATE USD ACTUAL COST ---
+      // Listen for changes on all fields that affect the cost calculation
       document.querySelectorAll(
         '[data-field="TotalPrice"],' +
         '[data-field="TotalUpcharge"],' +
@@ -608,13 +658,16 @@
         '[data-field="TotalQuantity"]'
       ).forEach(field => {
         field.addEventListener('blur', (e) => {
+          // Find the parent .card element for this field
           const card = e.target.closest('.card');
           if (card) {
+            // Recalculate the cost for this specific card
             recalculateUSDCost(card);
           }
         });
       });
 
+      // --- EVENT LISTENERS ---
       document.querySelectorAll('.po-field').forEach(div => {
         div.addEventListener('blur', async e => {
           const po = e.target.textContent.trim();
@@ -630,6 +683,7 @@
             const opts = await res.json();
             select.innerHTML = '';
 
+            // --- Re-add the placeholder option ---
             const placeholder = document.createElement('option');
             placeholder.value = "";
             placeholder.textContent = "- Manually select an Item No. from the list -";
@@ -647,6 +701,11 @@
             otherEl.textContent = 'Other';
             select.append(otherEl);
             
+            //opts.forEach(o => {
+              //select.options.add(new Option(`${o.No} — ${o.Description}`, o.No));
+            //});
+            //select.options.add(new Option('Other', 'Other'));
+
             toggleManualBcInput(select);
 
           } catch (error) {
@@ -656,7 +715,15 @@
         });
       });
 
+      // For BC Item dropdowns
+      //document.querySelectorAll('.bc-item-select').forEach(sel => {
+        //sel.addEventListener('change', () => toggleManualBcInput(sel));
+        //toggleManualBcInput(sel);
+      //});
+
+      // For BC Item dropdowns
       document.querySelectorAll('.bc-item-select').forEach(sel => {
+        // Function to update color based on value
         const updateColor = () => {
           if (sel.value === "") {
             sel.style.color = "red";
@@ -669,13 +736,15 @@
 
         sel.addEventListener('change', () => {
           toggleManualBcInput(sel);
-          updateColor(); 
+          updateColor(); // Update color on change
         });
 
+        // Initialize
         toggleManualBcInput(sel);
         updateColor(); 
       });
 
+      // For treatment lookup modals
       document.querySelectorAll('.lookup-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const modalEl = document.querySelector(btn.getAttribute('data-bs-target'));
@@ -703,6 +772,85 @@
       return el.tagName === 'INPUT' || el.tagName === 'SELECT' ? el.value.trim() : el.textContent.trim();
     }
 
+    /*document.getElementById('create-lots-btn')?.addEventListener('click', async () => {
+      const cards = document.querySelectorAll('.card');
+      if (cards.length === 0) return alert("No items found to create.");
+      
+      //const proceed = confirm(`This will attempt to create ${cards.length} lot(s) in Business Central. Continue?`);
+      //if (!proceed) return;
+
+      for (const card of cards) {
+        // Prompt user
+        const name = card.querySelector('.item-header')?.textContent.trim();
+        if (!confirm(`Create this lot?\n\n${name}`)) continue;
+
+        let bcItemNo = getFieldValue(card, 'BCItemNo');
+
+        if (bcItemNo === 'Other') {
+          const itemIdx = card.dataset.itemIdx;
+          const manualInput = document.getElementById(`bc-input-${itemIdx}`);
+          bcItemNo = manualInput.value.trim();
+        }
+
+        const data = {
+          BCItemNo:           bcItemNo,
+          TreatmentsDescription:  getFieldValue(card, 'TreatmentsDescription'),
+          TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
+          VendorLotNo:        getFieldValue(card, 'VendorLotNo'),
+          VendorBatchLot:   getFieldValue(card, 'VendorBatchNo'),
+          OriginCountry:      getFieldValue(card, 'OriginCountry'),
+          CurrentGerm:        getFieldValue(card, 'Germ'),
+          CurrentGermDate:    getFieldValue(card, 'GermDate'),
+          SeedSize:           getFieldValue(card, 'SeedSize'),
+          SeedCount:          getFieldValue(card, 'SeedCount'),
+          USD_Actual_Cost_$: getFieldValue(card, 'USD_Actual_Cost_$'),
+          GrowerGerm:        getFieldValue(card, 'GrowerGerm'),
+          GrowerGermDate:    getFieldValue(card, 'GrowerGermDate'),
+          Purity:             getFieldValue(card, 'Purity'),
+          Inert:              getFieldValue(card, 'Inert'),
+          PackageDescription: getFieldValue(card, 'PackageDescription'),
+          VendorItemNumber: getFieldValue(card, 'VendorItemNumber'),
+          VendorDescription: getFieldValue(card, 'VendorDescription'),
+          TotalQuantity:     getFieldValue(card, 'TotalQuantity'),
+          TotalPrice:        getFieldValue(card, 'TotalPrice'),
+          TotalUpcharge:     getFieldValue(card, 'TotalUpcharge'),
+          TotalDiscount:     getFieldValue(card, 'TotalDiscount')
+        };
+        
+        if (!data.BCItemNo || !data.VendorLotNo) {
+            alert(`Skipping item. Missing BC Item No. or Vendor Lot No. for card:\n${card.querySelector('.item-header').textContent.trim()}`);
+            continue;
+        }
+
+        try {
+          const res = await fetch('/create-lot', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(data)
+          });
+
+          if (res.redirected || res.status === 401) {
+            alert('Your session has expired. Please sign in again.');
+            window.location.href = '/sign_in';
+            return;
+          }
+
+          const json = await res.json();
+          if (res.ok && json.status === 'success') {
+            card.style.border = '2px solid green';
+            alert(`✅ Successfully created Lot for Vendor Lot: ${data.VendorLotNo}`);
+          } else {
+            card.style.border = '2px solid red';
+            alert(`❌ Error creating Lot for Vendor Lot ${data.VendorLotNo}:\n${json.message}`);
+          }
+        } catch (err) {
+          card.style.border = '2px solid red';
+          alert(`❌ Network error for Vendor Lot ${data.VendorLotNo}:\n${err.message}`);
+        }
+      }
+    });*/
+
+    // When "Create Lots" button is clicked, show the selection modal
     document.getElementById('create-lots-btn')?.addEventListener('click', () => {
       const cards = document.querySelectorAll('.card');
       if (cards.length === 0) return alert("No items found to create.");
@@ -723,6 +871,7 @@
         listElement.appendChild(listItem);
       });
 
+      // Ensure "Select All" is checked and all checkboxes are pre-checked
       document.getElementById('select-all-lots').checked = true;
       document.querySelectorAll('.lot-item-checkbox').forEach(cb => cb.checked = true);
 
@@ -739,6 +888,7 @@
 
       bootstrap.Modal.getInstance(document.getElementById('lot-selection-modal')).hide();
 
+      // Array to hold the results for the final summary
       let creationResults = []; 
 
       for (const cb of selectedCheckboxes) {
@@ -803,12 +953,14 @@
             const newLotNo = json.Lot_No;
             creationResults.push({ vendorLot: data.VendorLotNo, bcLot: newLotNo, status: 'Success' });
 
+            // Find the definition list (<dl>) inside the card
             const dl = card.querySelector('dl');
-            if (dl && !card.querySelector('.bc-lot-display')) { 
+            if (dl && !card.querySelector('.bc-lot-display')) { // Check to prevent adding duplicates
+              // Create new elements to display the BC Lot No.
               const dt = document.createElement('dt');
-              dt.className = 'col-sm-4 bc-lot-display'; 
+              dt.className = 'col-sm-4 bc-lot-display'; // Add a class for the check above
               dt.textContent = 'BC Lot No.';
-              dt.style.color = '#198754'; 
+              dt.style.color = '#198754'; // Bootstrap success green
 
               const dd = document.createElement('dd');
               dd.className = 'col-sm-8';
@@ -831,6 +983,7 @@
         }
       }
 
+      // Final detailed summary alert
       const successCount = creationResults.filter(r => r.status === 'Success').length;
       const failedCount = creationResults.length - successCount;
       let summaryMessage = `✅ Processing complete.\n\nSuccess: ${successCount} | Failed: ${failedCount}\n\n`;

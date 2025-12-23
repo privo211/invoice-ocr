@@ -51,7 +51,7 @@ load_dotenv()
 BC_TENANT = os.environ["AZURE_TENANT_ID"]
 BC_COMPANY = os.environ["BC_COMPANY"]
 #BC_ENV = os.environ["BC_ENV"]
-BC_ENV_DEFAULT = os.environ.get("BC_ENV", "SANDBOX-2025")
+BC_ENV_DEFAULT = os.environ.get("BC_ENV", "SANDBOX-25C")
 CLIENT_ID = os.environ["AZURE_CLIENT_ID"]
 CLIENT_SECRET = os.environ["AZURE_CLIENT_SECRET"]
 AUTHORITY = f"https://login.microsoftonline.com/{BC_TENANT}"
@@ -970,6 +970,18 @@ def create_lot():
         resp = timed_post(bc_url, json=payload, headers=headers)
         resp.raise_for_status()
         lot_data = resp.json()
+        
+        # --- NEW DEBUGGING LOGS ---
+        app.logger.info("============== BC RESPONSE DEBUG ==============")
+        app.logger.info(f"Status Code: {resp.status_code}")
+        app.logger.info(f"Created Lot No: {lot_data.get('Lot_No')}")
+        app.logger.info(f"Returned Treatment 1: {lot_data.get('TMG_Treatment_Description')}")
+        app.logger.info(f"Returned Treatment 2: {lot_data.get('TMG_Treatment_Description_2')}")
+        app.logger.info("Full Response Body:")
+        app.logger.info(lot_data)
+        app.logger.info("===============================================")
+        # --------------------------
+        
         generated_lot_no = lot_data.get("Lot_No")
         return jsonify({"status": "success", "Lot_No": generated_lot_no})
         #return jsonify({"status": "success"})
