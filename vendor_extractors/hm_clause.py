@@ -1113,37 +1113,37 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> Tuple[List[Di
 
 #     return line_items, extraction_info
 
-# def extract_hm_clause_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dict[str, list[dict]]:
-#     if not pdf_files:
-#         return {}
+def extract_hm_clause_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dict[str, list[dict]]:
+    if not pdf_files:
+        return {}
 
-#     purity_data = extract_purity_analysis_reports_from_bytes(pdf_files)
+    purity_data = extract_purity_analysis_reports_from_bytes(pdf_files)
 
-#     grouped_results = {}
-#     for filename, pdf_bytes in pdf_files:
-#         if re.match(r"^[A-Z]\d{5}", os.path.basename(filename), re.IGNORECASE):
-#             continue
+    grouped_results = {}
+    for filename, pdf_bytes in pdf_files:
+        if re.match(r"^[A-Z]\d{5}", os.path.basename(filename), re.IGNORECASE):
+            continue
 
-#         try:
-#             items, info = extract_hm_clause_invoice_data_from_bytes(pdf_bytes)
+        try:
+            items, info = extract_hm_clause_invoice_data_from_bytes(pdf_bytes)
             
-#             # --- LOGGING ---
-#             po_number = items[0].get("PurchaseOrder") if items else None
-#             log_processing_event(
-#                 vendor='HM Clause',
-#                 filename=filename,
-#                 extraction_info=info,
-#                 po_number=po_number
-#             )
+            # --- LOGGING ---
+            po_number = items[0].get("PurchaseOrder") if items else None
+            log_processing_event(
+                vendor='HM Clause',
+                filename=filename,
+                extraction_info=info,
+                po_number=po_number
+            )
             
-#             if items:
-#                 enriched_items = enrich_invoice_items_with_purity(items, purity_data)
-#                 grouped_results[filename] = enriched_items
-#         except Exception as e:
-#             print(f"Error processing invoice {filename}: {e}")
-#             continue
+            if items:
+                enriched_items = enrich_invoice_items_with_purity(items, purity_data)
+                grouped_results[filename] = enriched_items
+        except Exception as e:
+            print(f"Error processing invoice {filename}: {e}")
+            continue
 
-#     return grouped_results
+    return grouped_results
 
 def find_best_hm_clause_package_description(vendor_desc: str, pkg_desc_list: list[str]) -> str:
     if not vendor_desc or not pkg_desc_list:
