@@ -63,6 +63,8 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
     po_number = None
     
     full_ocr_text = " ".join(lines)
+    print("Full OCR Text:")
+    print(full_ocr_text)
 
     # ... [Keep the nested extract_discounts_from_ocr_lines function as is] ...
     def extract_discounts_from_ocr_lines(lines: List[str]) -> Dict[str, List[float]]:
@@ -208,7 +210,7 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
         if "VendorItemNumber" in current and not desc_part1:
             desc_part1 = line
 
-        if desc_part1 and re.search(r"\b\d+\s*(Ks|MS)\b", line, re.IGNORECASE):
+        if desc_part1 and re.search(r"\b\d+\s*(Ks|MS)\b", line):
             part2 = re.sub(r"\bHM.*$", "", line, flags=re.IGNORECASE).strip()
             part2 = re.sub(r"^(Flc\.|Plt\.\w+)\s*", "", part2, flags=re.IGNORECASE)
             unit_match = re.search(r"\b\d+\s*(Ks|MS)\b", part2, re.IGNORECASE)
@@ -703,7 +705,7 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> Tuple[List[Di
         for b in sorted_blocks:
             full_text += b[4] + " "
     doc.close()
-    
+   
     for block in all_blocks:
         text = block[4].strip()
         if m_invoice := re.search(r"Invoice\s*(?:No\.?|#|Number)?\s*[:\.]?\s*(\d{5,})", text, re.IGNORECASE):
@@ -804,7 +806,7 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> Tuple[List[Di
             desc_part1 = ""
             continue
         
-        if desc_part1 and re.search(r"\b\d+\s*(Ks|MS)\b", block_text, re.IGNORECASE):
+        if desc_part1 and re.search(r"\b\d+\s*(Ks|MS)\b", block_text):
             part2 = re.sub(r"\bHM.*$", "", block_text, flags=re.IGNORECASE).strip()
             part2 = re.sub(r"^(Flc\.|Plt\.\w+)\s*", "", block_text, flags=re.IGNORECASE)
             
@@ -817,32 +819,50 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> Tuple[List[Di
 
         if "VendorItemDescription" not in current_item_data and desc_part1:
             current_item_data["VendorItemDescription"] = desc_part1
-            
-        # 2. PRICE / UPCHARGE LOGIC (Extended Lookahead)
-        if "TotalPrice" not in current_item_data and "TotalUpcharge" not in current_item_data:
+        
+        # 2. PRICE / UPCHARGE LOGIC (Refactored for Independent Capture)
+        
+        # Case 1 & 4: Look for Total Price (N flag)
+        if "TotalPrice" not in current_item_data:
             if m_price := re.search(r"(?<!-)(\d[\d,]*\.\d{2})\s+N", block_text):
                 current_item_data["TotalPrice"] = float(m_price.group(1).replace(",", ""))
-            elif m_upcharge := re.search(r"(\d[\d,]*\.\d{2})\s+Y", block_text):
+            elif (idx + 1 < len(all_blocks) and all_blocks[idx + 1][4].strip() == "N"):
+                if m_val := re.search(r"(\d[\d,]*\.\d{2})", block_text):
+                    current_item_data["TotalPrice"] = float(m_val.group(1).replace(",", ""))
+
+        # Case 2 & 3: Look for Total Upcharge (Y flag)
+        if "TotalUpcharge" not in current_item_data:
+            if m_upcharge := re.search(r"(\d[\d,]*\.\d{2})\s+Y", block_text):
                 current_item_data["TotalUpcharge"] = float(m_upcharge.group(1).replace(",", ""))
-            else:
-                # Lookahead for "Y" or "N" in subsequent blocks (up to 3 blocks ahead)
-                found_flag = False
-                for k in range(1, 4):
-                    if idx + k < len(all_blocks):
-                        next_block_val = all_blocks[idx + k][4].strip()
-                        if next_block_val == "Y":
-                            if m_val := re.search(r"(\d[\d,]*\.\d{2})", block_text):
-                                current_item_data["TotalUpcharge"] = float(m_val.group(1).replace(",", ""))
-                                found_flag = True
-                            break
-                        elif next_block_val == "N":
-                            if m_val := re.search(r"(\d[\d,]*\.\d{2})", block_text):
-                                current_item_data["TotalPrice"] = float(m_val.group(1).replace(",", ""))
-                                found_flag = True
-                            break
-                        # Stop if we hit something that looks like a new item or lot
-                        if re.match(r"[A-Z]\d{5}", next_block_val) or re.match(r"\d{6}", next_block_val):
-                            break
+            elif (idx + 1 < len(all_blocks) and all_blocks[idx + 1][4].strip() == "Y"):
+                if m_val := re.search(r"(\d[\d,]*\.\d{2})", block_text):
+                    current_item_data["TotalUpcharge"] = float(m_val.group(1).replace(",", ""))
+                    
+        # # 2. PRICE / UPCHARGE LOGIC (Extended Lookahead)
+        # if "TotalPrice" not in current_item_data and "TotalUpcharge" not in current_item_data:
+        #     if m_price := re.search(r"(?<!-)(\d[\d,]*\.\d{2})\s+N", block_text):
+        #         current_item_data["TotalPrice"] = float(m_price.group(1).replace(",", ""))
+        #     elif m_upcharge := re.search(r"(\d[\d,]*\.\d{2})\s+Y", block_text):
+        #         current_item_data["TotalUpcharge"] = float(m_upcharge.group(1).replace(",", ""))
+        #     else:
+        #         # Lookahead for "Y" or "N" in subsequent blocks (up to 3 blocks ahead)
+        #         found_flag = False
+        #         for k in range(1, 4):
+        #             if idx + k < len(all_blocks):
+        #                 next_block_val = all_blocks[idx + k][4].strip()
+        #                 if next_block_val == "Y":
+        #                     if m_val := re.search(r"(\d[\d,]*\.\d{2})", block_text):
+        #                         current_item_data["TotalUpcharge"] = float(m_val.group(1).replace(",", ""))
+        #                         found_flag = True
+        #                     break
+        #                 elif next_block_val == "N":
+        #                     if m_val := re.search(r"(\d[\d,]*\.\d{2})", block_text):
+        #                         current_item_data["TotalPrice"] = float(m_val.group(1).replace(",", ""))
+        #                         found_flag = True
+        #                     break
+        #                 # Stop if we hit something that looks like a new item or lot
+        #                 if re.match(r"[A-Z]\d{5}", next_block_val) or re.match(r"\d{6}", next_block_val):
+        #                     break
                 
         # Fallback: Floating Upcharge "123.45 Y" (Late capture if missed above)
         if "TotalUpcharge" not in current_item_data and "VendorItemNumber" in current_item_data:

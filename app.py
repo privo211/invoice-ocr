@@ -315,6 +315,8 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
             try:
                 current_qty = float(item.get("TotalQuantity", 0) or 0)
                 current_price = float(item.get("TotalPrice", 0) or 0)
+                current_upcharge = float(item.get("TotalUpcharge", 0) or 0)
+                current_discount = float(item.get("TotalDiscount", 0) or 0)
             except (ValueError, TypeError):
                 processed_items_for_file.append(item)
                 continue
@@ -346,11 +348,21 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
                 
                 existing_qty = float(existing_item.get("TotalQuantity", 0) or 0)
                 existing_price = float(existing_item.get("TotalPrice", 0) or 0)
+                
+                existing_upcharge = float(existing_item.get("TotalUpcharge", 0) or 0)
+                existing_discount = float(existing_item.get("TotalDiscount", 0) or 0)
+                
                 existing_item["TotalQuantity"] = existing_qty + current_qty
                 existing_item["TotalPrice"] = existing_price + current_price
                 
+                existing_item["TotalUpcharge"] = existing_upcharge + current_upcharge
+                existing_item["TotalDiscount"] = existing_discount + current_discount
+                
                 new_total_qty = existing_item["TotalQuantity"]
                 new_total_price = existing_item["TotalPrice"]
+                new_total_upcharge = existing_item["TotalUpcharge"]
+                new_total_discount = existing_item["TotalDiscount"]
+                
                 cost_key = "USD_Actual_Cost_$"
                 if cost_key not in existing_item:
                     cost_key = next((k for k in existing_item if "Cost" in k), "USD_Actual_Cost_$")
@@ -368,10 +380,13 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
                                 existing_item[cost_key] = round(new_total_price / total_seed_units, 4)
                     else:
                         if new_total_price:
-                            existing_item[cost_key] = round(new_total_price / new_total_qty, 4)
+                            #existing_item[cost_key] = round(new_total_price / new_total_qty, 4)
+                            existing_item[cost_key] = round((new_total_price + new_total_upcharge - new_total_discount) / new_total_qty, 4)
             else:
                 item["TotalQuantity"] = current_qty
                 item["TotalPrice"] = current_price
+                item["TotalUpcharge"] = current_upcharge
+                item["TotalDiscount"] = current_discount
                 unique_items_map[agg_key] = item
                 processed_items_for_file.append(item)
 
