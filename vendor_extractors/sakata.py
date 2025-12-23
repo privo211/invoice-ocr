@@ -167,59 +167,124 @@ def find_best_package_description(vendor_desc: str) -> str:
 
 _po_cache = {}
 
+# @timed_func("get_po_items")
+# def get_po_items(po_number, token):
+#     if po_number in _po_cache:
+#         return _po_cache[po_number]
+
+#     # Split PO string if multiple are given
+#     po_numbers = [po.strip() for po in po_number.split("|") if po.strip()]
+#     if not po_numbers:
+#         return []
+
+#     if len(po_numbers) == 1:
+#         filter_clause = f"PurchaseOrderNo eq '{po_numbers[0]}'"
+#     else:
+#         filter_clause = " or ".join(f"PurchaseOrderNo eq '{po}'" for po in po_numbers)
+
+#     headers = {
+#         "Authorization": f"Bearer {token}",
+#         "Accept": "application/json"
+#     }
+
+#     # Try the main PurchaseOrderQuery
+#     url_main = (
+#         f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV}"
+#         f"/ODataV4/Company('Stokes%20Seeds%20Limited')/PurchaseOrderQuery?$filter={filter_clause}"
+#     )
+    
+#     response = requests.get(url_main, headers=headers)
+#     response.raise_for_status()
+#     data = []
+#     seen = set()
+
+#     for item in response.json().get("value", []):
+#         no = item.get("ItemNumber")
+#         if not no or no in seen:
+#             continue
+#         seen.add(no)
+#         data.append({
+#             "No": no,
+#             "Description": item.get("ItemDescription", "")
+#         })
+
+#     # If no results, try the ArchivePurchaseOrderQuery
+#     if not data:
+#         url_archive = (
+#             f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV}"
+#             f"/ODataV4/Company('Stokes%20Seeds%20Limited')/ArchivePurchaseOrderQuery?$filter={filter_clause}"
+#         )
+#         response = requests.get(url_archive, headers=headers)
+#         response.raise_for_status()
+#         data = []
+#         seen = set()
+
+#         for item in response.json().get("value", []):
+#             no = item.get("ItemNumber")
+#             if not no or no in seen:
+#                 continue
+#             seen.add(no)
+#             data.append({
+#                 "No": no,
+#                 "Description": item.get("ItemDescription", "")
+#             })
+
+#     _po_cache[po_number] = data
+#     return data
+
 @timed_func("get_po_items")
 def get_po_items(po_number, token):
+    print(f"\n--- DEBUG: get_po_items START ---")
+    print(f"DEBUG: Input po_number: '{po_number}'")
+
     if po_number in _po_cache:
+        print("DEBUG: Returning cached result.")
         return _po_cache[po_number]
 
     # Split PO string if multiple are given
     po_numbers = [po.strip() for po in po_number.split("|") if po.strip()]
+    print(f"DEBUG: Parsed PO list: {po_numbers}")
+
     if not po_numbers:
+        print("DEBUG: No valid PO numbers found. Returning empty list.")
         return []
 
+    # Build Filter
     if len(po_numbers) == 1:
         filter_clause = f"PurchaseOrderNo eq '{po_numbers[0]}'"
     else:
         filter_clause = " or ".join(f"PurchaseOrderNo eq '{po}'" for po in po_numbers)
+    
+    print(f"DEBUG: Generated OData Filter: \"{filter_clause}\"")
 
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json"
     }
 
-    # Try the main PurchaseOrderQuery
+    # --- Attempt 1: Main PurchaseOrderQuery ---
     url_main = (
         f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV}"
         f"/ODataV4/Company('Stokes%20Seeds%20Limited')/PurchaseOrderQuery?$filter={filter_clause}"
     )
+    print(f"DEBUG: Calling Main URL: {url_main}")
     
-    response = requests.get(url_main, headers=headers)
-    response.raise_for_status()
     data = []
     seen = set()
 
-    for item in response.json().get("value", []):
-        no = item.get("ItemNumber")
-        if not no or no in seen:
-            continue
-        seen.add(no)
-        data.append({
-            "No": no,
-            "Description": item.get("ItemDescription", "")
-        })
+    try:
+        response = requests.get(url_main, headers=headers)
+        print(f"DEBUG: Main Response Status: {response.status_code}")
+        
+        if response.status_code != 200:
+            print(f"DEBUG: Main Response Error Body: {response.text}")
+            response.raise_for_status()
+            
+        json_resp = response.json()
+        rows = json_resp.get("value", [])
+        print(f"DEBUG: Main Query found {len(rows)} raw rows.")
 
-    # If no results, try the ArchivePurchaseOrderQuery
-    if not data:
-        url_archive = (
-            f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV}"
-            f"/ODataV4/Company('Stokes%20Seeds%20Limited')/ArchivePurchaseOrderQuery?$filter={filter_clause}"
-        )
-        response = requests.get(url_archive, headers=headers)
-        response.raise_for_status()
-        data = []
-        seen = set()
-
-        for item in response.json().get("value", []):
+        for item in rows:
             no = item.get("ItemNumber")
             if not no or no in seen:
                 continue
@@ -228,7 +293,46 @@ def get_po_items(po_number, token):
                 "No": no,
                 "Description": item.get("ItemDescription", "")
             })
+    except Exception as e:
+        print(f"DEBUG: Error during Main Query: {e}")
 
+    # --- Attempt 2: ArchivePurchaseOrderQuery (if main is empty) ---
+    if not data:
+        print("DEBUG: Main query returned 0 items. Checking Archive...")
+        url_archive = (
+            f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV}"
+            f"/ODataV4/Company('Stokes%20Seeds%20Limited')/ArchivePurchaseOrderQuery?$filter={filter_clause}"
+        )
+        print(f"DEBUG: Calling Archive URL: {url_archive}")
+
+        try:
+            response = requests.get(url_archive, headers=headers)
+            print(f"DEBUG: Archive Response Status: {response.status_code}")
+
+            if response.status_code != 200:
+                print(f"DEBUG: Archive Response Error Body: {response.text}")
+                response.raise_for_status()
+
+            json_resp = response.json()
+            rows = json_resp.get("value", [])
+            print(f"DEBUG: Archive Query found {len(rows)} raw rows.")
+
+            seen = set() # Reset seen for archive
+            for item in rows:
+                no = item.get("ItemNumber")
+                if not no or no in seen:
+                    continue
+                seen.add(no)
+                data.append({
+                    "No": no,
+                    "Description": item.get("ItemDescription", "")
+                })
+        except Exception as e:
+            print(f"DEBUG: Error during Archive Query: {e}")
+
+    print(f"DEBUG: Final unique items found: {len(data)}")
+    print(f"--- DEBUG: get_po_items END ---\n")
+    
     _po_cache[po_number] = data
     return data
 
