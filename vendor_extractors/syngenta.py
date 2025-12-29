@@ -179,7 +179,7 @@ def parse_analysis_text(text: str, filename: str, known_lots: Set[str]) -> Dict[
 def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, is_kamterter: bool) -> Dict:
     """
     Process a list of strings representing a single item block from Invoice.
-    Robust version: Handles OCR layout scrambling, split descriptions, footer noise, and Seed Size extraction.
+    Robust version: Joins text first to preserve description context, then truncates footer noise.
     """
     # 1. CLEANUP: Remove "HWT" noise from all lines immediately
     block_lines = [re.sub(r"HWT", "", line).strip() for line in block_lines if line.strip()]
@@ -208,11 +208,10 @@ def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, 
     if not block_lines:
         return item_data
 
-    # Set of line indices that contain extracted data (to exclude from Description)
     used_indices = set()
-    used_indices.add(0) # Item Number is always line 0
+    used_indices.add(0)
 
-    # --- 2. Identify Material Number (usually line 1) ---
+    # --- 2. Identify Material Number ---
     for i, line in enumerate(block_lines):
         if i == 1 and re.match(r"^\d{8}$", line):
             used_indices.add(i)
@@ -227,7 +226,6 @@ def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, 
             break
     
     if idx_ea > 0:
-        # Qty is usually the line before EA
         if idx_ea - 1 >= 0:
             try:
                 qty_line = block_lines[idx_ea - 1].replace(",", "")
@@ -235,8 +233,6 @@ def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, 
                     item_data["QuantityLine"] = float(qty_line)
                     used_indices.add(idx_ea - 1)
             except: pass
-        
-        # Unit Price is usually line after EA
         if idx_ea + 1 < len(block_lines):
             try:
                 price_line = block_lines[idx_ea + 1].replace(",", "")
@@ -244,8 +240,6 @@ def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, 
                     item_data["Unit Price"] = float(price_line)
                     used_indices.add(idx_ea + 1)
             except: pass
-            
-        # Total Price is usually 2 lines after EA
         if idx_ea + 2 < len(block_lines):
             try:
                 total_line = block_lines[idx_ea + 2].replace(",", "").replace(" ", "")
@@ -254,13 +248,11 @@ def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, 
                     used_indices.add(idx_ea + 2)
             except: pass
 
-    # --- 4. Extract Lot Number (Anchor: "/") ---
+    # --- 4. Extract Lot Number ---
     for i, line in enumerate(block_lines):
         if line.startswith("/"):
             extracted_lot = line.replace("/", "").strip()
             used_indices.add(i)
-            
-            # Look ahead up to 3 lines for the split part (e.g. "49")
             for offset in range(1, 4):
                 if i + offset < len(block_lines):
                     next_line = block_lines[i + offset].strip()
@@ -272,7 +264,6 @@ def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, 
                         continue
                     if "." in next_line:
                         break
-
             item_data["VendorLotNo"] = extracted_lot
             break 
 
@@ -302,10 +293,11 @@ def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, 
                 used_indices.add(i)
         
         # --- FIXED SEED SIZE LOGIC ---
-        # Matches "Size: 5.5-6.0", "Size: 2.00 - 2.25", "Size: LR"
-        if "Size:" in line:
-            # Capture numeric ranges (e.g. 5.5-6.0H) OR 2-letter codes (e.g. LR)
-            m = re.search(r"Size:\s*([\d\.\-\s]+[A-Z]?|[A-Z]{2}\b)", line, re.IGNORECASE)
+        # Checks for "Size" generally to handle "Size: 5.5" or "Size : 5.5"
+        if "Size" in line:
+            # Capture numeric ranges (e.g. 5.5-6.0H) OR 2+ letter codes (e.g. LR, MEDIUM)
+            # \s*[:\.]? handles "Size:" or "Size :" or "Size."
+            m = re.search(r"Size\s*[:\.]?\s*([\d\.\-\s]+[A-Z]?|[A-Z]{2,}\b)", line, re.IGNORECASE)
             if m:
                 item_data["SeedSize"] = m.group(1).strip()
                 # Remove from line so it doesn't pollute Treatment
@@ -327,7 +319,8 @@ def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, 
         if "Date:" in line:
             used_indices.add(i)
 
-    # --- 7. Extract Description & Treatment (The Leftovers) ---
+    # --- 7. Extract Description & Treatment ---
+    # Gather ALL remaining lines first (Do not pre-filter treatment lines)
     remaining_lines = []
     for i, line in enumerate(block_lines):
         if i not in used_indices:
@@ -336,8 +329,9 @@ def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, 
     full_text = " ".join(remaining_lines).strip()
 
     # >>> NOISE REMOVAL STEP <<<
+    # Cut off text starting with footer phrases found in OCR overflow
     noise_pattern = re.compile(
-        r"(Sub Total|TOTAL\b|Total due|Thank you|This invoice is|Page\s*:|syngenta\s*Invoice|Item\s*Material)", 
+        r"(Sub Total|TOTAL\b|Total due|Thank you|This invoice is|Page\s*:|syngenta\s*Invoice|Item\s*Material|\d+%?\s*DISCOUNT|DISCOUNT\s*APPLIED)", 
         re.IGNORECASE
     )
     match = noise_pattern.search(full_text)
