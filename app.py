@@ -170,24 +170,43 @@ def token_is_valid(access_token: str) -> bool:
 
 def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: str = None) -> str | None:
     """
-    Finds the best BC Item Number using a hybrid approach with strict validation:
-    1. Fuzzy String Similarity (Base Score 0-100)
-    2. ID Substring Matching (Bonus +50) -> STRICTLY for Numeric/Alphanumeric codes
-    3. Tie-Breaking: If multiple items have the same top score, return None (Manual).
-    4. Strict Threshold: Only accepts matches with very high confidence, 
-       UNLESS vendor is HM Clause, where we lower the threshold.
+    Finds the best BC Item Number using a hybrid approach with Dynamic Suffix Detection
+    and "Core Name" emphasis (Strictly for Seminis).
     """
     if not vendor_desc or not bc_options:
         return None
 
-    # Normalization helper: Lowercase and space-separated punctuation
-    def normalize(text):
-        return re.sub(r'[^\w\s]', ' ', text.lower())
+    # Helper: Normalize to lowercase sets of words
+    def get_tokens(text):
+        if not text: return set()
+        clean = re.sub(r'[^\w\s]', ' ', text.lower())
+        return set(clean.split())
 
-    norm_vendor = normalize(vendor_desc)
-    # Create a set of tokens for ID checking
-    vendor_tokens = set(norm_vendor.split())
+    # Helper: Determine if a token is a "Critical Identifier"
+    def is_critical_token(token):
+        # 1. Short tokens (II, 2, F1, Pro, Max) or Roman Numerals
+        if len(token) <= 3 or re.match(r'^[ivx]+$', token):
+            return True
+        # 2. Tokens with digits (SV9014, 500CL)
+        if any(c.isdigit() for c in token):
+            return True
+        return False
+
+    norm_vendor = vendor_desc.lower()
+    vendor_tokens = get_tokens(norm_vendor)
     
+    # --- 0. Core Name Extraction (SEMINIS ONLY) ---
+    # Target structure: "PREFIX - [CORE NAME] [DIGIT] [UNIT]"
+    # Example: "HYB SWEET CORN - TEMPTATION II 25 MK BAG"
+    core_tokens = set()
+    
+    # >>> ADDED CHECK: Only run this regex for Seminis <<<
+    if vendor == "seminis":
+        match_core = re.search(r"-\s*(.+?)(?=\s+\d+)", norm_vendor)
+        if match_core:
+            core_text = match_core.group(1)
+            core_tokens = get_tokens(core_text)
+
     best_match_no = None
     best_score = 0
     is_tie = False
@@ -198,43 +217,42 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: st
             continue
         
         bc_no = option.get("No", "")
-        norm_bc = normalize(bc_desc)
-        bc_tokens = set(norm_bc.split())
+        bc_tokens = get_tokens(bc_desc)
 
-        # --- Scoring Logic ---
-        score = 0
+        # --- 1. Base Score: Fuzzy Similarity (0-100) ---
+        sorted_vendor = " ".join(sorted(vendor_tokens))
+        sorted_bc = " ".join(sorted(bc_tokens))
+        score = difflib.SequenceMatcher(None, sorted_vendor, sorted_bc).ratio() * 100
 
-        # 1. Fuzzy Similarity (Base Score 0-100)
-        # Sort words to ensure "Corn Sweet" matches "Sweet Corn"
-        sorted_vendor = " ".join(sorted(norm_vendor.split()))
-        sorted_bc = " ".join(sorted(norm_bc.split()))
+        # --- 2. Dynamic Critical Token Check ---
+        mismatched_tokens = vendor_tokens.symmetric_difference(bc_tokens)
+        critical_mismatch = False
+        for token in mismatched_tokens:
+            if is_critical_token(token):
+                critical_mismatch = True
+                break
         
-        # difflib calculates how many characters match
-        fuzzy_ratio = difflib.SequenceMatcher(None, sorted_vendor, sorted_bc).ratio()
-        score += fuzzy_ratio * 100 
+        if critical_mismatch:
+            score -= 50
+        else:
+            if vendor_tokens.issubset(bc_tokens) or bc_tokens.issubset(vendor_tokens):
+                score += 10
 
-        # 2. Critical ID Match (Bonus +50)
-        # Only matches if the token is NOT purely alphabetic (must contain digits)
-        id_match_found = False
-        for v_tok in vendor_tokens:
-            # Skip short tokens (< 4 chars) OR purely alphabetic words (e.g. "UNTREATED", "HYBRID")
-            if len(v_tok) < 4 or v_tok.isalpha(): 
-                continue 
-            
-            # Check against all BC tokens
-            for b_tok in bc_tokens:
-                # BC tokens must also be long enough and not just words
-                if len(b_tok) < 4 or b_tok.isalpha(): 
-                    continue
-                
-                # Check for substring match (e.g. Vendor "SV9010SA" vs BC "SV9010SA")
-                if v_tok == b_tok or v_tok in b_tok or b_tok in v_tok:
-                    score += 61 # Reduced bonus
-                    id_match_found = True
-                    break
-            if id_match_found: break
+        # --- 3. ID Match Bonus ---
+        common_tokens = vendor_tokens.intersection(bc_tokens)
+        for token in common_tokens:
+            if len(token) > 3 and any(c.isdigit() for c in token):
+                score += 60
+                break
 
-        # 3. Selection & Tie Detection
+        # --- 4. Core Name Bonus (Seminis Emphasis) ---
+        # If we successfully extracted core tokens (only happens if vendor==seminis),
+        # give extra points for matching them.
+        if core_tokens:
+            common_core = core_tokens.intersection(bc_tokens)
+            score += (len(common_core) * 20)
+
+        # --- 5. Winner Selection ---
         if score > best_score:
             best_score = score
             best_match_no = bc_no
@@ -242,15 +260,10 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: st
         elif score == best_score and score > 0:
             is_tie = True
 
-    # --- Strict Acceptance Criteria ---
-    
-    # 1. If there's a tie (ambiguity), force manual selection
+    # --- Strict Thresholds ---
     if is_tie:
         return None
 
-    # 2. Threshold check:
-    # Default: Score >= 60 (High confidence)
-    # HM Clause exception: Score >= 30 (Lower confidence due to single keyword matches)
     threshold = 60
     if vendor == "hm_clause":
         threshold = 30
@@ -261,6 +274,100 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: st
         return best_match_no
     
     return None
+
+# def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: str = None) -> str | None:
+#     """
+#     Finds the best BC Item Number using a hybrid approach with strict validation:
+#     1. Fuzzy String Similarity (Base Score 0-100)
+#     2. ID Substring Matching (Bonus +50) -> STRICTLY for Numeric/Alphanumeric codes
+#     3. Tie-Breaking: If multiple items have the same top score, return None (Manual).
+#     4. Strict Threshold: Only accepts matches with very high confidence, 
+#        UNLESS vendor is HM Clause, where we lower the threshold.
+#     """
+#     if not vendor_desc or not bc_options:
+#         return None
+
+#     # Normalization helper: Lowercase and space-separated punctuation
+#     def normalize(text):
+#         return re.sub(r'[^\w\s]', ' ', text.lower())
+
+#     norm_vendor = normalize(vendor_desc)
+#     # Create a set of tokens for ID checking
+#     vendor_tokens = set(norm_vendor.split())
+    
+#     best_match_no = None
+#     best_score = 0
+#     is_tie = False
+
+#     for option in bc_options:
+#         bc_desc = option.get("Description", "")
+#         if not bc_desc:
+#             continue
+        
+#         bc_no = option.get("No", "")
+#         norm_bc = normalize(bc_desc)
+#         bc_tokens = set(norm_bc.split())
+
+#         # --- Scoring Logic ---
+#         score = 0
+
+#         # 1. Fuzzy Similarity (Base Score 0-100)
+#         # Sort words to ensure "Corn Sweet" matches "Sweet Corn"
+#         sorted_vendor = " ".join(sorted(norm_vendor.split()))
+#         sorted_bc = " ".join(sorted(norm_bc.split()))
+        
+#         # difflib calculates how many characters match
+#         fuzzy_ratio = difflib.SequenceMatcher(None, sorted_vendor, sorted_bc).ratio()
+#         score += fuzzy_ratio * 100 
+
+#         # 2. Critical ID Match (Bonus +50)
+#         # Only matches if the token is NOT purely alphabetic (must contain digits)
+#         id_match_found = False
+#         for v_tok in vendor_tokens:
+#             # Skip short tokens (< 4 chars) OR purely alphabetic words (e.g. "UNTREATED", "HYBRID")
+#             if len(v_tok) < 4 or v_tok.isalpha(): 
+#                 continue 
+            
+#             # Check against all BC tokens
+#             for b_tok in bc_tokens:
+#                 # BC tokens must also be long enough and not just words
+#                 if len(b_tok) < 4 or b_tok.isalpha(): 
+#                     continue
+                
+#                 # Check for substring match (e.g. Vendor "SV9010SA" vs BC "SV9010SA")
+#                 if v_tok == b_tok or v_tok in b_tok or b_tok in v_tok:
+#                     score += 61 # Reduced bonus
+#                     id_match_found = True
+#                     break
+#             if id_match_found: break
+
+#         # 3. Selection & Tie Detection
+#         if score > best_score:
+#             best_score = score
+#             best_match_no = bc_no
+#             is_tie = False
+#         elif score == best_score and score > 0:
+#             is_tie = True
+
+#     # --- Strict Acceptance Criteria ---
+    
+#     # 1. If there's a tie (ambiguity), force manual selection
+#     if is_tie:
+#         return None
+
+#     # 2. Threshold check:
+#     # Default: Score >= 60 (High confidence)
+#     # HM Clause exception: Score >= 30 (Lower confidence due to single keyword matches)
+#     threshold = 60
+#     if vendor == "hm_clause":
+#         threshold = 30
+#     if vendor == "seminis":
+#         threshold = 50
+    
+#     if best_score >= threshold:
+#         return best_match_no
+    
+#     return None
 
 def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
     """
