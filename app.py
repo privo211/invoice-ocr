@@ -277,13 +277,130 @@ def token_is_valid(access_token: str) -> bool:
     
 #     return None
 
+# def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: str = None) -> str | None:
+#     """
+#     Finds the best BC Item Number using a hybrid approach with strict validation:
+#     1. Fuzzy String Similarity (Base Score 0-100)
+#     2. ID Substring Matching (Bonus +61) -> STRICTLY for Numeric/Alphanumeric codes
+#     3. Seminis Core Name Bonus (+100 per word) -> Emphasizes variety name over generic terms
+#     4. Tie-Breaking: If multiple items have the same top score, return None (Manual).
+#     """
+#     if not vendor_desc or not bc_options:
+#         return None
+
+#     # Normalization helper: Lowercase and space-separated punctuation
+#     def normalize(text):
+#         return re.sub(r'[^\w\s]', ' ', text.lower())
+
+#     # Helper: Normalize to set of tokens
+#     def get_tokens(text):
+#         if not text: return set()
+#         clean = normalize(text)
+#         return set(clean.split())
+
+#     norm_vendor = normalize(vendor_desc)
+#     vendor_tokens = set(norm_vendor.split())
+    
+#     # --- 0. Core Name Extraction (SEMINIS ONLY) ---
+#     # Target structure: "PREFIX - [CORE NAME] [DIGIT] [UNIT]"
+#     # Example: "HYB SWEET CORN - TEMPTATION II 25 MK BAG" -> "TEMPTATION II"
+#     core_tokens = set()
+#     if vendor == "seminis":
+#         # Capture text between dash and the first digit of package size
+#         match_core = re.search(r"-\s*(.+?)(?=\s+\d+)", vendor_desc.lower())
+#         if match_core:
+#             core_text = match_core.group(1)
+#             core_tokens = get_tokens(core_text)
+#             # app.logger.debug(f"Seminis Core Tokens: {core_tokens}")
+
+#     best_match_no = None
+#     best_score = 0
+#     is_tie = False
+
+#     for option in bc_options:
+#         bc_desc = option.get("Description", "")
+#         if not bc_desc:
+#             continue
+        
+#         bc_no = option.get("No", "")
+#         norm_bc = normalize(bc_desc)
+#         bc_tokens = set(norm_bc.split())
+
+#         # --- Scoring Logic ---
+#         score = 0
+
+#         # 1. Fuzzy Similarity (Base Score 0-100)
+#         # Sort words to ensure "Corn Sweet" matches "Sweet Corn"
+#         sorted_vendor = " ".join(sorted(vendor_tokens))
+#         sorted_bc = " ".join(sorted(bc_tokens))
+        
+#         fuzzy_ratio = difflib.SequenceMatcher(None, sorted_vendor, sorted_bc).ratio()
+#         score += fuzzy_ratio * 100 
+
+#         # 2. Critical ID Match (Bonus +61)
+#         # Only matches if the token is NOT purely alphabetic (must contain digits)
+#         id_match_found = False
+#         for v_tok in vendor_tokens:
+#             # Skip short tokens (< 4 chars) OR purely alphabetic words (e.g. "UNTREATED", "HYBRID")
+#             if len(v_tok) < 4 or v_tok.isalpha(): 
+#                 continue 
+            
+#             # Check against all BC tokens
+#             for b_tok in bc_tokens:
+#                 if len(b_tok) < 4 or b_tok.isalpha(): 
+#                     continue
+                
+#                 # Check for substring match (e.g. Vendor "SV9010SA" vs BC "SV9010SA")
+#                 if v_tok == b_tok or v_tok in b_tok or b_tok in v_tok:
+#                     score += 61 
+#                     id_match_found = True
+#                     break
+#             if id_match_found: break
+
+#         # 3. Core Name Bonus (Seminis Emphasis)
+#         # If we successfully extracted core tokens (only happens if vendor==seminis),
+#         # give massive extra points for matching them.
+#         if core_tokens:
+#             common_core = core_tokens.intersection(bc_tokens)
+#             if common_core:
+#                 print(f"-----------------Core Tokens: {core_tokens}, BC Tokens: {bc_tokens}, Common Core: {common_core}----------------------------")
+#                 score += (len(common_core) * 100)
+#                 print(f"Score:{score}")
+
+#         # 4. Selection & Tie Detection
+#         if score > best_score:
+#             best_score = score
+#             best_match_no = bc_no
+#             is_tie = False
+#         elif score == best_score and score > 0:
+#             is_tie = True
+
+#     # --- Strict Acceptance Criteria ---
+    
+#     # 1. If there's a tie (ambiguity), force manual selection
+#     if is_tie:
+#         return None
+
+#     # 2. Threshold check:
+#     threshold = 60
+#     if vendor == "hm_clause":
+#         threshold = 30
+#     if vendor == "seminis":
+#         threshold = 50
+    
+#     if best_score >= threshold:
+#         return best_match_no
+    
+#     return None
+
 def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: str = None) -> str | None:
     """
     Finds the best BC Item Number using a hybrid approach with strict validation:
     1. Fuzzy String Similarity (Base Score 0-100)
     2. ID Substring Matching (Bonus +61) -> STRICTLY for Numeric/Alphanumeric codes
     3. Seminis Core Name Bonus (+100 per word) -> Emphasizes variety name over generic terms
-    4. Tie-Breaking: If multiple items have the same top score, return None (Manual).
+    4. Syngenta Capitalization Bonus (+20 per word) -> Weights uppercase vendor words higher
+    5. Tie-Breaking: If multiple items have the same top score, return None (Manual).
     """
     if not vendor_desc or not bc_options:
         return None
@@ -301,9 +418,7 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: st
     norm_vendor = normalize(vendor_desc)
     vendor_tokens = set(norm_vendor.split())
     
-    # --- 0. Core Name Extraction (SEMINIS ONLY) ---
-    # Target structure: "PREFIX - [CORE NAME] [DIGIT] [UNIT]"
-    # Example: "HYB SWEET CORN - TEMPTATION II 25 MK BAG" -> "TEMPTATION II"
+    # --- 0a. Core Name Extraction (SEMINIS ONLY) ---
     core_tokens = set()
     if vendor == "seminis":
         # Capture text between dash and the first digit of package size
@@ -311,7 +426,15 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: st
         if match_core:
             core_text = match_core.group(1)
             core_tokens = get_tokens(core_text)
-            # app.logger.debug(f"Seminis Core Tokens: {core_tokens}")
+
+    # --- 0b. Capitalized Word Extraction (SYNGENTA ONLY) ---
+    # Extract words that are fully uppercase and length > 2 (avoids 'KS', 'LB', 'EA')
+    capitalized_tokens = set()
+    if vendor == "syngenta":
+        # Split by non-word chars to handle punctuation attached to words
+        # Only keep words that are ALL CAPS and longer than 2 chars (e.g. FLAME, PAYLOAD)
+        raw_words = re.findall(r'\b[A-Z]{3,}\b', vendor_desc)
+        capitalized_tokens = set(raw_words)
 
     best_match_no = None
     best_score = 0
@@ -330,7 +453,6 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: st
         score = 0
 
         # 1. Fuzzy Similarity (Base Score 0-100)
-        # Sort words to ensure "Corn Sweet" matches "Sweet Corn"
         sorted_vendor = " ".join(sorted(vendor_tokens))
         sorted_bc = " ".join(sorted(bc_tokens))
         
@@ -338,19 +460,15 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: st
         score += fuzzy_ratio * 100 
 
         # 2. Critical ID Match (Bonus +61)
-        # Only matches if the token is NOT purely alphabetic (must contain digits)
         id_match_found = False
         for v_tok in vendor_tokens:
-            # Skip short tokens (< 4 chars) OR purely alphabetic words (e.g. "UNTREATED", "HYBRID")
             if len(v_tok) < 4 or v_tok.isalpha(): 
                 continue 
             
-            # Check against all BC tokens
             for b_tok in bc_tokens:
                 if len(b_tok) < 4 or b_tok.isalpha(): 
                     continue
                 
-                # Check for substring match (e.g. Vendor "SV9010SA" vs BC "SV9010SA")
                 if v_tok == b_tok or v_tok in b_tok or b_tok in v_tok:
                     score += 61 
                     id_match_found = True
@@ -358,16 +476,21 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: st
             if id_match_found: break
 
         # 3. Core Name Bonus (Seminis Emphasis)
-        # If we successfully extracted core tokens (only happens if vendor==seminis),
-        # give massive extra points for matching them.
         if core_tokens:
             common_core = core_tokens.intersection(bc_tokens)
             if common_core:
-                print(f"-----------------Core Tokens: {core_tokens}, BC Tokens: {bc_tokens}, Common Core: {common_core}----------------------------")
                 score += (len(common_core) * 100)
-                print(f"Score:{score}")
 
-        # 4. Selection & Tie Detection
+        # 4. Capitalization Bonus (Syngenta)
+        # Boost score if a CAPITALIZED vendor word appears in the BC description
+        if capitalized_tokens:
+            for cap_word in capitalized_tokens:
+                # Check normalized BC tokens for the presence of this word
+                if cap_word.lower() in bc_tokens:
+                    # e.g. Vendor "PAYLOAD" (caps) matches BC "payload" (norm)
+                    score += 20 
+
+        # 5. Selection & Tie Detection
         if score > best_score:
             best_score = score
             best_match_no = bc_no
@@ -376,15 +499,15 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: st
             is_tie = True
 
     # --- Strict Acceptance Criteria ---
-    
-    # 1. If there's a tie (ambiguity), force manual selection
     if is_tie:
         return None
 
-    # 2. Threshold check:
+    # Threshold check
     threshold = 60
     if vendor == "hm_clause":
         threshold = 30
+    if vendor == "syngenta":
+        threshold = 40  # Lowered threshold to work with Cap Bonus
     if vendor == "seminis":
         threshold = 50
     
