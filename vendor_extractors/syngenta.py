@@ -805,12 +805,19 @@ def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, 
                     item_data["TotalPrice"] = float(total_line)
                     used_indices.add(idx_ea + 2)
             except: pass
-
+            
     # --- 4. Extract Lot Number ---
     for i, line in enumerate(block_lines):
         if line.startswith("/"):
+            # User Rule: Accept ONLY if fully capitalized (interpreted as no lowercase characters)
+            # This allows "/TVW077040X1" but rejects "/Picar/Thia Red" (Rejected).
+            
+            if line.upper() != line:
+                continue
+
             extracted_lot = line.replace("/", "").strip()
             used_indices.add(i)
+            
             # Look ahead for split lot suffix
             for offset in range(1, 4):
                 if i + offset < len(block_lines):
@@ -824,7 +831,27 @@ def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, 
                     if "." in next_line:
                         break
             item_data["VendorLotNo"] = extracted_lot
-            break 
+            break
+
+    # # --- 4. Extract Lot Number ---
+    # for i, line in enumerate(block_lines):
+    #     if line.startswith("/"):
+    #         extracted_lot = line.replace("/", "").strip()
+    #         used_indices.add(i)
+    #         # Look ahead for split lot suffix
+    #         for offset in range(1, 4):
+    #             if i + offset < len(block_lines):
+    #                 next_line = block_lines[i + offset].strip()
+    #                 if re.match(r"^\d{1,5}$", next_line):
+    #                     extracted_lot += next_line
+    #                     used_indices.add(i + offset)
+    #                     break 
+    #                 if re.search(r"[a-zA-Z]", next_line):
+    #                     continue
+    #                 if "." in next_line:
+    #                     break
+    #         item_data["VendorLotNo"] = extracted_lot
+    #         break 
 
     # --- 5. Extract Batch Number ---
     for i, line in enumerate(block_lines):
