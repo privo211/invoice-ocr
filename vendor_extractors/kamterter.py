@@ -2,11 +2,21 @@ import fitz  # PyMuPDF
 import re
 from db_logger import log_processing_event
 
+def parse_currency(value_str):
+    """Cleans '$1,234.56' -> 1234.56"""
+    if not value_str:
+        return 0.0
+    # Remove '$' and ',' then convert
+    clean = re.sub(r"[^\d\.-]", "", value_str)
+    try:
+        return float(clean)
+    except ValueError:
+        return 0.0
+
 def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dict[str, list[dict]]:
     grouped_results = {}
 
     for filename, pdf_bytes in pdf_files:
-        print(f"\n--- DEBUG: Processing File {filename} ---")
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         full_text = "".join([page.get_text() for page in doc])
         page_count = doc.page_count
@@ -21,91 +31,95 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
         if m := re.search(r"Invoiced\s*Date[:\s]*(\d{1,2}/\d{1,2}/\d{4})", full_text, re.IGNORECASE):
             doc_date = m.group(1)
 
-        # Extract Grand Total
+        # --- 2. Extract Grand Total ---
+        # Logic: Look for a price appearing immediately BEFORE the word "Total:"
         grand_total = 0.0
-        # Check for Total at the very end of the document
-        if m := re.search(r"Total\s*:.*?\$?([\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL):
-            all_totals = re.findall(r"Total\s*:.*?\$?([\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL)
-            if all_totals:
-                grand_total = float(all_totals[-1].replace(",", ""))
-        
-        print(f"DEBUG: Invoice: {invoice_no}, Date: {doc_date}, Grand Total: {grand_total}")
+        # Pattern: $92,151.49 \n Total:
+        if m_total := re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Total:", full_text, re.IGNORECASE):
+            grand_total = parse_currency(m_total.group(1))
+        # Fallback: Standard layout
+        elif m_total_std := re.search(r"Total\s*:.*?(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL):
+             all_totals = re.findall(r"Total\s*:.*?(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL)
+             if all_totals:
+                 grand_total = parse_currency(all_totals[-1])
 
-        # --- 2. Block Processing ---
+        # --- 3. Block Processing ---
         ktt_blocks = re.split(r"(?=KTT\s*#:)", full_text)
         
         resource_lines = []
         processed_line_total_sum = 0.0
         
-        for i, block in enumerate(ktt_blocks):
+        for block in ktt_blocks:
             if "KTT #:" not in block:
                 continue
 
-            print(f"\n--- DEBUG: Analyzing Block {i} ---")
-            # print(block) # Uncomment to see full raw text of the block
-            
-            # 1. Extract PO
+            # Extract PO
             po_match = re.search(r"PO\s*(?:#)?[:\s]*([^\n]+)", block, re.IGNORECASE)
             po_raw = po_match.group(1).strip() if po_match else "UNKNOWN"
             
-            # G/L Logic Check
+            # G/L Logic: Skip "Unprocessed" or Date-based POs
             if re.match(r"\d{1,2}/\d{1,2}/\d{4}", po_raw) or "left unprocessed" in block.lower():
-                print(f"Skipping Item Logic (Unprocessed/Date PO): {po_raw}")
                 continue
 
-            # 2. Extract Data
+            # Item Logic
             seed_type = "Unknown"
             if m_seed := re.search(r"Seed\s*Type[:\s]*([^\n]+)", block, re.IGNORECASE):
                 seed_type = m_seed.group(1).strip()
 
+            # Quantity (Shipped Weight)
             quantity = 0.0
             if m_qty := re.search(r"Shipped\s*Weight[:\s]*([\d,]+\.\d{2})", block, re.IGNORECASE):
-                quantity = float(m_qty.group(1).replace(",", ""))
+                quantity = parse_currency(m_qty.group(1))
 
-            # 3. CRITICAL: Financial Extraction Debugging
-            subtotal = 0.0
-            freight = 0.0
+            # --- FINANCIALS EXTRACTION (Revised for Value-First Layout) ---
             
-            # Regex Strategy 1: Look for "Subtotal:" label
-            if m_sub := re.search(r"Subtotal[:\s]*.*?\$?([\d,]+\.\d{2})", block, re.IGNORECASE | re.DOTALL):
-                subtotal = float(m_sub.group(1).replace(",", ""))
-                print(f"DEBUG: Found Subtotal via Regex: {subtotal}")
-            else:
-                # Regex Strategy 2: Look for the last dollar amount in the block (Fall back)
-                # This handles cases where "Subtotal:" label is messy or missing
+            # Subtotal
+            subtotal = 0.0
+            # Pattern: $2,152.78 \n Subtotal:
+            if m_sub_rev := re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Subtotal:", block, re.IGNORECASE):
+                subtotal = parse_currency(m_sub_rev.group(1))
+            # Fallback Pattern: Subtotal: $2,152.78
+            elif m_sub_fwd := re.search(r"Subtotal[:\s]*.*?(\$[\d,]+\.\d{2})", block, re.IGNORECASE | re.DOTALL):
+                subtotal = parse_currency(m_sub_fwd.group(1))
+            # Last Resort: Last dollar amount in block
+            elif not subtotal:
                 prices = re.findall(r"\$([\d,]+\.\d{2})", block)
                 if prices:
-                    subtotal = float(prices[-1].replace(",", ""))
-                    print(f"DEBUG: Found Subtotal via Fallback (Last Price): {subtotal}")
-                else:
-                    print("DEBUG: FAILED to find Subtotal")
+                    subtotal = parse_currency(prices[-1])
 
-            # Look for Freight explicitly to subtract it
-            # Note: We must avoid subtracting "Small Box" if it's listed separately
-            if m_freight := re.search(r"Freight[:\s]*.*?\$?([\d,]+\.\d{2})", block, re.IGNORECASE | re.DOTALL):
-                freight = float(m_freight.group(1).replace(",", ""))
-                print(f"DEBUG: Found Freight: {freight}")
+            # Freight
+            freight = 0.0
+            # Pattern: $1,375.66 \n Freight:
+            # We strictly look for the newline structure to avoid matching headers
+            if m_frt_rev := re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Freight:", block, re.IGNORECASE):
+                freight = parse_currency(m_frt_rev.group(1))
+            # Forward pattern is risky due to "Priority Freight" header, so we rely on the specific format
+            elif m_frt_fwd := re.search(r"Freight:\s*.*?(\$[\d,]+\.\d{2})", block, re.IGNORECASE | re.DOTALL):
+                 freight = parse_currency(m_frt_fwd.group(1))
 
-            # 4. Calculation
-            # Logic: If the Subtotal regex grabbed the final block total, it likely INCLUDES freight.
-            # We subtract freight to get the goods cost.
+            # Calculation
             adjusted_subtotal = subtotal
-            
-            if freight > 0 and adjusted_subtotal >= freight:
+            # If subtotal likely includes freight (common in totals), strip it out to get item cost
+            if freight > 0 and adjusted_subtotal > freight:
                 adjusted_subtotal = adjusted_subtotal - freight
 
             unit_cost = 0.0
             if quantity > 0:
                 unit_cost = adjusted_subtotal / quantity
-            
-            print(f"DEBUG CALC: ({subtotal} (Sub) - {freight} (Frt)) / {quantity} (Qty) = {unit_cost} (Unit Cost)")
 
-            # 5. Item No Extraction
+            # Extract Suffix for Item No
             item_no = po_raw
             if "-" in po_raw:
-                item_no = re.sub(r"^\d+-", "", po_raw).strip()
+                # Regex to take everything after the first hyphen sequence
+                sub_m = re.search(r"^\d+-(.+)", po_raw)
+                if sub_m:
+                    item_no = sub_m.group(1).strip()
+                else:
+                    item_no = po_raw
 
-            description = f"Inv{invoice_no}_{seed_type}_{po_raw}"
+            description = f"INV{invoice_no}_{seed_type}_{po_raw}"
+
+            # Calculate line amount for balancing
             line_amount = round(quantity * round(unit_cost, 5), 2)
             processed_line_total_sum += line_amount
 
@@ -115,26 +129,24 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "Description": description,
                 "Quantity": quantity,
                 "DirectUnitCost": round(unit_cost, 5),
-                "LineAmount": line_amount,
-                "PO_Number": po_raw
+                "LineAmount": line_amount
             })
 
-        # --- 3. Balancing G/L Line ---
+        # --- 4. Balancing G/L Line ---
         gl_amount = grand_total - processed_line_total_sum
-        print(f"\nDEBUG: Balancing GL: {grand_total} (Total) - {processed_line_total_sum} (Sum) = {gl_amount}")
         
+        # Only add GL line if significant
         if abs(gl_amount) >= 0.01:
             resource_lines.append({
                 "Type": "G/L Account",
                 "No": "609100",
-                "Description": f"Inv{invoice_no}_Freight_Splits_Adj",
+                "Description": f"INV{invoice_no}_Unprocessed_WOSplit_Shipping",
                 "Quantity": 1,
                 "DirectUnitCost": round(gl_amount, 2),
-                "LineAmount": round(gl_amount, 2),
-                "PO_Number": "G/L Adjustment"
+                "LineAmount": round(gl_amount, 2)
             })
 
-        # --- 4. Logging & Final Return ---
+        # --- 5. Logging & Final Return ---
         log_processing_event(
             vendor='Kamterter',
             filename=filename,
