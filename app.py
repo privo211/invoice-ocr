@@ -16,6 +16,7 @@ from functools import wraps
 from multiprocessing import Pool, cpu_count
 from vendor_extractors.sakata import load_package_descriptions, get_po_items
 from vendor_extractors.hm_clause import extract_hm_clause_data_from_bytes, find_best_hm_clause_package_description
+from vendor_extractors.kamterter import extract_kamterter_data_from_bytes
 from vendor_extractors.seminis import extract_seminis_data_from_bytes, find_best_seminis_package_description
 from vendor_extractors.syngenta import extract_syngenta_data_from_bytes
 from vendor_extractors.nunhems import extract_nunhems_data_from_bytes, find_best_nunhems_package_description
@@ -1178,6 +1179,10 @@ def index():
                 treatments2=treatments2,
                 pkg_descs=pkg_descs
             )
+            
+        elif vendor == "kamterter":
+            grouped_results = extract_kamterter_data_from_bytes(pdf_files)
+            return render_template("results_kamterter.html", items=grouped_results)
 
         else:
             for path in pdf_paths:
@@ -1190,6 +1195,70 @@ def index():
     stats = db_logger.get_log_stats()
     return render_template("index.html", user_name=session.get("user_name"), stats=stats)
 
+@app.route("/create-purchase-invoice", methods=["POST"])
+@login_required
+@timed_func("create_purchase_invoice")
+def create_purchase_invoice():
+    """
+    Creates a Purchase Invoice Header and Lines via Deep Insert.
+    Uses the PurchaseOrderAPI (Page 50140) and PurchaseLineAPI (Page 50141).
+    """
+    data = request.get_json()
+    
+    # Refresh Token Logic (reused from create_lot)
+    cache = load_cache()
+    msal_app = build_msal_app(cache)
+    accounts = msal_app.get_accounts()
+    if accounts:
+        result = msal_app.acquire_token_silent(scopes=SCOPE_BC, account=accounts[0])
+        if "access_token" in result:
+            session["user_token"] = result["access_token"]
+            save_cache(cache)
+    
+    # 1. Format Date for BC (YYYY-MM-DD)
+    doc_date_raw = data.get("Document_Date")
+    bc_date = doc_date_raw
+    try:
+        if "/" in doc_date_raw:
+            dt = datetime.strptime(doc_date_raw, "%m/%d/%Y")
+            bc_date = dt.strftime("%Y-%m-%d")
+    except:
+        pass # Fallback to sending as-is
+
+    # 2. Construct Payload
+    payload = {
+        "Document_Type": "Invoice",
+        "Vendor_No": data.get("Vendor_No"),
+        "Vendor_Invoice_No": data.get("Vendor_Invoice_No"),
+        "Document_Date": bc_date,
+        "PurchaseLines": data.get("PurchaseLines", [])
+    }
+
+    # 3. Send to BC
+    # Note: Ensure the URL matches your Publisher/Group/Version from the AL Code
+    bc_url = (
+        f"https://api.businesscentral.dynamics.com/v2.0/"
+        f"{BC_TENANT}/{BC_ENV_DEFAULT}/api/PVORA/VendorInvoiceAutomation/v2.0/"
+        f"companies({BC_COMPANY})/PurchaseHeaders"
+    )
+    
+    headers = {
+        "Authorization": f"Bearer {session.get('user_token')}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation" # Gets the created invoice back
+    }
+
+    try:
+        resp = timed_post(bc_url, json=payload, headers=headers)
+        resp.raise_for_status()
+        return jsonify(resp.json())
+    except requests.exceptions.HTTPError as e:
+        app.logger.error(f"Invoice creation failed: {e.response.text}")
+        return jsonify({"message": e.response.text}), e.response.status_code
+    except Exception as e:
+        app.logger.error(f"Invoice creation error: {e}")
+        return jsonify({"message": str(e)}), 500
+    
 # Lot creation endpoint
 @app.route("/create-lot", methods=["POST"])
 @login_required

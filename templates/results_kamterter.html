@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Kamterter Invoice Data</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    body { font-family: Segoe UI, sans-serif; background-color: #f4f4f4; padding: 2rem; }
+    .card { border: none; box-shadow: 0 0 10px rgba(0,0,0,0.1); margin-bottom: 2rem; }
+    .table th { background-color: #0099d8; color: white; }
+    .gl-row { background-color: #fff3cd; font-weight: bold; } /* Highlight GL lines */
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <h2>Kamterter: Extracted Invoice Data</h2>
+      <a href="/" class="btn btn-secondary">Go Back</a>
+    </div>
+
+    {% if items %}
+      {% for filename, lines in items.items() %}
+        <div class="card p-3">
+          <h4>📄 {{ filename }}</h4>
+          <div class="row mb-3">
+            <div class="col-md-3"><strong>Invoice #:</strong> <span id="inv-{{ loop.index }}">{{ lines[0].VendorInvoiceNo }}</span></div>
+            <div class="col-md-3"><strong>Date:</strong> <span id="date-{{ loop.index }}">{{ lines[0].DocumentDate }}</span></div>
+            <div class="col-md-3"><strong>Vendor:</strong> 95257</div>
+          </div>
+
+          <table class="table table-bordered table-hover">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>No.</th>
+                <th>Description</th>
+                <th>Quantity</th>
+                <th>Unit Cost</th>
+                <th>Line Amount</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-{{ loop.index }}">
+              {% for line in lines %}
+              <tr class="{% if line.Type == 'G/L Account' %}gl-row{% endif %}" 
+                  data-type="{{ line.Type }}" 
+                  data-no="{{ line.No }}" 
+                  data-desc="{{ line.Description }}" 
+                  data-qty="{{ line.Quantity }}" 
+                  data-cost="{{ line.DirectUnitCost }}">
+                <td>{{ line.Type }}</td>
+                <td>{{ line.No }}</td>
+                <td>{{ line.Description }}</td>
+                <td>{{ line.Quantity }}</td>
+                <td>{{ line.DirectUnitCost }}</td>
+                <td>{{ line.LineAmount }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          
+          <button class="btn btn-success float-end create-invoice-btn" 
+                  data-index="{{ loop.index }}" 
+                  data-inv="{{ lines[0].VendorInvoiceNo }}"
+                  data-date="{{ lines[0].DocumentDate }}">
+            Create Invoice in Business Central
+          </button>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p>No data found.</p>
+    {% endif %}
+  </div>
+
+  <script>
+    document.querySelectorAll('.create-invoice-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if(!confirm("Create this Purchase Invoice in BC?")) return;
+        
+        const idx = btn.dataset.index;
+        const rows = document.querySelectorAll(`#tbody-${idx} tr`);
+        
+        // Build Payload
+        const linesPayload = [];
+        rows.forEach(row => {
+          linesPayload.push({
+            "Document_Type": "Invoice",
+            "Type": row.dataset.type,
+            "No": row.dataset.no,
+            "Description": row.dataset.desc,
+            "Quantity": parseFloat(row.dataset.qty),
+            "Direct_Unit_Cost": parseFloat(row.dataset.cost)
+          });
+        });
+
+        const payload = {
+          "Document_Type": "Invoice",
+          "Vendor_No": "95257",
+          "Vendor_Invoice_No": btn.dataset.inv,
+          "Document_Date": btn.dataset.date, // API handles conversion if needed
+          "PurchaseLines": linesPayload
+        };
+
+        try {
+          btn.disabled = true;
+          btn.textContent = "Processing...";
+          
+          const res = await fetch('/create-purchase-invoice', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+          });
+
+          const json = await res.json();
+          if (res.ok) {
+            alert(`✅ Success! Invoice Created: ${json.No}`);
+            btn.textContent = "Created";
+            btn.classList.remove('btn-success');
+            btn.classList.add('btn-secondary');
+          } else {
+            alert(`❌ Error: ${json.message || 'Unknown error'}`);
+            btn.disabled = false;
+            btn.textContent = "Try Again";
+          }
+        } catch (e) {
+          alert(`❌ Network Error: ${e.message}`);
+          btn.disabled = false;
+          btn.textContent = "Try Again";
+        }
+      });
+    });
+  </script>
+</body>
+</html>
