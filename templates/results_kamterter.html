@@ -80,11 +80,11 @@
       border-radius: 8px;
     }
     
-    /* Table Styles - Adjusted for Dark Mode Compatibility */
+    /* Table Styles */
     .table {
       color: var(--text-color);
       border-color: #dee2e6;
-      --bs-table-bg: transparent; /* Essential for inheriting card background */
+      --bs-table-bg: transparent; 
     }
     .table th { 
       background-color: var(--primary-color); 
@@ -108,19 +108,34 @@
     /* GL Row Styling */
     .gl-row { 
       background-color: #fff3cd !important; 
-      color: #000 !important; /* Always black text on light yellow in Light Mode */
+      color: #000 !important;
       font-weight: bold;
     } 
-    
     body.dark-mode .gl-row {
-      background-color: #4d4d00 !important; /* Dark olive/yellow for Dark Mode */
-      color: #fff !important; /* White text for readability */
+      background-color: #4d4d00 !important; 
+      color: #fff !important;
     }
     
     /* Ensure cells inside GL row inherit the row colors */
     .gl-row td {
         background-color: inherit !important;
         color: inherit !important;
+    }
+    
+    /* Warning Box for US POs */
+    .alert-us-warning {
+        background-color: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+        padding: 1rem;
+        border-radius: 0.25rem;
+        text-align: center;
+        font-weight: bold;
+    }
+    body.dark-mode .alert-us-warning {
+        background-color: #4c1d21;
+        color: #ffb3b9;
+        border-color: #842029;
     }
   </style>
 </head>
@@ -154,44 +169,55 @@
             <div class="col-md-3"><strong>Vendor:</strong> 95257</div>
           </div>
 
-          <div class="table-responsive">
-            <table class="table table-bordered table-hover">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>No.</th>
-                  <th>Description</th>
-                  <th>Quantity</th>
-                  <th>Unit Cost</th>
-                  <th>Line Amount</th>
-                </tr>
-              </thead>
-              <tbody id="tbody-{{ loop.index }}">
-                {% for line in lines %}
-                <tr class="{% if line.Type == 'G/L Account' %}gl-row{% endif %}" 
-                    data-type="{{ line.Type }}" 
-                    data-no="{{ line.No }}" 
-                    data-desc="{{ line.Description }}" 
-                    data-qty="{{ line.Quantity }}" 
-                    data-cost="{{ line.DirectUnitCost }}">
-                  <td>{{ line.Type }}</td>
-                  <td>{{ line.No }}</td>
-                  <td>{{ line.Description }}</td>
-                  <td>{{ line.Quantity }}</td>
-                  <td>{{ line.DirectUnitCost }}</td>
-                  <td>{{ line.LineAmount }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          
-          <button class="btn btn-success float-end create-invoice-btn" 
-                  data-index="{{ loop.index }}" 
-                  data-inv="{{ lines[0].VendorInvoiceNo }}"
-                  data-date="{{ lines[0].DocumentDate }}">
-            Create Invoice in Business Central
-          </button>
+          {% set is_us_warning = false %}
+          {% if lines|length == 1 and lines[0].IsUSWarning %}
+             {% set is_us_warning = true %}
+          {% endif %}
+
+          {% if is_us_warning %}
+             <div class="alert-us-warning">
+                {{ lines[0].Description }}
+             </div>
+          {% else %}
+             <div class="table-responsive">
+                <table class="table table-bordered table-hover">
+                  <thead>
+                    <tr>
+                      <th>Type</th>
+                      <th>No.</th>
+                      <th>Description</th>
+                      <th>Quantity</th>
+                      <th>Unit Cost</th>
+                      <th>Line Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbody-{{ loop.index }}">
+                    {% for line in lines %}
+                    <tr class="{% if line.Type == 'G/L Account' %}gl-row{% endif %}" 
+                        data-type="{{ line.Type }}" 
+                        data-no="{{ line.No }}" 
+                        data-desc="{{ line.Description }}" 
+                        data-qty="{{ line.Quantity }}" 
+                        data-cost="{{ line.DirectUnitCost }}">
+                      <td>{{ line.Type }}</td>
+                      <td>{{ line.No }}</td>
+                      <td>{{ line.Description }}</td>
+                      <td>{{ line.Quantity }}</td>
+                      <td>{{ line.DirectUnitCost }}</td>
+                      <td>{{ line.LineAmount }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+             </div>
+             
+             <button class="btn btn-success float-end create-invoice-btn" 
+                     data-index="{{ loop.index }}" 
+                     data-inv="{{ lines[0].VendorInvoiceNo }}"
+                     data-date="{{ lines[0].DocumentDate }}">
+               Create Invoice in Business Central
+             </button>
+          {% endif %}
         </div>
       {% endfor %}
     {% else %}
@@ -212,7 +238,6 @@
       }
     }
 
-    // Apply saved theme on load
     if (localStorage.getItem('theme') === 'dark-mode') {
       document.body.classList.add('dark-mode');
       themeBtn.textContent = 'Light Mode';
