@@ -44,21 +44,25 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                  grand_total = parse_currency(all_totals[-1])
 
         # --- 3. Block Processing ---
-        ktt_blocks = re.split(r"(?=KTT\s*#:)", full_text)
+        # Robust split: Look for "KTT" followed by optional space, optional #, and colon
+        # This prevents merging blocks which causes description shifts
+        ktt_blocks = re.split(r"(?=KTT\s*[:#])", full_text)
         
         resource_lines = []
         processed_line_total_sum = 0.0
         
         for block in ktt_blocks:
-            if "KTT #:" not in block:
+            if "KTT" not in block:
                 continue
 
             # Extract PO
             po_match = re.search(r"PO\s*(?:#)?[:\s]*([^\n]+)", block, re.IGNORECASE)
             po_raw = po_match.group(1).strip() if po_match else "UNKNOWN"
             
-            # G/L Logic: Skip "Unprocessed" or Date-based POs
-            if re.match(r"\d{1,2}/\d{1,2}/\d{4}", po_raw) or "left unprocessed" in block.lower():
+            # G/L Logic: Skip "Unprocessed", Date-based POs, OR purely numeric POs
+            if (re.match(r"\d{1,2}/\d{1,2}/\d{4}", po_raw) or 
+                "left unprocessed" in block.lower() or 
+                re.match(r"^\d+$", po_raw)): # Skips 44854, 44855, etc.
                 continue
 
             # Item Logic
@@ -129,7 +133,8 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "Description": description,
                 "Quantity": quantity,
                 "DirectUnitCost": round(unit_cost, 5),
-                "LineAmount": line_amount
+                "LineAmount": line_amount,
+                "PO_Number": po_raw
             })
 
         # --- 4. Balancing G/L Line ---
