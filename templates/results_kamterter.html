@@ -80,18 +80,22 @@
       border-radius: 8px;
     }
     
-    /* Table Styles */
+    /* Table Styles - Adjusted for Dark Mode Compatibility */
     .table {
       color: var(--text-color);
       border-color: #dee2e6;
+      --bs-table-bg: transparent; /* Essential for inheriting card background */
     }
     .table th { 
       background-color: var(--primary-color); 
       color: white; 
+      border-bottom: none;
     }
-    .table-bordered td, .table-bordered th {
-      border-color: inherit;
+    .table td {
+      color: var(--text-color);
+      border-bottom-color: inherit;
     }
+    
     /* Dark mode table adjustments */
     body.dark-mode .table {
       border-color: #495057;
@@ -101,14 +105,22 @@
       background-color: rgba(255,255,255,0.075);
     }
 
+    /* GL Row Styling */
     .gl-row { 
-      background-color: #fff3cd; 
-      font-weight: bold; 
-      color: #000; /* Ensure text is readable in GL row */
+      background-color: #fff3cd !important; 
+      color: #000 !important; /* Always black text on light yellow in Light Mode */
+      font-weight: bold;
     } 
+    
     body.dark-mode .gl-row {
-      background-color: #4d4d00; /* Darker yellow for dark mode */
-      color: #fff;
+      background-color: #4d4d00 !important; /* Dark olive/yellow for Dark Mode */
+      color: #fff !important; /* White text for readability */
+    }
+    
+    /* Ensure cells inside GL row inherit the row colors */
+    .gl-row td {
+        background-color: inherit !important;
+        color: inherit !important;
     }
   </style>
 </head>
@@ -200,6 +212,7 @@
       }
     }
 
+    // Apply saved theme on load
     if (localStorage.getItem('theme') === 'dark-mode') {
       document.body.classList.add('dark-mode');
       themeBtn.textContent = 'Light Mode';

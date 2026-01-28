@@ -140,8 +140,10 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
         # --- 4. Balancing G/L Line ---
         gl_amount = grand_total - processed_line_total_sum
         
-        # Only add GL line if significant
-        if abs(gl_amount) >= 0.01:
+        # Only add GL line if we have actual resource lines
+        # If resource_lines is empty, we likely misread the document or filtering removed everything,
+        # so adding a massive GL line would be incorrect.
+        if resource_lines >= 0.01:
             resource_lines.append({
                 "Type": "G/L Account",
                 "No": "609100",
