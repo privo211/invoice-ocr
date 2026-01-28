@@ -1202,7 +1202,7 @@ def index():
 def create_purchase_invoice():
     """
     Creates a Purchase Invoice via Deep Insert.
-    Resolves the Company UUID first to satisfy the v2.0 API requirement.
+    Uses Company Name directly in URL: companies('Name')
     """
     data = request.get_json()
     token = session.get('user_token')
@@ -1218,13 +1218,7 @@ def create_purchase_invoice():
             session["user_token"] = token
             save_cache(cache)
     
-    # 2. Get Company UUID (Critical Step)
-    try:
-        company_id = get_company_id(token)
-    except Exception as e:
-        return jsonify({"message": f"Configuration Error: {str(e)}"}), 500
-
-    # 3. Format Date
+    # 2. Format Date
     doc_date_raw = data.get("Document_Date")
     bc_date = doc_date_raw
     try:
@@ -1233,21 +1227,19 @@ def create_purchase_invoice():
             bc_date = dt.strftime("%Y-%m-%d")
     except: pass
 
-    # 4. Construct Payload
+    # 3. Construct Payload (Using Vendor Name)
     payload = {
         "Document_Type": "Invoice",
-        # MAP VENDOR NAME HERE (Removed Vendor_No)
-        "Buy_from_Vendor_Name": data.get("Buy_from_Vendor_Name"),
+        "Buy_from_Vendor_Name": data.get("Buy_from_Vendor_Name"), # Mapped from frontend
         "Vendor_Invoice_No": data.get("Vendor_Invoice_No"),
         "Document_Date": bc_date,
         "PurchaseLines": data.get("PurchaseLines", [])
     }
-
-    # 5. Send to BC (using Company ID)
+    # 4. Send to BC
     bc_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
         f"{BC_TENANT}/{BC_ENV_DEFAULT}/api/PVORA/VendorInvoiceAutomation/v2.0/"
-        f"companies({company_id})/PurchaseHeaders"
+        f"companies('{BC_COMPANY}')/PurchaseHeaders"
     )
     
     headers = {
