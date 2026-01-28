@@ -55,7 +55,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             po_match = re.search(r"PO\s*(?:#)?[:\s]*([^\n]+)", block, re.IGNORECASE)
             po_raw = po_match.group(1).strip() if po_match else "UNKNOWN"
             
-            # Check for Numeric POs (US Branch)
+            # Check for Numeric POs (US Branch) -> Skip and flag
             if re.match(r"^\d+$", po_raw):
                 numeric_po_found = True
                 continue 
@@ -69,7 +69,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             if m_seed := re.search(r"Seed\s*Type[:\s]*([^\n]+)", block, re.IGNORECASE):
                 seed_type = m_seed.group(1).strip()
 
-            # Quantity (Shipped Weight)
+            # Quantity
             quantity = 0.0
             if m_qty := re.search(r"Shipped\s*Weight[:\s]*([\d,]+\.\d{2})", block, re.IGNORECASE):
                 quantity = parse_currency(m_qty.group(1))
@@ -100,7 +100,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             if quantity > 0:
                 unit_cost = adjusted_subtotal / quantity
 
-            # Extract Suffix for Item No
+            # Item No
             item_no = po_raw
             if "-" in po_raw:
                 sub_m = re.search(r"^\d+-(.+)", po_raw)
@@ -110,8 +110,6 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                     item_no = po_raw
 
             description = f"INV{invoice_no}_{seed_type}_{po_raw}"
-
-            # Calculate line amount for balancing
             line_amount = round(quantity * round(unit_cost, 5), 2)
             processed_line_total_sum += line_amount
 
@@ -128,7 +126,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
         # --- 4. Balancing G/L Line ---
         gl_amount = grand_total - processed_line_total_sum
         
-        # Only add GL line if we have actual resource lines
+        # Only add GL line if we have actual resource lines AND amount is significant
         if resource_lines and abs(gl_amount) >= 0.01:
             resource_lines.append({
                 "Type": "G/L Account",
@@ -141,7 +139,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             })
         
         # --- 5. Handle "US PO" Case ---
-        # If no valid resources were extracted, but we detected numeric POs, return a warning object.
+        # If no valid resources were extracted, but we detected numeric POs, return a warning
         if not resource_lines and numeric_po_found:
              resource_lines.append({
                 "Type": "NOTE",
@@ -165,7 +163,8 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             for line in resource_lines:
                 line["VendorInvoiceNo"] = invoice_no
                 line["DocumentDate"] = doc_date
-                line["VendorNo"] = "95257"
+                # Use Name instead of Number as requested
+                line["BuyFromVendorName"] = "KAMTERTER II, LLC"
             
             grouped_results[filename] = resource_lines
 

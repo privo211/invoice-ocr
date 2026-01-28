@@ -74,10 +74,14 @@
     /* Card Styles */
     .card { 
       background-color: var(--card-bg);
+      color: var(--text-color);
       border: none; 
       box-shadow: 0 0 8px rgba(0,0,0,0.1); 
       margin-bottom: 2rem; 
       border-radius: 8px;
+    }
+    .card h4 {
+        color: var(--text-color);
     }
     
     /* Table Styles */
@@ -96,30 +100,12 @@
       border-bottom-color: inherit;
     }
     
-    /* Dark mode table adjustments */
     body.dark-mode .table {
       border-color: #495057;
     }
     body.dark-mode .table-hover tbody tr:hover {
       color: var(--text-color);
       background-color: rgba(255,255,255,0.075);
-    }
-
-    /* GL Row Styling */
-    .gl-row { 
-      background-color: #fff3cd !important; 
-      color: #000 !important;
-      font-weight: bold;
-    } 
-    body.dark-mode .gl-row {
-      background-color: #4d4d00 !important; 
-      color: #fff !important;
-    }
-    
-    /* Ensure cells inside GL row inherit the row colors */
-    .gl-row td {
-        background-color: inherit !important;
-        color: inherit !important;
     }
     
     /* Warning Box for US POs */
@@ -166,7 +152,7 @@
           <div class="row mb-3">
             <div class="col-md-3"><strong>Invoice #:</strong> <span id="inv-{{ loop.index }}">{{ lines[0].VendorInvoiceNo }}</span></div>
             <div class="col-md-3"><strong>Date:</strong> <span id="date-{{ loop.index }}">{{ lines[0].DocumentDate }}</span></div>
-            <div class="col-md-3"><strong>Vendor:</strong> 95257</div>
+            <div class="col-md-4"><strong>Vendor:</strong> {{ lines[0].BuyFromVendorName }}</div>
           </div>
 
           {% set is_us_warning = false %}
@@ -193,8 +179,7 @@
                   </thead>
                   <tbody id="tbody-{{ loop.index }}">
                     {% for line in lines %}
-                    <tr class="{% if line.Type == 'G/L Account' %}gl-row{% endif %}" 
-                        data-type="{{ line.Type }}" 
+                    <tr data-type="{{ line.Type }}" 
                         data-no="{{ line.No }}" 
                         data-desc="{{ line.Description }}" 
                         data-qty="{{ line.Quantity }}" 
@@ -214,7 +199,8 @@
              <button class="btn btn-success float-end create-invoice-btn" 
                      data-index="{{ loop.index }}" 
                      data-inv="{{ lines[0].VendorInvoiceNo }}"
-                     data-date="{{ lines[0].DocumentDate }}">
+                     data-date="{{ lines[0].DocumentDate }}"
+                     data-vendor-name="{{ lines[0].BuyFromVendorName }}">
                Create Invoice in Business Central
              </button>
           {% endif %}
@@ -275,7 +261,8 @@
 
         const payload = {
           "Document_Type": "Invoice",
-          "Vendor_No": "95257",
+          // Use Name from button data attribute
+          "Buy_from_Vendor_Name": btn.dataset.vendorName,
           "Vendor_Invoice_No": btn.dataset.inv,
           "Document_Date": btn.dataset.date,
           "PurchaseLines": linesPayload
