@@ -6,7 +6,6 @@ def parse_currency(value_str):
     """Cleans '$1,234.56' -> 1234.56"""
     if not value_str:
         return 0.0
-    # Remove '$' and ',' then convert
     clean = re.sub(r"[^\d\.-]", "", value_str)
     try:
         return float(clean)
@@ -41,11 +40,13 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                  grand_total = parse_currency(all_totals[-1])
 
         # --- 3. Block Processing ---
-        ktt_blocks = re.split(r"(?=KTT\s*[:#])", full_text)
+        # IMPROVED SPLIT: Look for "KTT" followed by optional punctuation, space, and a DIGIT.
+        # This ensures we catch "KTT #: 123" and "KTT 123" but avoid "KTT Products".
+        ktt_blocks = re.split(r"(?=KTT\s*[:#]*\s*\d)", full_text)
         
         resource_lines = []
         processed_line_total_sum = 0.0
-        numeric_po_found = False # Track if we saw US POs
+        numeric_po_found = False
         
         for block in ktt_blocks:
             if "KTT" not in block:
@@ -55,18 +56,19 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             po_match = re.search(r"PO\s*(?:#)?[:\s]*([^\n]+)", block, re.IGNORECASE)
             po_raw = po_match.group(1).strip() if po_match else "UNKNOWN"
             
-            # Check for Numeric POs (US Branch) -> Skip and flag
+            # Numeric PO Check
             if re.match(r"^\d+$", po_raw):
                 numeric_po_found = True
                 continue 
 
-            # G/L Logic: Skip "Unprocessed" or Date-based POs
+            # G/L Logic Check
             if re.match(r"\d{1,2}/\d{1,2}/\d{4}", po_raw) or "left unprocessed" in block.lower():
                 continue
 
-            # Item Logic
+            # --- Item Logic (FIXED REGEX) ---
             seed_type = "Unknown"
-            if m_seed := re.search(r"Seed\s*Type[:\s]*([^\n]+)", block, re.IGNORECASE):
+            # Look for Seed Type label, consume colon/newlines ([\s:]*), then capture the first non-empty line
+            if m_seed := re.search(r"Seed\s*Type[\s:]*(\S[^\n]*)", block, re.IGNORECASE):
                 seed_type = m_seed.group(1).strip()
 
             # Quantity
@@ -74,7 +76,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             if m_qty := re.search(r"Shipped\s*Weight[:\s]*([\d,]+\.\d{2})", block, re.IGNORECASE):
                 quantity = parse_currency(m_qty.group(1))
 
-            # --- FINANCIALS EXTRACTION ---
+            # --- FINANCIALS ---
             subtotal = 0.0
             if m_sub_rev := re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Subtotal:", block, re.IGNORECASE):
                 subtotal = parse_currency(m_sub_rev.group(1))
@@ -91,7 +93,6 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             elif m_frt_fwd := re.search(r"Freight:\s*.*?(\$[\d,]+\.\d{2})", block, re.IGNORECASE | re.DOTALL):
                  freight = parse_currency(m_frt_fwd.group(1))
 
-            # Calculation
             adjusted_subtotal = subtotal
             if freight > 0 and adjusted_subtotal > freight:
                 adjusted_subtotal = adjusted_subtotal - freight
@@ -126,7 +127,6 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
         # --- 4. Balancing G/L Line ---
         gl_amount = grand_total - processed_line_total_sum
         
-        # Only add GL line if we have actual resource lines AND amount is significant
         if resource_lines and abs(gl_amount) >= 0.01:
             resource_lines.append({
                 "Type": "G/L Account",
@@ -138,8 +138,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "PO_Number": "G/L Adjustment"
             })
         
-        # --- 5. Handle "US PO" Case ---
-        # If no valid resources were extracted, but we detected numeric POs, return a warning
+        # --- 5. US PO Warning ---
         if not resource_lines and numeric_po_found:
              resource_lines.append({
                 "Type": "NOTE",
@@ -148,7 +147,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "Quantity": 0,
                 "DirectUnitCost": 0,
                 "LineAmount": 0,
-                "IsUSWarning": True # Flag for the template
+                "IsUSWarning": True
             })
 
         # --- 6. Logging & Final Return ---
@@ -163,7 +162,6 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             for line in resource_lines:
                 line["VendorInvoiceNo"] = invoice_no
                 line["DocumentDate"] = doc_date
-                # Use Name instead of Number as requested
                 line["BuyFromVendorName"] = "KAMTERTER II, LLC"
             
             grouped_results[filename] = resource_lines
