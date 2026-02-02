@@ -884,13 +884,11 @@ def debug_check_fields():
     Fetches one record from Business Central to show the exact field names.
     """
     token = session.get('user_token')
-    
-    # We target the endpoint you are currently working on
-    # Using ?$top=1 to just get the first record as a template
+
     bc_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
         f"{BC_TENANT}/{BC_ENV_DEFAULT}/ODataV4/"
-        f"Company('{BC_COMPANY}')/PurchaseHeaders?$top=1"
+        f"Company('{BC_COMPANY}')/PurchaseLines?$top=1"
     )
 
     app.logger.info(f"--- DEBUGGING GET REQUEST ---")
@@ -906,11 +904,10 @@ def debug_check_fields():
         
         if resp.status_code == 200:
             data = resp.json()
-            # Print the result to your server logs (journalctl)
+            
             app.logger.info("✅ DEBUG DATA FETCHED SUCCESSFULLY")
             app.logger.info(json.dumps(data, indent=2))
             
-            # Also return it to your browser screen
             return jsonify({
                 "help": "Use the keys below exactly as written (case-sensitive) in your POST payload.",
                 "endpoint": bc_url,
@@ -922,7 +919,21 @@ def debug_check_fields():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
+   
+def get_company_id(token):
+    url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV_DEFAULT}/api/v2.0/companies"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        resp = requests.get(url, headers=headers)
+        resp.raise_for_status()
+        companies = resp.json().get("value", [])
+        for c in companies:
+            if c["displayName"] == BC_COMPANY:
+                return c["id"]
+    except Exception as e:
+        app.logger.error(f"Failed to fetch Company ID: {e}")
+    return None
+ 
 # --- NEW: Purchase Invoice Creation Route (Kamterter) ---
 @app.route("/create-purchase-invoice", methods=["POST"])
 @login_required
@@ -959,10 +970,21 @@ def create_purchase_invoice():
         "PurchaseLines": data.get("PurchaseLines", [])
     }
 
+    # bc_url = (
+    #     f"https://api.businesscentral.dynamics.com/v2.0/"
+    #     f"{BC_TENANT}/{BC_ENV_DEFAULT}/ODataV4/"
+    #     f"Company('{BC_COMPANY}')/PurchaseHeaders"
+    # )
+    
+    company_id = get_company_id(token)
+    
+    if not company_id:
+        return jsonify({"message": f"Company ID not found for {BC_COMPANY}"}), 404
+    
     bc_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/{BC_ENV_DEFAULT}/ODataV4/"
-        f"Company('{BC_COMPANY}')/PurchaseHeaders"
+        f"{BC_TENANT}/{BC_ENV_DEFAULT}/api/PVORA/VendorInvoiceAutomation/v2.0/"
+        f"companies({company_id})/PurchaseHeaders"
     )
 
     # --- DEBUG LOGGING: PRINT THE API CALL ---
