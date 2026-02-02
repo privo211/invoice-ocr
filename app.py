@@ -915,8 +915,8 @@ def create_purchase_invoice():
 
     bc_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/{BC_ENV_DEFAULT}/api/PVORA/VendorInvoiceAutomation/v2.0/"
-        f"companies('{BC_COMPANY}')/PurchaseHeaders"
+        f"{BC_TENANT}/{BC_ENV_DEFAULT}/ODataV4/"
+        f"Company('{BC_COMPANY}')/PurchaseHeaders"
     )
 
     # --- DEBUG LOGGING: PRINT THE API CALL ---
