@@ -1200,48 +1200,31 @@ def index():
 @login_required
 @timed_func("create_purchase_invoice")
 def create_purchase_invoice():
-    """
-    Creates a Purchase Invoice via Deep Insert.
-    Uses Company Name directly in URL: companies('Name')
-    """
     data = request.get_json()
     token = session.get('user_token')
-    
-    # 1. Refresh Token if needed
-    cache = load_cache()
-    msal_app = build_msal_app(cache)
-    accounts = msal_app.get_accounts()
-    if accounts:
-        result = msal_app.acquire_token_silent(scopes=SCOPE_BC, account=accounts[0])
-        if "access_token" in result:
-            token = result["access_token"]
-            session["user_token"] = token
-            save_cache(cache)
-    
-    # 2. Format Date
-    doc_date_raw = data.get("Document_Date")
-    bc_date = doc_date_raw
-    try:
-        if doc_date_raw and "/" in doc_date_raw:
-            dt = datetime.strptime(doc_date_raw, "%m/%d/%Y")
-            bc_date = dt.strftime("%Y-%m-%d")
-    except: pass
 
-    # 3. Construct Payload (Using Vendor Name)
+    # ... [Keep existing Token Refresh and Date Formatting logic] ...
+
     payload = {
         "Document_Type": "Invoice",
-        "Buy_from_Vendor_Name": data.get("Buy_from_Vendor_Name"), # Mapped from frontend
+        "Buy_from_Vendor_Name": data.get("Buy_from_Vendor_Name"),
         "Vendor_Invoice_No": data.get("Vendor_Invoice_No"),
         "Document_Date": bc_date,
         "PurchaseLines": data.get("PurchaseLines", [])
     }
-    # 4. Send to BC
+
     bc_url = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
         f"{BC_TENANT}/{BC_ENV_DEFAULT}/api/PVORA/VendorInvoiceAutomation/v2.0/"
         f"companies('{BC_COMPANY}')/PurchaseHeaders"
     )
-    
+
+    # --- DEBUG LOGGING: PRINT THE API CALL ---
+    app.logger.info(f"--- API CALL START: create_purchase_invoice ---")
+    app.logger.info(f"URL: {bc_url}")
+    app.logger.info(f"PAYLOAD: {json.dumps(payload, indent=2)}")
+    # -----------------------------------------
+
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -1249,79 +1232,21 @@ def create_purchase_invoice():
     }
 
     try:
-        resp = timed_post(bc_url, json=payload, headers=headers)
-        resp.raise_for_status()
+        resp = requests.post(bc_url, json=payload, headers=headers)
+        
+        if resp.status_code not in [200, 201]:
+            # --- DEBUG LOGGING: FULL ERROR DETAILS ---
+            app.logger.error(f"❌ BC API ERROR: {resp.status_code}")
+            app.logger.error(f"RESPONSE BODY: {resp.text}")
+            # ------------------------------------------
+            return jsonify({"message": resp.text}), resp.status_code
+
+        app.logger.info("✅ SUCCESS: Invoice Created")
         return jsonify(resp.json())
-    except requests.exceptions.HTTPError as e:
-        app.logger.error(f"Invoice creation failed: {e.response.text}")
-        return jsonify({"message": e.response.text}), e.response.status_code
+
     except Exception as e:
-        app.logger.error(f"Invoice creation error: {e}")
+        app.logger.error(f"💥 UNEXPECTED EXCEPTION: {str(e)}")
         return jsonify({"message": str(e)}), 500
-    
-# @app.route("/create-purchase-invoice", methods=["POST"])
-# @login_required
-# @timed_func("create_purchase_invoice")
-# def create_purchase_invoice():
-#     """
-#     Creates a Purchase Invoice Header and Lines via Deep Insert.
-#     Uses the PurchaseOrderAPI (Page 50140) and PurchaseLineAPI (Page 50141).
-#     """
-#     data = request.get_json()
-    
-#     # Refresh Token Logic (reused from create_lot)
-#     cache = load_cache()
-#     msal_app = build_msal_app(cache)
-#     accounts = msal_app.get_accounts()
-#     if accounts:
-#         result = msal_app.acquire_token_silent(scopes=SCOPE_BC, account=accounts[0])
-#         if "access_token" in result:
-#             session["user_token"] = result["access_token"]
-#             save_cache(cache)
-    
-#     # 1. Format Date for BC (YYYY-MM-DD)
-#     doc_date_raw = data.get("Document_Date")
-#     bc_date = doc_date_raw
-#     try:
-#         if "/" in doc_date_raw:
-#             dt = datetime.strptime(doc_date_raw, "%m/%d/%Y")
-#             bc_date = dt.strftime("%Y-%m-%d")
-#     except:
-#         pass # Fallback to sending as-is
-
-#     # 2. Construct Payload
-#     payload = {
-#         "Document_Type": "Invoice",
-#         "Vendor_No": data.get("Vendor_No"),
-#         "Vendor_Invoice_No": data.get("Vendor_Invoice_No"),
-#         "Document_Date": bc_date,
-#         "PurchaseLines": data.get("PurchaseLines", [])
-#     }
-
-#     # 3. Send to BC
-#     # Note: Ensure the URL matches your Publisher/Group/Version from the AL Code
-#     bc_url = (
-#         f"https://api.businesscentral.dynamics.com/v2.0/"
-#         f"{BC_TENANT}/{BC_ENV_DEFAULT}/api/PVORA/VendorInvoiceAutomation/v2.0/"
-#         f"companies({BC_COMPANY})/PurchaseHeaders"
-#     )
-    
-#     headers = {
-#         "Authorization": f"Bearer {session.get('user_token')}",
-#         "Content-Type": "application/json",
-#         "Prefer": "return=representation" # Gets the created invoice back
-#     }
-
-#     try:
-#         resp = timed_post(bc_url, json=payload, headers=headers)
-#         resp.raise_for_status()
-#         return jsonify(resp.json())
-#     except requests.exceptions.HTTPError as e:
-#         app.logger.error(f"Invoice creation failed: {e.response.text}")
-#         return jsonify({"message": e.response.text}), e.response.status_code
-#     except Exception as e:
-#         app.logger.error(f"Invoice creation error: {e}")
-#         return jsonify({"message": str(e)}), 500
     
 # Lot creation endpoint
 @app.route("/create-lot", methods=["POST"])
