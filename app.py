@@ -919,160 +919,7 @@ def debug_check_fields():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
-# # --- Purchase Invoice Creation Route (Kamterter | OData V4) ---
-# @app.route("/create-purchase-invoice", methods=["POST"])
-# @login_required
-# @timed_func("create_purchase_invoice")
-# def create_purchase_invoice():
-#     data = request.get_json(force=True)
-#     print(f"Received data for lot creation: {data}")
-#     token = session.get("user_token")
 
-#     # ----------------------------------------------------------
-#     # 1. Refresh token silently
-#     # ----------------------------------------------------------
-#     cache = load_cache()
-#     msal_app = build_msal_app(cache)
-#     accounts = msal_app.get_accounts()
-
-#     if accounts:
-#         result = msal_app.acquire_token_silent(
-#             scopes=SCOPE_BC,
-#             account=accounts[0]
-#         )
-#         if result and "access_token" in result:
-#             token = result["access_token"]
-#             session["user_token"] = token
-#             save_cache(cache)
-
-#     if not token:
-#         return jsonify({"message": "Authentication token missing"}), 401
-
-#     # ----------------------------------------------------------
-#     # 2. Normalize document date
-#     # ----------------------------------------------------------
-#     bc_date = data.get("Document_Date")
-#     try:
-#         if bc_date and "/" in bc_date:
-#             bc_date = datetime.strptime(
-#                 bc_date, "%m/%d/%Y"
-#             ).strftime("%Y-%m-%d")
-#     except Exception:
-#         pass
-
-#     purchase_lines = data.get("PurchaseLines", [])
-
-#     # ----------------------------------------------------------
-#     # 3. OData base URLs (STANDARD)
-#     # ----------------------------------------------------------
-
-#     odata_base = (
-#         f"https://api.businesscentral.dynamics.com/v2.0/"
-#         f"{BC_TENANT}/{BC_ENV_DEFAULT}/ODataV4/"
-#         f"Company('{BC_COMPANY}')"
-#     )
-
-#     headers_url = f"{odata_base}/PurchaseHeaders"
-    
-    
-
-
-#     headers = {
-#         "Authorization": f"Bearer {token}",
-#         "Content-Type": "application/json"
-#     }
-
-#     # ----------------------------------------------------------
-#     # 4. CREATE PURCHASE HEADER
-#     # ----------------------------------------------------------
-#     header_payload = {
-#         "Document_Type": "Invoice",
-#         "Vendor_Name": data.get("Buy_from_Vendor_Name"),
-#         "Vendor_Invoice_No": data.get("Vendor_Invoice_No"),
-#         "Document_Date": bc_date
-#     }
-
-#     app.logger.info("=== CREATE PURCHASE HEADER (OData) ===")
-#     app.logger.info(json.dumps(header_payload, indent=2))
-
-#     header_resp = requests.post(
-#         headers_url,
-#         headers=headers,
-#         json=header_payload
-#     )
-
-#     if header_resp.status_code not in (200, 201):
-#         app.logger.error("❌ HEADER CREATE FAILED")
-#         app.logger.error(header_resp.text)
-#         return jsonify({
-#             "message": "Failed to create purchase header",
-#             "details": header_resp.text
-#         }), header_resp.status_code
-
-#     header_json = header_resp.json()
-#     document_no = header_json["No"]
-
-
-#     # ----------------------------------------------------------
-#     # 5. CREATE PURCHASE LINES (EXPLICIT LINKING)
-#     # ----------------------------------------------------------
-#     app.logger.info("=== CREATE PURCHASE LINES (OData) ===")
-    
-#     lines_url = (
-#         f"{odata_base}/PurchaseHeaders("
-#         f"Document_Type='Invoice',No='{document_no}')/PurchaseLines"
-#     )
-    
-#     def next_line_no(idx):
-#         return idx * 10000
-
-#     for idx, line in enumerate(purchase_lines, start=1):
-        
-        
-#         line_payload = {
-#             # "Document_Type": "Invoice",
-#             # "Document_No": document_no,
-#             # "Line_No": next_line_no(idx),
-#             # "Vendor_No": "95257",
-
-#             "Type": line["Type"],                 
-#             "No": line["No"],
-#             "Description": line.get("Description", ""),
-#             "Quantity": float(line["Quantity"]),
-#             "Direct_Unit_Cost": float(line["Direct_Unit_Cost"])
-#         }
-
-
-#         app.logger.info(f"LINE {idx}:")
-#         app.logger.info(json.dumps(line_payload, indent=2))
-
-#         line_resp = requests.post(
-#             lines_url,
-#             headers=headers,
-#             json=line_payload
-#         )
-
-#         if line_resp.status_code not in (200, 201):
-#             app.logger.error("❌ LINE CREATE FAILED")
-#             app.logger.error(line_resp.text)
-
-#             return jsonify({
-#                 "message": "Failed to create purchase line",
-#                 "line_index": idx,
-#                 "details": line_resp.text
-#             }), line_resp.status_code
-
-#     # ----------------------------------------------------------
-#     # 6. SUCCESS
-#     # ----------------------------------------------------------
-#     app.logger.info("✅ PURCHASE INVOICE CREATED SUCCESSFULLY")
-
-#     return jsonify({
-#         "message": "Purchase invoice created",
-#         "document_no": document_no,
-#         "lines_created": len(purchase_lines)
-#     }), 201
 
 # --- Purchase Invoice Creation Route (Kamterter | OData V4) ---
 @app.route("/create-purchase-invoice", methods=["POST"])
@@ -1080,20 +927,15 @@ def debug_check_fields():
 @timed_func("create_purchase_invoice")
 def create_purchase_invoice():
     data = request.get_json(force=True)
-    print(f"Received data for lot creation: {data}")
+    app.logger.info(f"Received data for invoice creation: {data}")
     token = session.get("user_token")
 
-    # ----------------------------------------------------------
-    # 1. Refresh token silently
-    # ----------------------------------------------------------
+    # 1. Refresh Token
     cache = load_cache()
     msal_app = build_msal_app(cache)
     accounts = msal_app.get_accounts()
     if accounts:
-        result = msal_app.acquire_token_silent(
-            scopes=SCOPE_BC,
-            account=accounts[0]
-        )
+        result = msal_app.acquire_token_silent(scopes=SCOPE_BC, account=accounts[0])
         if result and "access_token" in result:
             token = result["access_token"]
             session["user_token"] = token
@@ -1102,23 +944,17 @@ def create_purchase_invoice():
     if not token:
         return jsonify({"message": "Authentication token missing"}), 401
 
-    # ----------------------------------------------------------
-    # 2. Normalize document date
-    # ----------------------------------------------------------
+    # 2. Date Formatting
     bc_date = data.get("Document_Date")
     try:
         if bc_date and "/" in bc_date:
-            bc_date = datetime.strptime(
-                bc_date, "%m/%d/%Y"
-            ).strftime("%Y-%m-%d")
+            bc_date = datetime.strptime(bc_date, "%m/%d/%Y").strftime("%Y-%m-%d")
     except Exception:
         pass
 
     purchase_lines = data.get("PurchaseLines", [])
 
-    # ----------------------------------------------------------
-    # 3. OData base URLs (STANDARD)
-    # ----------------------------------------------------------
+    # 3. Base URL Setup
     odata_base = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
         f"{BC_TENANT}/{BC_ENV_DEFAULT}/ODataV4/"
@@ -1126,9 +962,6 @@ def create_purchase_invoice():
     )
     
     headers_url = f"{odata_base}/PurchaseHeaders"
-    
-    # FIX: Point directly to the PurchaseLines entity set
-    # because your AL page defines EntitySetName = 'PurchaseLines'
     lines_url = f"{odata_base}/PurchaseLines" 
     
     headers = {
@@ -1136,48 +969,60 @@ def create_purchase_invoice():
         "Content-Type": "application/json"
     }
 
-    # ----------------------------------------------------------
-    # 4. CREATE PURCHASE HEADER
-    # ----------------------------------------------------------
+    # 4. Create Header
     header_payload = {
         "Document_Type": "Invoice",
         "Vendor_Name": data.get("Buy_from_Vendor_Name"),
         "Vendor_Invoice_No": data.get("Vendor_Invoice_No"),
-        "Document_Date": bc_date
+        # We send date here, but BC might overwrite it during Vendor validation
+        "Document_Date": bc_date 
     }
 
-    app.logger.info("=== CREATE PURCHASE HEADER (OData) ===")
-    app.logger.info(json.dumps(header_payload, indent=2))
-
-    header_resp = requests.post(
-        headers_url,
-        headers=headers,
-        json=header_payload
-    )
-
+    app.logger.info("=== CREATE PURCHASE HEADER REQUEST ===")
+    app.logger.info(f"Payload: {json.dumps(header_payload, indent=2)}")
+    
+    header_resp = requests.post(headers_url, headers=headers, json=header_payload)
+    
     if header_resp.status_code not in (200, 201):
-        app.logger.error("❌ HEADER CREATE FAILED")
-        app.logger.error(header_resp.text)
-        return jsonify({
-            "message": "Failed to create purchase header",
-            "details": header_resp.text
-        }), header_resp.status_code
+        app.logger.error(f"❌ HEADER FAILED: {header_resp.status_code}")
+        return jsonify({"message": "Header creation failed", "details": header_resp.text}), header_resp.status_code
 
     header_json = header_resp.json()
-    document_no = header_json["No"]
+    document_no = header_json.get("No")
     
-    # ----------------------------------------------------------
-    # 5. CREATE PURCHASE LINES (DIRECT POST)
-    # ----------------------------------------------------------
-    app.logger.info(f"=== CREATE PURCHASE LINES (Direct Link to {document_no}) ===")
+    # 4.5 PATCH THE DATE (Fix for inconsistent date)
+    # The Vendor validation likely reset the date to today. We force it back now.
+    if bc_date:
+        app.logger.info(f"=== PATCHING DOCUMENT DATE: {bc_date} ===")
+        # Construct URL for the specific resource: PurchaseHeaders(Document_Type='Invoice',No='114779')
+        patch_url = f"{headers_url}(Document_Type='Invoice',No='{document_no}')"
+        
+        patch_headers = headers.copy()
+        patch_headers["If-Match"] = "*" # Force update regardless of ETag
+        
+        patch_payload = {"Document_Date": bc_date}
+        
+        patch_resp = requests.patch(patch_url, headers=patch_headers, json=patch_payload)
+        
+        if patch_resp.status_code in (200, 204):
+             app.logger.info("✅ Date corrected successfully.")
+        else:
+             app.logger.warning(f"⚠️ Failed to patch date. BC Status: {patch_resp.status_code} - {patch_resp.text}")
+
+    app.logger.info(f"✅ Header Created & Verified: {document_no}")
+
+    # 5. Create Lines
+    app.logger.info(f"=== CREATE PURCHASE LINES (Count: {len(purchase_lines)}) ===")
+    
+    success_count = 0
+    current_line_no = 10000 
     
     for idx, line in enumerate(purchase_lines, start=1):
         
-        # FIX: Include the linking fields in the payload 
-        # so BC knows which header this line belongs to.
         line_payload = {
             "Document_Type": "Invoice",
             "Document_No": document_no,
+            "Line_No": current_line_no, 
             "Type": line["Type"],                 
             "No": line["No"],
             "Description": line.get("Description", ""),
@@ -1185,83 +1030,78 @@ def create_purchase_invoice():
             "Direct_Unit_Cost": float(line["Direct_Unit_Cost"])
         }
 
-        app.logger.info(f"LINE {idx}:")
-        app.logger.info(json.dumps(line_payload, indent=2))
-
-        line_resp = requests.post(
-            lines_url,
-            headers=headers,
-            json=line_payload
-        )
-
-        if line_resp.status_code not in (200, 201):
-            app.logger.error("❌ LINE CREATE FAILED")
+        app.logger.info(f"--- Line {idx} Request (Line No: {current_line_no}) ---")
+        
+        line_resp = requests.post(lines_url, headers=headers, json=line_payload)
+        
+        if line_resp.status_code in (200, 201):
+            success_count += 1
+            current_line_no += 10000 
+        else:
+            app.logger.error(f"❌ Line {idx} Failed")
             app.logger.error(line_resp.text)
-            
-            # Optional: You might want to delete the header here if lines fail, 
-            # or just return the error so the user can fix it.
             return jsonify({
-                "message": "Failed to create purchase line",
-                "line_index": idx,
+                "message": f"Failed to create purchase line {idx}",
                 "details": line_resp.text
             }), line_resp.status_code
 
-    # ----------------------------------------------------------
-    # 6. SUCCESS
-    # ----------------------------------------------------------
-    app.logger.info("✅ PURCHASE INVOICE CREATED SUCCESSFULLY")
+    app.logger.info(f"✅ FINISHED: {success_count} lines created successfully.")
+    
     return jsonify({
         "message": "Purchase invoice created",
-        "document_no": document_no,
-        "lines_created": len(purchase_lines)
+        "No": document_no, # <--- FIXED: Changed key from 'document_no' to 'No' for frontend
+        "lines_created": success_count
     }), 201
     
-# # --- Purchase Invoice Creation Route (Kamterter) ---
+# --- Purchase Invoice Creation Route (Kamterter | OData V4) ---
 # @app.route("/create-purchase-invoice", methods=["POST"])
 # @login_required
 # @timed_func("create_purchase_invoice")
 # def create_purchase_invoice():
 #     data = request.get_json(force=True)
+#     app.logger.info(f"Received data for invoice creation: {data}")
 #     token = session.get("user_token")
 
-#     # ------------------------------------------------------------------
-#     # 1. Refresh token silently if needed
-#     # ------------------------------------------------------------------
+#     # 1. Refresh Token
 #     cache = load_cache()
 #     msal_app = build_msal_app(cache)
 #     accounts = msal_app.get_accounts()
-
 #     if accounts:
-#         result = msal_app.acquire_token_silent(
-#             scopes=SCOPE_BC,
-#             account=accounts[0]
-#         )
+#         result = msal_app.acquire_token_silent(scopes=SCOPE_BC, account=accounts[0])
 #         if result and "access_token" in result:
 #             token = result["access_token"]
 #             session["user_token"] = token
 #             save_cache(cache)
-
+    
 #     if not token:
 #         return jsonify({"message": "Authentication token missing"}), 401
 
-#     # ------------------------------------------------------------------
-#     # 2. Normalize document date
-#     # ------------------------------------------------------------------
-#     doc_date_raw = data.get("Document_Date")
-#     bc_date = doc_date_raw
-
+#     # 2. Date Formatting
+#     bc_date = data.get("Document_Date")
 #     try:
-#         if doc_date_raw and "/" in doc_date_raw:
-#             dt = datetime.strptime(doc_date_raw, "%m/%d/%Y")
-#             bc_date = dt.strftime("%Y-%m-%d")
+#         if bc_date and "/" in bc_date:
+#             bc_date = datetime.strptime(bc_date, "%m/%d/%Y").strftime("%Y-%m-%d")
 #     except Exception:
 #         pass
 
-#     # ------------------------------------------------------------------
-#     # 3. Extract lines and build HEADER payload ONLY
-#     # ------------------------------------------------------------------
 #     purchase_lines = data.get("PurchaseLines", [])
 
+#     # 3. Base URL Setup
+#     odata_base = (
+#         f"https://api.businesscentral.dynamics.com/v2.0/"
+#         f"{BC_TENANT}/{BC_ENV_DEFAULT}/ODataV4/"
+#         f"Company('{BC_COMPANY}')"
+#     )
+    
+#     headers_url = f"{odata_base}/PurchaseHeaders"
+#     lines_url = f"{odata_base}/PurchaseLines" 
+    
+#     headers = {
+#         "Authorization": f"Bearer {token}",
+#         "Content-Type": "application/json"
+#     }
+
+#     # 4. Create Header
 #     header_payload = {
 #         "Document_Type": "Invoice",
 #         "Vendor_Name": data.get("Buy_from_Vendor_Name"),
@@ -1269,106 +1109,61 @@ def create_purchase_invoice():
 #         "Document_Date": bc_date
 #     }
 
-#     # ------------------------------------------------------------------
-#     # 4. Business Central endpoint URLs
-#     # ------------------------------------------------------------------
-#     company_id = "6f5ef65b-eeb0-ec11-8aa5-000d3a7c397b"
-
-#     base_api = (
-#         f"https://api.businesscentral.dynamics.com/v2.0/"
-#         f"{BC_TENANT}/{BC_ENV_DEFAULT}/api/"
-#         f"PVORA/VendorInvoiceAutomation/v2.0/"
-#         f"companies({company_id})"
-#     )
-
-#     headers_url = f"{base_api}/PurchaseHeaders"
-
-#     headers = {
-#         "Authorization": f"Bearer {token}",
-#         "Content-Type": "application/json",
-#         "Prefer": "return=representation"
-#     }
-
-#     # ------------------------------------------------------------------
-#     # 5. CREATE PURCHASE HEADER
-#     # ------------------------------------------------------------------
 #     app.logger.info("=== CREATE PURCHASE HEADER ===")
-#     app.logger.info(f"POST {headers_url}")
-#     app.logger.info(json.dumps(header_payload, indent=2))
-
-#     header_resp = requests.post(
-#         headers_url,
-#         headers=headers,
-#         json=header_payload
-#     )
-
+#     app.logger.info(f"Target: {headers_url}")
+    
+#     header_resp = requests.post(headers_url, headers=headers, json=header_payload)
+    
 #     if header_resp.status_code not in (200, 201):
-#         app.logger.error("❌ HEADER CREATE FAILED")
+#         app.logger.error(f"❌ HEADER FAILED: {header_resp.status_code}")
 #         app.logger.error(header_resp.text)
-#         return jsonify({
-#             "message": "Failed to create purchase header",
-#             "details": header_resp.text
-#         }), header_resp.status_code
+#         return jsonify({"message": "Header creation failed", "details": header_resp.text}), header_resp.status_code
 
 #     header_json = header_resp.json()
-#     header_id = header_json["SystemId"]
-#     document_no = header_json["No"]
+#     document_no = header_json.get("No")
+#     app.logger.info(f"✅ Header Created: {document_no}")
 
-#     # ------------------------------------------------------------------
-#     # 6. CREATE PURCHASE LINES (navigation endpoint)
-#     # ------------------------------------------------------------------
-#     lines_url = f"{headers_url}({header_id})/PurchaseLines"
-
-#     app.logger.info("=== CREATE PURCHASE LINES ===")
-#     app.logger.info(f"POST {lines_url}")
-
+#     # 5. Create Lines (EXPLICIT LINE NUMBERS)
+#     app.logger.info(f"=== CREATE PURCHASE LINES (Count: {len(purchase_lines)}) ===")
+    
+#     success_count = 0
+#     current_line_no = 10000  # Start at standard BC increment
+    
 #     for idx, line in enumerate(purchase_lines, start=1):
+        
 #         line_payload = {
 #             "Document_Type": "Invoice",
 #             "Document_No": document_no,
-#             "Type": line.get("Type"),
-#             "No": line.get("No"),
-#             "Description": line.get("Description"),
-#             "Quantity": float(line.get("Quantity", 0)),
-#             "Direct_Unit_Cost": float(line.get("Direct_Unit_Cost", 0))
+#             "Line_No": current_line_no,
+#             "Type": line["Type"],                 
+#             "No": line["No"],
+#             "Description": line.get("Description", ""),
+#             "Quantity": float(line["Quantity"]),
+#             "Direct_Unit_Cost": float(line["Direct_Unit_Cost"])
 #         }
+
+#         app.logger.info(f"--- Line {idx} Request (Line No: {current_line_no}) ---")
+#         app.logger.info(f"Payload: {json.dumps(line_payload)}")
         
-
-#         app.logger.info(f"LINE {idx}:")
-#         app.logger.info(json.dumps(line_payload, indent=2))
-
-#         line_resp = requests.post(
-#             lines_url,
-#             headers=headers,
-#             json=line_payload
-#         )
-
-#         if line_resp.status_code not in (200, 201):
-#             app.logger.error("❌ LINE CREATE FAILED")
+#         line_resp = requests.post(lines_url, headers=headers, json=line_payload)
+        
+#         if line_resp.status_code in (200, 201):
+#             success_count += 1
+#             current_line_no += 10000  # Increment for next line
+#         else:
+#             app.logger.error(f"❌ Line {idx} Failed")
 #             app.logger.error(line_resp.text)
-
-#             # ----------------------------------------------------------
-#             # Rollback: delete header if any line fails
-#             # ----------------------------------------------------------
-#             delete_url = f"{headers_url}({header_id})"
-#             app.logger.warning("⚠️ ROLLING BACK HEADER")
-#             requests.delete(delete_url, headers=headers)
-
 #             return jsonify({
-#                 "message": "Failed to create purchase line",
-#                 "line_index": idx,
+#                 "message": f"Failed to create purchase line {idx}",
 #                 "details": line_resp.text
 #             }), line_resp.status_code
 
-#     # ------------------------------------------------------------------
-#     # 7. SUCCESS
-#     # ------------------------------------------------------------------
-#     app.logger.info("✅ PURCHASE INVOICE CREATED SUCCESSFULLY")
-
+#     app.logger.info(f"✅ FINISHED: {success_count} lines created successfully.")
+    
 #     return jsonify({
 #         "message": "Purchase invoice created",
 #         "document_no": document_no,
-#         "lines_created": len(purchase_lines)
+#         "lines_created": success_count
 #     }), 201
     
 # Lot creation endpoint

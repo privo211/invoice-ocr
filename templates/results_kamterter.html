@@ -174,7 +174,6 @@
                       <th>Description</th>
                       <th>Quantity</th>
                       <th>Unit Cost</th>
-                      <th>Line Amount</th>
                     </tr>
                   </thead>
                   <tbody id="tbody-{{ loop.index }}">
@@ -189,7 +188,6 @@
                       <td>{{ line.Description }}</td>
                       <td>{{ line.Quantity }}</td>
                       <td>{{ line.DirectUnitCost }}</td>
-                      <td>{{ line.LineAmount }}</td>
                     </tr>
                     {% endfor %}
                   </tbody>
