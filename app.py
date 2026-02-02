@@ -976,7 +976,7 @@ def create_purchase_invoice():
     #     f"Company('{BC_COMPANY}')/PurchaseHeaders"
     # )
     
-    company_id = get_company_id(token)
+    company_id = "6f5ef65b-eeb0-ec11-8aa5-000d3a7c397b"
     
     if not company_id:
         return jsonify({"message": f"Company ID not found for {BC_COMPANY}"}), 404
