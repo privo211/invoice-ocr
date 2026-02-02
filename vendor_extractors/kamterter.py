@@ -119,9 +119,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "No": item_no,
                 "Description": description,
                 "Quantity": quantity,
-                "DirectUnitCost": round(unit_cost, 5),
-                "LineAmount": line_amount,
-                "PO_Number": po_raw
+                "DirectUnitCost": round(unit_cost, 5)
             })
 
         # --- 4. Balancing G/L Line ---
@@ -133,9 +131,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "No": "609100",
                 "Description": f"INV{invoice_no}_Unprocessed_WOSplit_Shipping",
                 "Quantity": 1,
-                "DirectUnitCost": round(gl_amount, 2),
-                "LineAmount": round(gl_amount, 2),
-                "PO_Number": "G/L Adjustment"
+                "DirectUnitCost": round(gl_amount, 2)
             })
         
         # --- 5. US PO Warning ---
