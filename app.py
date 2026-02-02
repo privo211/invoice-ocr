@@ -1014,17 +1014,27 @@ def create_purchase_invoice():
     # 5. CREATE PURCHASE LINES (EXPLICIT LINKING)
     # ----------------------------------------------------------
     app.logger.info("=== CREATE PURCHASE LINES (OData) ===")
+    
+    def next_line_no(idx):
+        return idx * 10000
 
     for idx, line in enumerate(purchase_lines, start=1):
+        
+        
         line_payload = {
             "Document_Type": "Invoice",
             "Document_No": document_no,
-            "Type": line["Type"],
+            "Line_No": next_line_no(idx),
+            "Vendor_No": 95257,
+            "Vendor_Name": data.get("Buy_from_Vendor_Name"),
+
+            "Type": line["Type"],                 
             "No": line["No"],
             "Description": line.get("Description", ""),
             "Quantity": float(line["Quantity"]),
             "Direct_Unit_Cost": float(line["Direct_Unit_Cost"])
         }
+
 
         app.logger.info(f"LINE {idx}:")
         app.logger.info(json.dumps(line_payload, indent=2))
