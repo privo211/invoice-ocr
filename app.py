@@ -1025,7 +1025,7 @@ def create_purchase_invoice():
             "Document_Type": "Invoice",
             "Document_No": document_no,
             "Line_No": next_line_no(idx),
-            "Vendor_No": 95257,
+            "Vendor_No": "95257",
             "Vendor_Name": data.get("Buy_from_Vendor_Name"),
 
             "Type": line["Type"],                 
