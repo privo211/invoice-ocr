@@ -1028,8 +1028,6 @@ def create_purchase_invoice():
 
     for idx, line in enumerate(purchase_lines, start=1):
         line_payload = {
-            "Document_Type": "Invoice",
-            "Document_No": document_no,
             "Type": line.get("Type"),
             "No": line.get("No"),
             "Description": line.get("Description"),
