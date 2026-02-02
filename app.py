@@ -877,6 +877,52 @@ def index():
     stats = db_logger.get_log_stats()
     return render_template("index.html", user_name=session.get("user_name"), stats=stats)
 
+@app.route("/debug-check-fields")
+@login_required
+def debug_check_fields():
+    """
+    Fetches one record from Business Central to show the exact field names.
+    """
+    token = session.get('user_token')
+    
+    # We target the endpoint you are currently working on
+    # Using ?$top=1 to just get the first record as a template
+    bc_url = (
+        f"https://api.businesscentral.dynamics.com/v2.0/"
+        f"{BC_TENANT}/{BC_ENV_DEFAULT}/ODataV4/"
+        f"Company('{BC_COMPANY}')/PurchaseHeaders?$top=1"
+    )
+
+    app.logger.info(f"--- DEBUGGING GET REQUEST ---")
+    app.logger.info(f"URL: {bc_url}")
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        resp = requests.get(bc_url, headers=headers)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            # Print the result to your server logs (journalctl)
+            app.logger.info("✅ DEBUG DATA FETCHED SUCCESSFULLY")
+            app.logger.info(json.dumps(data, indent=2))
+            
+            # Also return it to your browser screen
+            return jsonify({
+                "help": "Use the keys below exactly as written (case-sensitive) in your POST payload.",
+                "endpoint": bc_url,
+                "sample_record": data.get("value", [])[0] if data.get("value") else "No records found"
+            })
+        else:
+            app.logger.error(f"❌ DEBUG GET FAILED: {resp.status_code}")
+            return jsonify({"error": resp.text}), resp.status_code
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
 # --- NEW: Purchase Invoice Creation Route (Kamterter) ---
 @app.route("/create-purchase-invoice", methods=["POST"])
 @login_required
@@ -907,7 +953,7 @@ def create_purchase_invoice():
     
     payload = {
         "Document_Type": "Invoice",
-        "buyFromVendorNumber": data.get("Buy_from_Vendor_Name"),
+        "buyFromVendorName": data.get("Buy_from_Vendor_Name"),
         "Vendor_Invoice_No": data.get("Vendor_Invoice_No"),
         "Document_Date": bc_date,
         "PurchaseLines": data.get("PurchaseLines", [])
