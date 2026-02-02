@@ -953,7 +953,7 @@ def create_purchase_invoice():
     
     payload = {
         "Document_Type": "Invoice",
-        "buyFromVendorName": data.get("Buy_from_Vendor_Name"),
+        "Vendor_Name": data.get("Buy_from_Vendor_Name"),
         "Vendor_Invoice_No": data.get("Vendor_Invoice_No"),
         "Document_Date": bc_date,
         "PurchaseLines": data.get("PurchaseLines", [])
