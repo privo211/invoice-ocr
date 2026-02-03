@@ -208,13 +208,9 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
     grouped_results = {}
 
     for filename, pdf_bytes in pdf_files:
-        print(f"\n{'='*60}")
-        print(f"🔎 STARTING DEBUG ANALYSIS: {filename}")
-        print(f"{'='*60}")
-
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         
-        # Use sort=True to fix the Seed Type shifting issue
+        # Use sort=True to force visual reading order
         full_text = "".join([page.get_text("text", sort=True) for page in doc])
         
         page_count = doc.page_count
@@ -229,24 +225,16 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
         if m := re.search(r"Invoiced\s*Date[:\s]*(\d{1,2}/\d{1,2}/\d{4})", full_text, re.IGNORECASE):
             doc_date = m.group(1)
 
-        # --- 2. Extract Grand Total (FIXED) ---
+        # --- 2. Extract Grand Total (Fixed Regex) ---
         grand_total = 0.0
-        
-        # Regex: \bTotal ensures we don't match "Subtotal"
-        # We look for ALL matches and take the LAST one to find the invoice footer.
+        # Look for "Total:" explicitly (ignore "Subtotal")
         all_totals = re.findall(r"\bTotal\s*[:\n]+\s*(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE)
         
         if all_totals:
-            # Take the last match found in the document
             grand_total = parse_currency(all_totals[-1])
-            print(f"[DEBUG] GRAND TOTAL FOUND: {grand_total} (Source: {all_totals[-1]})")
         else:
-            # Fallback for weird formatting
             if m_total_std := re.search(r"Total\s*:.*?(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL):
                  grand_total = parse_currency(m_total_std.group(1))
-                 print(f"[DEBUG] GRAND TOTAL (Fallback): {grand_total}")
-            else:
-                 print("[DEBUG] ❌ GRAND TOTAL NOT FOUND")
 
         # --- 3. Block Processing ---
         ktt_blocks = re.split(r"(?=KTT\s*[:#]*\s*\d)", full_text)
@@ -256,9 +244,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
         skipped_numeric_amount = 0.0 
         numeric_po_found = False
         
-        print(f"\n[DEBUG] Processing {len(ktt_blocks)} Blocks...")
-
-        for i, block in enumerate(ktt_blocks):
+        for block in ktt_blocks:
             if "KTT" not in block:
                 continue
 
@@ -277,15 +263,14 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 val = m_sub.group(1) if m_sub.group(1) else m_sub.group(2)
                 subtotal = parse_currency(val)
             
-            # 2. Fallback & Validation
+            # 2. Fallback
             if subtotal == 0.0 or abs(subtotal - 20.00) < 0.01:
                 all_prices_raw = re.findall(r"\$([\d,]+\.\d{2})", block)
-                valid_prices = [parse_currency(p) for p in all_prices_raw]
-                # Filter out small fees
-                valid_prices = [p for p in valid_prices if p > 20.00]
+                valid_prices = [parse_currency(p) for p in all_prices_raw if parse_currency(p) > 20.00]
                 if valid_prices:
                     subtotal = max(valid_prices)
 
+            # Extract Freight (Moved UP so we can use it in skip logic)
             freight = 0.0
             if m_frt_rev := re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Freight:", block, re.IGNORECASE):
                 freight = parse_currency(m_frt_rev.group(1))
@@ -300,17 +285,19 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             
             # 1. Numeric POs (US Lines) -> SKIP but track cost
             if re.match(r"^\d+$", clean_po):
-                print(f"   👉 BLOCK {i}: SKIP (Numeric PO {po_raw}) | Cost: {subtotal}")
                 numeric_po_found = True
-                skipped_numeric_amount += subtotal 
+                # FIX: Subtract FREIGHT from the skipped amount.
+                # We want to skip the SEEDS cost, but keep the FREIGHT cost in the pool 
+                # so it falls into the G/L bucket.
+                amount_to_skip = subtotal - freight
+                skipped_numeric_amount += amount_to_skip 
                 continue 
 
             # 2. G/L Logic (Dates/Unprocessed) -> SKIP completely
             if re.match(r"\d{1,2}/\d{1,2}/\d{4}", po_raw) or "left unprocessed" in block.lower():
-                print(f"   👉 BLOCK {i}: SKIP (Unprocessed/Date PO {po_raw})")
                 continue
 
-            # 3. Valid Resource Line
+            # --- Item Logic ---
             seed_type = "Unknown"
             if m_seed := re.search(r"Seed\s*Type[\s:]*(\S[^\n]*)", block, re.IGNORECASE):
                 raw_seed = m_seed.group(1).strip()
@@ -347,17 +334,9 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             })
 
         # --- 4. Balancing G/L Line ---
-        print("\n" + "="*40)
-        print("📊 FINAL CALCULATION")
-        print("="*40)
-        print(f"Grand Total:       {grand_total}")
-        print(f" - Processed Sum:  {processed_line_total_sum}")
-        print(f" - Skipped Numeric:{skipped_numeric_amount}")
-        print("-" * 20)
-        
+        # Formula: GrandTotal - (Accepted Items) - (Excluded Numeric Items [Seeds Only]) = Remainder
+        # The remainder will now include Freight from Numeric blocks + Unprocessed Fees + Rounding
         gl_amount = grand_total - processed_line_total_sum - skipped_numeric_amount
-        print(f" = G/L Result:     {gl_amount}")
-        print("="*40 + "\n")
         
         if resource_lines and abs(gl_amount) >= 0.01:
             resource_lines.append({
@@ -369,6 +348,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "LineAmount": round(gl_amount, 2)
             })
         
+        # --- 5. US PO Warning ---
         if not resource_lines and numeric_po_found:
              resource_lines.append({
                 "Type": "NOTE",
@@ -380,6 +360,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "IsUSWarning": True
             })
 
+        # --- 6. Logging & Final Return ---
         log_processing_event(
             vendor='Kamterter',
             filename=filename,
