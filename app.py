@@ -974,7 +974,6 @@ def create_purchase_invoice():
         "Document_Type": "Invoice",
         "Vendor_Name": data.get("Buy_from_Vendor_Name"),
         "Vendor_Invoice_No": data.get("Vendor_Invoice_No"),
-        # We send date here, but BC might overwrite it during Vendor validation
         "Document_Date": bc_date 
     }
 
@@ -989,16 +988,16 @@ def create_purchase_invoice():
 
     header_json = header_resp.json()
     document_no = header_json.get("No")
+    system_id = header_json.get("SystemId")
     
     # 4.5 PATCH THE DATE (Fix for inconsistent date)
-    # The Vendor validation likely reset the date to today. We force it back now.
-    if bc_date:
+    if bc_date and system_id:
         app.logger.info(f"=== PATCHING DOCUMENT DATE: {bc_date} ===")
-        # Construct URL for the specific resource: PurchaseHeaders(Document_Type='Invoice',No='114779')
-        patch_url = f"{headers_url}(Document_Type='Invoice',No='{document_no}')"
+        
+        patch_url = f"{headers_url}({system_id})" 
         
         patch_headers = headers.copy()
-        patch_headers["If-Match"] = "*" # Force update regardless of ETag
+        patch_headers["If-Match"] = "*" 
         
         patch_payload = {"Document_Date": bc_date}
         
@@ -1049,7 +1048,7 @@ def create_purchase_invoice():
     
     return jsonify({
         "message": "Purchase invoice created",
-        "No": document_no, # <--- FIXED: Changed key from 'document_no' to 'No' for frontend
+        "No": document_no,
         "lines_created": success_count
     }), 201
     
