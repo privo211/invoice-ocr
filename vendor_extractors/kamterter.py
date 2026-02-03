@@ -208,9 +208,13 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
     grouped_results = {}
 
     for filename, pdf_bytes in pdf_files:
+        print(f"\n{'='*60}")
+        print(f"🔎 STARTING DEBUG ANALYSIS: {filename}")
+        print(f"{'='*60}")
+
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         
-        # Standard extraction (per your request, no sort=True)
+        # Standard extraction (No sort=True)
         full_text = "".join([page.get_text() for page in doc])
         
         page_count = doc.page_count
@@ -225,24 +229,30 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
         if m := re.search(r"Invoiced\s*Date[:\s]*(\d{1,2}/\d{1,2}/\d{4})", full_text, re.IGNORECASE):
             doc_date = m.group(1)
 
-        # --- 2. Extract Grand Total ---
+        # --- 2. Extract Grand Total (FIXED) ---
         grand_total = 0.0
-        # Strict: Look for 'Total' followed by price (ignoring 'Work Order Split' above it)
         all_totals = re.findall(r"\bTotal\s*[:\n]+\s*(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE)
+        
         if all_totals:
             grand_total = parse_currency(all_totals[-1])
-        elif m_total_std := re.search(r"Total\s*:.*?(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL):
-             grand_total = parse_currency(m_total_std.group(1))
+            print(f"[DEBUG] GRAND TOTAL FOUND: {grand_total} (Source matches: {all_totals})")
+        else:
+            if m_total_std := re.search(r"Total\s*:.*?(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL):
+                 grand_total = parse_currency(m_total_std.group(1))
+                 print(f"[DEBUG] GRAND TOTAL (Fallback): {grand_total}")
+            else:
+                 print("[DEBUG] ❌ GRAND TOTAL NOT FOUND")
 
-        # --- 3. Global Seed Type Extraction (Fix for Shifted Data) ---
-        # Instead of finding Seed Type inside the split block (which might be shifted),
-        # we find ALL seed types in the document and map them sequentially to the blocks.
+        # --- 3. Global Seed Type Extraction ---
         raw_seed_matches = re.findall(r"Seed\s*Type[\s:]*([^\n]*)", full_text, re.IGNORECASE)
         all_seed_types = []
         for raw in raw_seed_matches:
-            # Cleanup: Remove "Lot #" if it appears on the same line
             clean_seed = re.split(r"Lot\s*#", raw, flags=re.IGNORECASE)[0].strip()
             all_seed_types.append(clean_seed)
+        
+        print(f"[DEBUG] GLOBAL SEED TYPES EXTRACTED ({len(all_seed_types)}):")
+        for i, s in enumerate(all_seed_types):
+            print(f"   [{i}] {s}")
 
         # --- 4. Block Processing ---
         ktt_blocks = re.split(r"(?=KTT\s*[:#]*\s*\d)", full_text)
@@ -252,50 +262,54 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
         skipped_numeric_amount = 0.0 
         numeric_po_found = False
         
-        # We need a separate counter for KTT blocks to map the Seed Types correctly
-        # The first split element is often the preamble (header), so we skip it if it has no KTT
-        ktt_block_index = 0 
+        seed_index = 0
 
-        for block in ktt_blocks:
+        print(f"\n[DEBUG] Processing {len(ktt_blocks)} Blocks...")
+
+        for i, block in enumerate(ktt_blocks):
             if "KTT" not in block:
                 continue
 
-            # Map the seed type by index (Fixes the shift issue)
+            print(f"\n--- BLOCK {i} ANALYSIS ---")
+
+            # Map Seed Type
             current_seed_type = "Unknown"
-            if ktt_block_index < len(all_seed_types):
-                current_seed_type = all_seed_types[ktt_block_index]
-            
-            ktt_block_index += 1 # Increment for next valid block
+            if seed_index < len(all_seed_types):
+                current_seed_type = all_seed_types[seed_index]
+            seed_index += 1
 
             # Extract PO
             po_match = re.search(r"PO\s*(?:#)?[:\s]*([^\n]+)", block, re.IGNORECASE)
             po_raw = po_match.group(1).strip() if po_match else "UNKNOWN"
             clean_po = re.sub(r"[\s\u00A0]+", "", po_raw)
+            print(f"   PO: '{po_raw}' | Seed Type: '{current_seed_type}'")
 
             # --- FINANCIALS ---
             subtotal = 0.0
             
-            # 1. Look for 'Subtotal:'
+            # Subtotal Strategy
             m_sub = re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Subtotal|Subtotal\s*[:\n]*\s*(\$[\d,]+\.\d{2})", block, re.IGNORECASE)
             if m_sub:
                 val = m_sub.group(1) if m_sub.group(1) else m_sub.group(2)
                 subtotal = parse_currency(val)
+                print(f"   Subtotal (Regex): {subtotal}")
             
-            # 2. Fallback
+            # Fallback
             if subtotal == 0.0 or abs(subtotal - 20.00) < 0.01:
                 all_prices_raw = re.findall(r"\$([\d,]+\.\d{2})", block)
                 valid_prices = [parse_currency(p) for p in all_prices_raw if parse_currency(p) > 20.00]
                 if valid_prices:
                     subtotal = max(valid_prices)
+                    print(f"   Subtotal (Fallback Max): {subtotal} from {valid_prices}")
 
-            # --- FREIGHT (FIX: Check Forward First) ---
+            # --- FREIGHT (Priority Fix) ---
             freight = 0.0
-            # Priority 1: "Freight: ... $1063.00" (Forward look finds the real cost)
             if m_frt_fwd := re.search(r"Freight:\s*.*?(\$[\d,]+\.\d{2})", block, re.IGNORECASE | re.DOTALL):
                  freight = parse_currency(m_frt_fwd.group(1))
-            # Priority 2: "$1063.00 ... Freight" (Reverse look)
+                 print(f"   Freight (Forward Match): {freight}")
             elif m_frt_rev := re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Freight:", block, re.IGNORECASE):
                 freight = parse_currency(m_frt_rev.group(1))
+                print(f"   Freight (Reverse Match): {freight}")
 
             adjusted_subtotal = subtotal
             if freight > 0 and adjusted_subtotal > freight:
@@ -303,20 +317,21 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
 
             # --- PO CHECKS ---
             
-            # 1. Numeric POs (US Lines) -> SKIP but track cost
+            # 1. Numeric POs (US Lines) -> SKIP
             if re.match(r"^\d+$", clean_po):
                 numeric_po_found = True
-                # We subtract freight here because freight DOES belong in the G/L bucket (expense),
-                # while the seed cost (US Inventory) does NOT.
                 amount_to_skip = subtotal - freight
+                print(f"   👉 ACTION: SKIP (Numeric PO)")
+                print(f"      Skipping Seed Cost: {amount_to_skip} (Subtotal {subtotal} - Freight {freight})")
                 skipped_numeric_amount += amount_to_skip 
                 continue 
 
-            # 2. G/L Logic (Dates/Unprocessed) -> SKIP completely
+            # 2. G/L Logic (Dates/Unprocessed) -> SKIP
             if re.match(r"\d{1,2}/\d{1,2}/\d{4}", po_raw) or "left unprocessed" in block.lower():
+                print(f"   👉 ACTION: SKIP (Unprocessed/Date PO)")
                 continue
 
-            # Quantity
+            # Quantity & Unit Cost
             quantity = 0.0
             if m_qty := re.search(r"Shipped\s*Weight[:\s]*([\d,]+\.\d{2})", block, re.IGNORECASE):
                 quantity = parse_currency(m_qty.group(1))
@@ -336,6 +351,9 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             description = f"INV{invoice_no}_{current_seed_type}_{po_raw}"
             line_amount = round(quantity * round(unit_cost, 5), 2)
             
+            print(f"   👉 ACTION: PROCESS LINE")
+            print(f"      Qty: {quantity} | Unit Cost: {unit_cost} | Line Total: {line_amount}")
+            
             processed_line_total_sum += line_amount
 
             resource_lines.append({
@@ -348,8 +366,17 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             })
 
         # --- 4. Balancing G/L Line ---
-        # GrandTotal - (Resource Lines) - (US Seeds) = Freight + Unprocessed Fees + Rounding
+        print("\n" + "="*40)
+        print("📊 FINAL G/L CALCULATION")
+        print("="*40)
+        print(f"Grand Total:       {grand_total}")
+        print(f" - Processed Sum:  {processed_line_total_sum}")
+        print(f" - Skipped Numeric:{skipped_numeric_amount}")
+        print("-" * 20)
+        
         gl_amount = grand_total - processed_line_total_sum - skipped_numeric_amount
+        print(f" = G/L Result:     {gl_amount}")
+        print("="*40 + "\n")
         
         if resource_lines and abs(gl_amount) >= 0.01:
             resource_lines.append({
@@ -361,7 +388,6 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "LineAmount": round(gl_amount, 2)
             })
         
-        # --- 5. US PO Warning ---
         if not resource_lines and numeric_po_found:
              resource_lines.append({
                 "Type": "NOTE",
@@ -373,7 +399,6 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "IsUSWarning": True
             })
 
-        # --- 6. Logging & Final Return ---
         log_processing_event(
             vendor='Kamterter',
             filename=filename,
