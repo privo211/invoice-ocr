@@ -229,19 +229,24 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
         if m := re.search(r"Invoiced\s*Date[:\s]*(\d{1,2}/\d{1,2}/\d{4})", full_text, re.IGNORECASE):
             doc_date = m.group(1)
 
-        # --- 2. Extract Grand Total ---
+        # --- 2. Extract Grand Total (FIXED) ---
         grand_total = 0.0
-        # Strict Regex: "Total" followed by optional space/newline, then Price
-        if m_total := re.search(r"Total\s*[:\n]+\s*(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE):
-            grand_total = parse_currency(m_total.group(1))
-            print(f"[DEBUG] GRAND TOTAL (Strict Regex): {grand_total}")
-        elif m_total_std := re.search(r"Total\s*:.*?(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL):
-             all_totals = re.findall(r"Total\s*:.*?(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL)
-             if all_totals:
-                 grand_total = parse_currency(all_totals[-1])
-                 print(f"[DEBUG] GRAND TOTAL (Fallback Regex): {grand_total}")
+        
+        # Regex: \bTotal ensures we don't match "Subtotal"
+        # We look for ALL matches and take the LAST one to find the invoice footer.
+        all_totals = re.findall(r"\bTotal\s*[:\n]+\s*(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE)
+        
+        if all_totals:
+            # Take the last match found in the document
+            grand_total = parse_currency(all_totals[-1])
+            print(f"[DEBUG] GRAND TOTAL FOUND: {grand_total} (Source: {all_totals[-1]})")
         else:
-            print("[DEBUG] ❌ GRAND TOTAL NOT FOUND")
+            # Fallback for weird formatting
+            if m_total_std := re.search(r"Total\s*:.*?(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL):
+                 grand_total = parse_currency(m_total_std.group(1))
+                 print(f"[DEBUG] GRAND TOTAL (Fallback): {grand_total}")
+            else:
+                 print("[DEBUG] ❌ GRAND TOTAL NOT FOUND")
 
         # --- 3. Block Processing ---
         ktt_blocks = re.split(r"(?=KTT\s*[:#]*\s*\d)", full_text)
@@ -257,61 +262,55 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             if "KTT" not in block:
                 continue
 
-            print(f"\n--- BLOCK {i} ANALYSIS ---")
-            
             # Extract PO
             po_match = re.search(r"PO\s*(?:#)?[:\s]*([^\n]+)", block, re.IGNORECASE)
             po_raw = po_match.group(1).strip() if po_match else "UNKNOWN"
             clean_po = re.sub(r"[\s\u00A0]+", "", po_raw)
-            print(f"   PO: '{po_raw}' (Clean: '{clean_po}')")
 
-            # --- SUBTOTAL HUNTING ---
+            # --- FINANCIALS PRE-CALCULATION ---
             subtotal = 0.0
             
-            # Find ALL prices in this block
-            all_prices_raw = re.findall(r"\$([\d,]+\.\d{2})", block)
-            all_prices = [parse_currency(p) for p in all_prices_raw]
-            print(f"   Prices Found: {all_prices}")
-
-            # Strategy 1: Explicit Subtotal Label
-            if m_sub_rev := re.search(r"(\$[\d,]+\.\d{2})[^\n]*\n\s*Subtotal:", block, re.IGNORECASE):
-                subtotal = parse_currency(m_sub_rev.group(1))
-                print(f"   Strategy 1 (Pre-Label): Found {subtotal}")
-            elif m_sub_fwd := re.search(r"Subtotal[:\s]*.*?(\$[\d,]+\.\d{2})", block, re.IGNORECASE | re.DOTALL):
-                subtotal = parse_currency(m_sub_fwd.group(1))
-                print(f"   Strategy 2 (Post-Label): Found {subtotal}")
+            # 1. Look for 'Subtotal:'
+            m_sub = re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Subtotal|Subtotal\s*[:\n]*\s*(\$[\d,]+\.\d{2})", block, re.IGNORECASE)
             
-            # Strategy 3: Validation & Fallback
-            # If subtotal looks wrong (0.0 or exactly 20.00), try to find the "Real" amount from the list
+            if m_sub:
+                val = m_sub.group(1) if m_sub.group(1) else m_sub.group(2)
+                subtotal = parse_currency(val)
+            
+            # 2. Fallback & Validation
             if subtotal == 0.0 or abs(subtotal - 20.00) < 0.01:
-                # Filter out the noise ($20.00 split, $0.00 unprocessed)
-                # We assume the subtotal is the largest value in the block
-                valid_prices = [p for p in all_prices if p > 20.00]
+                all_prices_raw = re.findall(r"\$([\d,]+\.\d{2})", block)
+                valid_prices = [parse_currency(p) for p in all_prices_raw]
+                # Filter out small fees
+                valid_prices = [p for p in valid_prices if p > 20.00]
                 if valid_prices:
                     subtotal = max(valid_prices)
-                    print(f"   Strategy 3 (Max Value): Selected {subtotal} from {valid_prices}")
-                else:
-                    print(f"   ⚠️ Strategy 3 Failed: No prices > 20.00 found.")
 
-            # --- CLASSIFICATION & ACTION ---
+            freight = 0.0
+            if m_frt_rev := re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Freight:", block, re.IGNORECASE):
+                freight = parse_currency(m_frt_rev.group(1))
+            elif m_frt_fwd := re.search(r"Freight:\s*.*?(\$[\d,]+\.\d{2})", block, re.IGNORECASE | re.DOTALL):
+                 freight = parse_currency(m_frt_fwd.group(1))
+
+            adjusted_subtotal = subtotal
+            if freight > 0 and adjusted_subtotal > freight:
+                adjusted_subtotal = adjusted_subtotal - freight
+
+            # --- PO CHECKS ---
             
             # 1. Numeric POs (US Lines) -> SKIP but track cost
             if re.match(r"^\d+$", clean_po):
-                print(f"   👉 ACTION: SKIP (Numeric PO)")
-                print(f"   💰 Adding {subtotal} to Skipped Amount")
+                print(f"   👉 BLOCK {i}: SKIP (Numeric PO {po_raw}) | Cost: {subtotal}")
                 numeric_po_found = True
                 skipped_numeric_amount += subtotal 
                 continue 
 
             # 2. G/L Logic (Dates/Unprocessed) -> SKIP completely
             if re.match(r"\d{1,2}/\d{1,2}/\d{4}", po_raw) or "left unprocessed" in block.lower():
-                print(f"   👉 ACTION: SKIP (Unprocessed/Date PO)")
-                # These are usually $20 fees that we WANT to fall into the final G/L bucket
+                print(f"   👉 BLOCK {i}: SKIP (Unprocessed/Date PO {po_raw})")
                 continue
 
             # 3. Valid Resource Line
-            print(f"   👉 ACTION: PROCESS (Valid Resource)")
-            
             seed_type = "Unknown"
             if m_seed := re.search(r"Seed\s*Type[\s:]*(\S[^\n]*)", block, re.IGNORECASE):
                 raw_seed = m_seed.group(1).strip()
@@ -320,15 +319,6 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             quantity = 0.0
             if m_qty := re.search(r"Shipped\s*Weight[:\s]*([\d,]+\.\d{2})", block, re.IGNORECASE):
                 quantity = parse_currency(m_qty.group(1))
-
-            freight = 0.0
-            if m_frt_rev := re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Freight:", block, re.IGNORECASE):
-                freight = parse_currency(m_frt_rev.group(1))
-            
-            # Calculate Line Amount (Subtotal - Freight)
-            adjusted_subtotal = subtotal
-            if freight > 0 and adjusted_subtotal > freight:
-                adjusted_subtotal = adjusted_subtotal - freight
 
             unit_cost = 0.0
             if quantity > 0:
@@ -345,9 +335,7 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             description = f"INV{invoice_no}_{seed_type}_{po_raw}"
             line_amount = round(quantity * round(unit_cost, 5), 2)
             
-            # Accumulate Processed Total
             processed_line_total_sum += line_amount
-            print(f"   💰 Adding {line_amount} to Processed Sum")
 
             resource_lines.append({
                 "Type": "Resource",
@@ -358,9 +346,9 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "LineAmount": line_amount
             })
 
-        # --- 4. G/L Calculation Debug ---
+        # --- 4. Balancing G/L Line ---
         print("\n" + "="*40)
-        print("📊 FINAL CALCULATION DEBUG")
+        print("📊 FINAL CALCULATION")
         print("="*40)
         print(f"Grand Total:       {grand_total}")
         print(f" - Processed Sum:  {processed_line_total_sum}")
