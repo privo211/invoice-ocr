@@ -974,6 +974,7 @@ def create_purchase_invoice():
         "Document_Type": "Invoice",
         "Vendor_Name": data.get("Buy_from_Vendor_Name"),
         "Vendor_Invoice_No": data.get("Vendor_Invoice_No"),
+        # We try sending date here, but BC usually overwrites it
         "Document_Date": bc_date 
     }
 
@@ -990,11 +991,13 @@ def create_purchase_invoice():
     document_no = header_json.get("No")
     system_id = header_json.get("SystemId")
     
-    # 4.5 PATCH THE DATE (Fix for inconsistent date)
+    # 4.5 PATCH THE DATE
     if bc_date and system_id:
         app.logger.info(f"=== PATCHING DOCUMENT DATE: {bc_date} ===")
         
-        patch_url = f"{headers_url}({system_id})" 
+        patch_url = f"{headers_url}(SystemId={system_id},Document_Type='Invoice',No='{document_no}')"
+        
+        app.logger.info(f"Patch URL: {patch_url}")
         
         patch_headers = headers.copy()
         patch_headers["If-Match"] = "*" 
@@ -1006,7 +1009,8 @@ def create_purchase_invoice():
         if patch_resp.status_code in (200, 204):
              app.logger.info("✅ Date corrected successfully.")
         else:
-             app.logger.warning(f"⚠️ Failed to patch date. BC Status: {patch_resp.status_code} - {patch_resp.text}")
+             app.logger.warning(f"⚠️ Failed to patch date. BC Status: {patch_resp.status_code}")
+             app.logger.warning(f"Response: {patch_resp.text}")
 
     app.logger.info(f"✅ Header Created & Verified: {document_no}")
 
@@ -1028,8 +1032,6 @@ def create_purchase_invoice():
             "Quantity": float(line["Quantity"]),
             "Direct_Unit_Cost": float(line["Direct_Unit_Cost"])
         }
-
-        app.logger.info(f"--- Line {idx} Request (Line No: {current_line_no}) ---")
         
         line_resp = requests.post(lines_url, headers=headers, json=line_payload)
         
