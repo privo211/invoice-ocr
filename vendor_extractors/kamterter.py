@@ -17,9 +17,20 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
 
     for filename, pdf_bytes in pdf_files:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        
+        # [DEBUG] Standard extraction (No sort=True) to inspect raw stream order
         full_text = "".join([page.get_text() for page in doc])
+        
         page_count = doc.page_count
         doc.close()
+
+        # --- DEBUG LOGGING START ---
+        print(f"\n{'='*50}")
+        print(f"📄 DEBUG DUMP: {filename}")
+        print(f"{'='*50}")
+        print(full_text)
+        print(f"{'='*50}\n")
+        # --- DEBUG LOGGING END ---
 
         # --- 1. Global Metadata ---
         invoice_no = None
@@ -48,21 +59,29 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
         processed_line_total_sum = 0.0
         numeric_po_found = False
         
-        for block in ktt_blocks:
+        for i, block in enumerate(ktt_blocks):
             if "KTT" not in block:
                 continue
 
+            # --- DEBUG BLOCK CONTENT ---
+            print(f"--- [DEBUG] Processing Block {i} ---")
+            print(f"Preview: {block[:100].replace(chr(10), ' ')}...") # Print first 100 chars
+            
             # Extract PO
             po_match = re.search(r"PO\s*(?:#)?[:\s]*([^\n]+)", block, re.IGNORECASE)
             po_raw = po_match.group(1).strip() if po_match else "UNKNOWN"
             
+            print(f"   -> Found PO Raw: '{po_raw}'")
+
             # Numeric PO Check
             if re.match(r"^\d+$", po_raw):
+                print(f"   -> SKIPPING: Detected Numeric PO")
                 numeric_po_found = True
                 continue 
 
             # G/L Logic Check
             if re.match(r"\d{1,2}/\d{1,2}/\d{4}", po_raw) or "left unprocessed" in block.lower():
+                print(f"   -> SKIPPING: Detected Date/G/L PO")
                 continue
 
             # --- Item Logic (FIXED REGEX) ---
@@ -70,6 +89,8 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             # Look for Seed Type label, consume colon/newlines ([\s:]*), then capture the first non-empty line
             if m_seed := re.search(r"Seed\s*Type[\s:]*(\S[^\n]*)", block, re.IGNORECASE):
                 seed_type = m_seed.group(1).strip()
+            
+            print(f"   -> Found Seed Type: '{seed_type}'")
 
             # Quantity
             quantity = 0.0
@@ -119,7 +140,8 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "No": item_no,
                 "Description": description,
                 "Quantity": quantity,
-                "DirectUnitCost": round(unit_cost, 5)
+                "DirectUnitCost": round(unit_cost, 5),
+                "LineAmount": line_amount
             })
 
         # --- 4. Balancing G/L Line ---
@@ -131,7 +153,8 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "No": "609100",
                 "Description": f"INV{invoice_no}_Unprocessed_WOSplit_Shipping",
                 "Quantity": 1,
-                "DirectUnitCost": round(gl_amount, 2)
+                "DirectUnitCost": round(gl_amount, 2),
+                "LineAmount": round(gl_amount, 2)
             })
         
         # --- 5. US PO Warning ---
