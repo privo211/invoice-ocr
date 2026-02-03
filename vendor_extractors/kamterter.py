@@ -18,8 +18,11 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
     for filename, pdf_bytes in pdf_files:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         
-        # [DEBUG] Standard extraction (No sort=True) to inspect raw stream order
-        full_text = "".join([page.get_text() for page in doc])
+        # # Standard extraction to inspect raw stream order
+        # full_text = "".join([page.get_text() for page in doc])
+        
+        # 'sort=True' forces reading order by vertical position, fixing the "shift"
+        full_text = "".join([page.get_text("text", sort=True) for page in doc])
         
         page_count = doc.page_count
         doc.close()
