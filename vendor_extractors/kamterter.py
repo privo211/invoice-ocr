@@ -208,9 +208,13 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
     grouped_results = {}
 
     for filename, pdf_bytes in pdf_files:
+        print(f"\n{'='*60}")
+        print(f"🔎 STARTING DEBUG ANALYSIS: {filename}")
+        print(f"{'='*60}")
+
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         
-        # FIX 1: Use sort=True to force visual reading order
+        # Use sort=True to fix the Seed Type shifting issue
         full_text = "".join([page.get_text("text", sort=True) for page in doc])
         
         page_count = doc.page_count
@@ -225,100 +229,111 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
         if m := re.search(r"Invoiced\s*Date[:\s]*(\d{1,2}/\d{1,2}/\d{4})", full_text, re.IGNORECASE):
             doc_date = m.group(1)
 
-        # --- 2. Extract Grand Total (Strict Regex) ---
+        # --- 2. Extract Grand Total ---
         grand_total = 0.0
-        # Look for "Total:" followed explicitly by the price (ignoring the "Work Order Split" line above it)
+        # Strict Regex: "Total" followed by optional space/newline, then Price
         if m_total := re.search(r"Total\s*[:\n]+\s*(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE):
             grand_total = parse_currency(m_total.group(1))
-        # Fallback
+            print(f"[DEBUG] GRAND TOTAL (Strict Regex): {grand_total}")
         elif m_total_std := re.search(r"Total\s*:.*?(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL):
              all_totals = re.findall(r"Total\s*:.*?(\$[\d,]+\.\d{2})", full_text, re.IGNORECASE | re.DOTALL)
              if all_totals:
                  grand_total = parse_currency(all_totals[-1])
+                 print(f"[DEBUG] GRAND TOTAL (Fallback Regex): {grand_total}")
+        else:
+            print("[DEBUG] ❌ GRAND TOTAL NOT FOUND")
 
         # --- 3. Block Processing ---
         ktt_blocks = re.split(r"(?=KTT\s*[:#]*\s*\d)", full_text)
         
         resource_lines = []
         processed_line_total_sum = 0.0
-        skipped_numeric_amount = 0.0 # New tracker for excluded lines
+        skipped_numeric_amount = 0.0 
         numeric_po_found = False
         
-        for block in ktt_blocks:
+        print(f"\n[DEBUG] Processing {len(ktt_blocks)} Blocks...")
+
+        for i, block in enumerate(ktt_blocks):
             if "KTT" not in block:
                 continue
 
+            print(f"\n--- BLOCK {i} ANALYSIS ---")
+            
             # Extract PO
             po_match = re.search(r"PO\s*(?:#)?[:\s]*([^\n]+)", block, re.IGNORECASE)
             po_raw = po_match.group(1).strip() if po_match else "UNKNOWN"
-            
-            # --- FINANCIALS PRE-CALCULATION ---
-            # We need to calculate the line total even if we skip it, to balance the G/L.
+            clean_po = re.sub(r"[\s\u00A0]+", "", po_raw)
+            print(f"   PO: '{po_raw}' (Clean: '{clean_po}')")
+
+            # --- SUBTOTAL HUNTING ---
             subtotal = 0.0
             
-            # 1. Try finding '$XXX.XX' immediately before 'Subtotal:'
+            # Find ALL prices in this block
+            all_prices_raw = re.findall(r"\$([\d,]+\.\d{2})", block)
+            all_prices = [parse_currency(p) for p in all_prices_raw]
+            print(f"   Prices Found: {all_prices}")
+
+            # Strategy 1: Explicit Subtotal Label
             if m_sub_rev := re.search(r"(\$[\d,]+\.\d{2})[^\n]*\n\s*Subtotal:", block, re.IGNORECASE):
                 subtotal = parse_currency(m_sub_rev.group(1))
-            # 2. Try finding 'Subtotal: $XXX.XX'
+                print(f"   Strategy 1 (Pre-Label): Found {subtotal}")
             elif m_sub_fwd := re.search(r"Subtotal[:\s]*.*?(\$[\d,]+\.\d{2})", block, re.IGNORECASE | re.DOTALL):
                 subtotal = parse_currency(m_sub_fwd.group(1))
-            elif not subtotal:
-                prices = re.findall(r"\$([\d,]+\.\d{2})", block)
-                if prices:
-                    subtotal = parse_currency(prices[-1])
-
-            # Prevent capturing the $20.00 "Work Order Split" as the subtotal
-            if abs(subtotal - 20.00) < 0.01:
-                all_prices_raw = re.findall(r"\$([\d,]+\.\d{2})", block)
-                valid_prices = [p for p in all_prices_raw if parse_currency(p) > 20.00]
+                print(f"   Strategy 2 (Post-Label): Found {subtotal}")
+            
+            # Strategy 3: Validation & Fallback
+            # If subtotal looks wrong (0.0 or exactly 20.00), try to find the "Real" amount from the list
+            if subtotal == 0.0 or abs(subtotal - 20.00) < 0.01:
+                # Filter out the noise ($20.00 split, $0.00 unprocessed)
+                # We assume the subtotal is the largest value in the block
+                valid_prices = [p for p in all_prices if p > 20.00]
                 if valid_prices:
-                    subtotal = parse_currency(valid_prices[-1])
+                    subtotal = max(valid_prices)
+                    print(f"   Strategy 3 (Max Value): Selected {subtotal} from {valid_prices}")
+                else:
+                    print(f"   ⚠️ Strategy 3 Failed: No prices > 20.00 found.")
 
-            freight = 0.0
-            if m_frt_rev := re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Freight:", block, re.IGNORECASE):
-                freight = parse_currency(m_frt_rev.group(1))
-            elif m_frt_fwd := re.search(r"Freight:\s*.*?(\$[\d,]+\.\d{2})", block, re.IGNORECASE | re.DOTALL):
-                 freight = parse_currency(m_frt_fwd.group(1))
-
-            adjusted_subtotal = subtotal
-            if freight > 0 and adjusted_subtotal > freight:
-                adjusted_subtotal = adjusted_subtotal - freight
-
-            # --- PO CHECKS ---
-            clean_po = re.sub(r"[\s\u00A0]+", "", po_raw)
+            # --- CLASSIFICATION & ACTION ---
             
             # 1. Numeric POs (US Lines) -> SKIP but track cost
             if re.match(r"^\d+$", clean_po):
+                print(f"   👉 ACTION: SKIP (Numeric PO)")
+                print(f"   💰 Adding {subtotal} to Skipped Amount")
                 numeric_po_found = True
-                # We add the FULL subtotal (before freight deduction) to the skipped bucket
-                # because the Grand Total includes freight, so if we skip this line, 
-                # we must account for its entire contribution to the Total.
                 skipped_numeric_amount += subtotal 
                 continue 
 
-            # 2. G/L Logic (Dates/Unprocessed) -> SKIP completely (usually low value or handled elsewhere)
+            # 2. G/L Logic (Dates/Unprocessed) -> SKIP completely
             if re.match(r"\d{1,2}/\d{1,2}/\d{4}", po_raw) or "left unprocessed" in block.lower():
-                # We generally want these small "Work Order Splits" ($20) to fall into the G/L bucket anyway
-                # So we do NOT add them to 'processed' or 'skipped' sums.
-                # They naturally remain in (GrandTotal - Processed) = G/L Line.
+                print(f"   👉 ACTION: SKIP (Unprocessed/Date PO)")
+                # These are usually $20 fees that we WANT to fall into the final G/L bucket
                 continue
 
-            # --- Item Logic ---
+            # 3. Valid Resource Line
+            print(f"   👉 ACTION: PROCESS (Valid Resource)")
+            
             seed_type = "Unknown"
             if m_seed := re.search(r"Seed\s*Type[\s:]*(\S[^\n]*)", block, re.IGNORECASE):
                 raw_seed = m_seed.group(1).strip()
                 seed_type = re.split(r"Lot\s*#", raw_seed, flags=re.IGNORECASE)[0].strip()
 
-            # Quantity
             quantity = 0.0
             if m_qty := re.search(r"Shipped\s*Weight[:\s]*([\d,]+\.\d{2})", block, re.IGNORECASE):
                 quantity = parse_currency(m_qty.group(1))
+
+            freight = 0.0
+            if m_frt_rev := re.search(r"(\$[\d,]+\.\d{2})\s*\n\s*Freight:", block, re.IGNORECASE):
+                freight = parse_currency(m_frt_rev.group(1))
+            
+            # Calculate Line Amount (Subtotal - Freight)
+            adjusted_subtotal = subtotal
+            if freight > 0 and adjusted_subtotal > freight:
+                adjusted_subtotal = adjusted_subtotal - freight
 
             unit_cost = 0.0
             if quantity > 0:
                 unit_cost = adjusted_subtotal / quantity
 
-            # Item No
             item_no = po_raw
             if "-" in po_raw:
                 sub_m = re.search(r"^\d+-(.+)", po_raw)
@@ -328,10 +343,11 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                     item_no = po_raw
 
             description = f"INV{invoice_no}_{seed_type}_{po_raw}"
-            
-            # Track cost for accepted lines
             line_amount = round(quantity * round(unit_cost, 5), 2)
+            
+            # Accumulate Processed Total
             processed_line_total_sum += line_amount
+            print(f"   💰 Adding {line_amount} to Processed Sum")
 
             resource_lines.append({
                 "Type": "Resource",
@@ -342,9 +358,18 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "LineAmount": line_amount
             })
 
-        # --- 4. Balancing G/L Line ---
-        # Formula: GrandTotal - (Accepted Items) - (Excluded Numeric Items) = Freight + Misc Fees
+        # --- 4. G/L Calculation Debug ---
+        print("\n" + "="*40)
+        print("📊 FINAL CALCULATION DEBUG")
+        print("="*40)
+        print(f"Grand Total:       {grand_total}")
+        print(f" - Processed Sum:  {processed_line_total_sum}")
+        print(f" - Skipped Numeric:{skipped_numeric_amount}")
+        print("-" * 20)
+        
         gl_amount = grand_total - processed_line_total_sum - skipped_numeric_amount
+        print(f" = G/L Result:     {gl_amount}")
+        print("="*40 + "\n")
         
         if resource_lines and abs(gl_amount) >= 0.01:
             resource_lines.append({
@@ -356,7 +381,6 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "LineAmount": round(gl_amount, 2)
             })
         
-        # --- 5. US PO Warning ---
         if not resource_lines and numeric_po_found:
              resource_lines.append({
                 "Type": "NOTE",
@@ -368,7 +392,6 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                 "IsUSWarning": True
             })
 
-        # --- 6. Logging & Final Return ---
         log_processing_event(
             vendor='Kamterter',
             filename=filename,
