@@ -98,6 +98,7 @@
     .table td {
       color: var(--text-color);
       border-bottom-color: inherit;
+      vertical-align: middle; /* Aligns inputs nicely */
     }
     
     body.dark-mode .table {
@@ -124,6 +125,7 @@
         border-color: #842029;
     }
 
+    /* Input Styles */
     .table-input {
         min-width: 80px;
         padding: 0.25rem 0.5rem;
@@ -168,10 +170,11 @@
       {% for filename, lines in items.items() %}
         <div class="card p-3" id="card-{{ loop.index }}">
           <h4>📄 {{ filename }}</h4>
-          <div class="row mb-3">
+          
+          <div class="row mb-3 align-items-center">
             <div class="col-md-3"><strong>Invoice #:</strong> <span id="inv-{{ loop.index }}">{{ lines[0].VendorInvoiceNo }}</span></div>
             <div class="col-md-3"><strong>Date:</strong> <span id="date-{{ loop.index }}">{{ lines[0].DocumentDate }}</span></div>
-            <div class="col-md-4"><strong>Vendor:</strong> {{ lines[0].BuyFromVendorName }}</div>
+            <div class="col-md-3"><strong>Vendor:</strong> {{ lines[0].BuyFromVendorName }}</div>
             <div class="col-md-3 text-end">
               <span id="header-status-{{ loop.index }}" class="badge bg-success fs-6" style="display: none;"></span>
             </div>
@@ -285,7 +288,6 @@
             "Description": row.dataset.desc,
             
             // READ VALUES FROM USER INPUTS
-            // Use || 0 to handle cases where user deletes the number entirely
             "Quantity": parseFloat(qtyInput.value) || 0,
             "Direct_Unit_Cost": parseFloat(costInput.value) || 0
           });
@@ -293,7 +295,6 @@
 
         const payload = {
           "Document_Type": "Invoice",
-          // Use Name from button data attribute
           "Buy_from_Vendor_Name": btn.dataset.vendorName,
           "Vendor_Invoice_No": btn.dataset.inv,
           "Document_Date": btn.dataset.date,
@@ -325,14 +326,14 @@
             const statusBadge = document.getElementById(`header-status-${idx}`);
             if(statusBadge) {
                 statusBadge.style.display = 'inline-block';
-                statusBadge.textContent = `BC Invoice: ${json.No}`;
+                statusBadge.textContent = `BC Purchase Invoice #: ${json.No}`;
             }
 
             // 3. BUTTON: Disable it
             btn.textContent = "Invoice Created";
             btn.classList.remove('btn-success');
             btn.classList.add('btn-secondary');
-            btn.disabled = true; // Prevent double clicks
+            btn.disabled = true;
 
           } else {
             // FAILURE VISUALS
