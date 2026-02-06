@@ -123,6 +123,25 @@
         color: #ffb3b9;
         border-color: #842029;
     }
+
+    .table-input {
+        min-width: 80px;
+        padding: 0.25rem 0.5rem;
+        font-size: 0.9rem;
+    }
+
+    /* Dark mode support for inputs */
+    body.dark-mode .form-control {
+        background-color: #3a3a3a;
+        border-color: #495057;
+        color: #f0f0f0;
+    }
+    body.dark-mode .form-control:focus {
+        background-color: #3a3a3a;
+        color: #ffffff;
+        border-color: var(--primary-color);
+    }
+
   </style>
 </head>
 <body>
@@ -153,6 +172,9 @@
             <div class="col-md-3"><strong>Invoice #:</strong> <span id="inv-{{ loop.index }}">{{ lines[0].VendorInvoiceNo }}</span></div>
             <div class="col-md-3"><strong>Date:</strong> <span id="date-{{ loop.index }}">{{ lines[0].DocumentDate }}</span></div>
             <div class="col-md-4"><strong>Vendor:</strong> {{ lines[0].BuyFromVendorName }}</div>
+            <div class="col-md-3 text-end">
+              <span id="header-status-{{ loop.index }}" class="badge bg-success fs-6" style="display: none;"></span>
+            </div>
           </div>
 
           {% set is_us_warning = false %}
@@ -180,14 +202,19 @@
                     {% for line in lines %}
                     <tr data-type="{{ line.Type }}" 
                         data-no="{{ line.No }}" 
-                        data-desc="{{ line.Description }}" 
-                        data-qty="{{ line.Quantity }}" 
-                        data-cost="{{ line.DirectUnitCost }}">
+                        data-desc="{{ line.Description }}">
+                      
                       <td>{{ line.Type }}</td>
                       <td>{{ line.No }}</td>
                       <td>{{ line.Description }}</td>
-                      <td>{{ line.Quantity }}</td>
-                      <td>{{ line.DirectUnitCost }}</td>
+                      
+                      <td style="width: 15%;">
+                        <input type="number" step="any" class="form-control table-input qty-input" value="{{ line.Quantity }}">
+                      </td>
+
+                      <td style="width: 15%;">
+                        <input type="number" step="any" class="form-control table-input cost-input" value="{{ line.DirectUnitCost }}">
+                      </td>
                     </tr>
                     {% endfor %}
                   </tbody>
@@ -247,13 +274,20 @@
         // Build Payload
         const linesPayload = [];
         rows.forEach(row => {
+          // FIND THE INPUTS WITHIN THE ROW
+          const qtyInput = row.querySelector('.qty-input');
+          const costInput = row.querySelector('.cost-input');
+
           linesPayload.push({
             "Document_Type": "Invoice",
             "Type": row.dataset.type,
             "No": row.dataset.no,
             "Description": row.dataset.desc,
-            "Quantity": parseFloat(row.dataset.qty),
-            "Direct_Unit_Cost": parseFloat(row.dataset.cost)
+            
+            // READ VALUES FROM USER INPUTS
+            // Use || 0 to handle cases where user deletes the number entirely
+            "Quantity": parseFloat(qtyInput.value) || 0,
+            "Direct_Unit_Cost": parseFloat(costInput.value) || 0
           });
         });
 
@@ -284,12 +318,22 @@
 
           const json = await res.json();
           if (res.ok) {
-            // SUCCESS VISUALS
-            card.style.border = '2px solid green';
-            alert(`✅ Success! Invoice Created: ${json.No}`);
-            btn.textContent = "Created";
+            // 1. VISUALS: Green Border on Card
+            card.style.border = '2px solid green'; 
+
+            // 2. VISUALS: Show Success Badge in Header
+            const statusBadge = document.getElementById(`header-status-${idx}`);
+            if(statusBadge) {
+                statusBadge.style.display = 'inline-block';
+                statusBadge.textContent = `BC Invoice: ${json.No}`;
+            }
+
+            // 3. BUTTON: Disable it
+            btn.textContent = "Invoice Created";
             btn.classList.remove('btn-success');
             btn.classList.add('btn-secondary');
+            btn.disabled = true; // Prevent double clicks
+
           } else {
             // FAILURE VISUALS
             card.style.border = '2px solid red';
