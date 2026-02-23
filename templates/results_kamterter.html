@@ -199,6 +199,7 @@
                       <th>Description</th>
                       <th>Quantity</th>
                       <th>Unit Cost</th>
+                      <th>Subtotal</th>
                     </tr>
                   </thead>
                   <tbody id="tbody-{{ loop.index }}">
@@ -218,9 +219,27 @@
                       <td style="width: 15%;">
                         <input type="number" step="any" class="form-control table-input cost-input" value="{{ line.DirectUnitCost }}">
                       </td>
+
+                      <td style="width: 15%; font-weight: bold;">
+                        $<span class="subtotal-display">{{ "%.2f"|format(line.Quantity * line.DirectUnitCost) }}</span>
+                      </td>
                     </tr>
                     {% endfor %}
                   </tbody>
+
+                  <tfoot>
+                    <tr>
+                      <td colspan="5" class="text-end pe-3" style="font-weight: bold;">Grand Total:</td>
+                      <td style="font-weight: bold; font-size: 1.1em; color: var(--primary-color);">
+                        {% set grand_total = namespace(value=0) %}
+                        {% for line in lines %}
+                          {% set grand_total.value = grand_total.value + (line.Quantity * line.DirectUnitCost) %}
+                        {% endfor %}
+                        $<span class="grand-total-display">{{ "%.2f"|format(grand_total.value) }}</span>
+                      </td>
+                    </tr>
+                  </tfoot>
+
                 </table>
              </div>
              
@@ -263,6 +282,34 @@
       themeBtn.textContent = isDark ? 'Light Mode' : 'Dark Mode';
       localStorage.setItem('theme', isDark ? 'dark-mode' : '');
       updateLogoTheme(isDark);
+    });
+
+    // --- LIVE SUBTOTAL & GRAND TOTAL UPDATE LOGIC ---
+    document.querySelectorAll('table').forEach(table => {
+      table.addEventListener('input', (e) => {
+        if (e.target.classList.contains('qty-input') || e.target.classList.contains('cost-input')) {
+          // 1. Update the Row's Subtotal
+          const row = e.target.closest('tr');
+          const qty = parseFloat(row.querySelector('.qty-input').value) || 0;
+          const cost = parseFloat(row.querySelector('.cost-input').value) || 0;
+          const subtotalDisplay = row.querySelector('.subtotal-display');
+          
+          if (subtotalDisplay) {
+            subtotalDisplay.textContent = (qty * cost).toFixed(2);
+          }
+
+          // 2. Update the Table's Grand Total
+          let newGrandTotal = 0;
+          table.querySelectorAll('.subtotal-display').forEach(subElement => {
+            newGrandTotal += parseFloat(subElement.textContent) || 0;
+          });
+          
+          const grandTotalDisplay = table.querySelector('.grand-total-display');
+          if (grandTotalDisplay) {
+            grandTotalDisplay.textContent = newGrandTotal.toFixed(2);
+          }
+        }
+      });
     });
 
     // --- INVOICE CREATION LOGIC ---
