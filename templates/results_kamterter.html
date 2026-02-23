@@ -220,7 +220,7 @@
                         <input type="number" step="any" class="form-control table-input cost-input" value="{{ line.DirectUnitCost }}">
                       </td>
 
-                      <td style="width: 15%; font-weight: bold;">
+                      <td style="width: 15%;">
                         $<span class="subtotal-display">{{ "%.2f"|format(line.Quantity * line.DirectUnitCost) }}</span>
                       </td>
                     </tr>
@@ -230,7 +230,7 @@
                   <tfoot>
                     <tr>
                       <td colspan="5" class="text-end pe-3" style="font-weight: bold;">Grand Total:</td>
-                      <td style="font-weight: bold; font-size: 1.1em; color: var(--primary-color);">
+                      <td style="font-weight: bold; font-size: 1.05em;">
                         {% set grand_total = namespace(value=0) %}
                         {% for line in lines %}
                           {% set grand_total.value = grand_total.value + (line.Quantity * line.DirectUnitCost) %}
