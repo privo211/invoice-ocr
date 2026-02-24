@@ -221,7 +221,7 @@
                       </td>
 
                       <td style="width: 15%;">
-                        <input type="number" step="0.01" class="form-control table-input cost-input" value="{{ line.DirectUnitCost }}">
+                        <input type="number" step="0.00001" class="form-control table-input cost-input" value="{{ line.DirectUnitCost }}">
                       </td>
 
                       <td style="width: 15%;">
@@ -317,8 +317,52 @@
       });
     });
 
-    // --- SHIFT + ARROW KEY FOR $1.00 INCREMENTS ---
+    // --- SHIFT + ARROW/CLICK FOR $1.00 INCREMENTS ---
+    let isShiftHeld = false;
+    window.addEventListener('keydown', (e) => { if (e.key === 'Shift') isShiftHeld = true; });
+    window.addEventListener('keyup', (e) => { if (e.key === 'Shift') isShiftHeld = false; });
+
     document.querySelectorAll('table').forEach(table => {
+      // 1. Store the exact value BEFORE the user clicks or types
+      table.addEventListener('focusin', (e) => {
+        if (e.target.classList.contains('qty-input') || e.target.classList.contains('cost-input')) {
+          e.target.dataset.prevValue = e.target.value;
+        }
+      });
+
+      // 2. Intercept the change
+      table.addEventListener('input', (e) => {
+        if (e.target.classList.contains('qty-input') || e.target.classList.contains('cost-input')) {
+          
+          if (isShiftHeld && e.target.dataset.prevValue !== undefined) {
+             const oldVal = parseFloat(e.target.dataset.prevValue) || 0;
+             const newVal = parseFloat(e.target.value) || 0;
+             const step = parseFloat(e.target.step) || 0.01;
+             
+             // Check if the change was exactly the small HTML step (meaning they clicked the arrow)
+             const diff = Math.abs(newVal - oldVal);
+             
+             // Using toFixed(5) handles JavaScript's floating-point math quirks
+             if (diff.toFixed(5) === step.toFixed(5)) {
+                 const direction = newVal > oldVal ? 1 : -1;
+                 
+                 // Override the small step with a $1.00 jump, preserving precision
+                 if (e.target.classList.contains('cost-input')) {
+                     e.target.value = (oldVal + direction).toFixed(5);
+                 } else {
+                     e.target.value = (oldVal + direction).toFixed(2);
+                 }
+             }
+          }
+          
+          // 3. Update the stored value for the NEXT click or keystroke
+          e.target.dataset.prevValue = e.target.value;
+        }
+      });
+    });
+
+    // --- SHIFT + ARROW KEY FOR $1.00 INCREMENTS ---
+    /*document.querySelectorAll('table').forEach(table => {
       table.addEventListener('keydown', (e) => {
         if (e.target.classList.contains('qty-input') || e.target.classList.contains('cost-input')) {
           
@@ -329,15 +373,20 @@
             const currentVal = parseFloat(e.target.value) || 0;
             const direction = e.key === 'ArrowUp' ? 1 : -1; // Add 1 or subtract 1
             
-            // Update the input value
-            e.target.value = (currentVal + direction).toFixed(2);
+            // Preserve 5 decimals for cost, 2 for quantity. 
+            // parseFloat strips any unnecessary trailing zeros.
+            if (e.target.classList.contains('cost-input')) {
+                e.target.value = parseFloat((currentVal + direction).toFixed(5));
+            } else {
+                e.target.value = parseFloat((currentVal + direction).toFixed(2));
+            }
             
             // Force the subtotal/grand total script to recalculate immediately
             e.target.dispatchEvent(new Event('input', { bubbles: true }));
           }
         }
       });
-    });
+    });*/
 
     // --- INVOICE CREATION LOGIC ---
     document.querySelectorAll('.create-invoice-btn').forEach(btn => {
