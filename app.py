@@ -636,12 +636,6 @@ def index():
     if request.method == "POST":
         vendor = request.form.get("vendor")
         files = request.files.getlist("pdfs")
-      
-        # pdf_files = []
-        # for f in files:
-        #     if f and f.filename.lower().endswith(".pdf"):
-        #         pdf_bytes = f.read()
-        #         pdf_files.append((f.filename, pdf_bytes))
                 
         pdf_files = []
         for f in files:
@@ -1078,22 +1072,24 @@ def create_purchase_invoice():
 
                 if company_id:
                     # B. Create the Attachment Metadata (Placeholder)
-                    attach_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV_DEFAULT}/api/v2.0/companies({company_id})/attachments"
+                    attach_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV_DEFAULT}/api/v2.0/companies({company_id})/documentAttachments"
                     attach_payload = {
                         "parentId": system_id,
-                        "fileName": filename
+                        "fileName": filename,
+                        "parentType": "Purchase Invoice"
                     }
+                    
                     meta_resp = requests.post(attach_url, headers=headers, json=attach_payload)
                     
                     if meta_resp.status_code in (200, 201):
                         attachment_id = meta_resp.json().get("id")
                         
                         # C. Upload the actual PDF bytes into the placeholder
-                        content_url = f"{attach_url}({attachment_id})/content"
+                        content_url = f"{attach_url}({attachment_id})/attachmentContent"
                         content_headers = {
                             "Authorization": f"Bearer {token}",
                             "Content-Type": "application/pdf",
-                            "If-Match": "*" # Required to overwrite the empty stream
+                            "If-Match": "*" # Required by BC to overwrite the empty stream
                         }
                         
                         with open(filepath, "rb") as pdf_file:
