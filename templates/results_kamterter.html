@@ -412,7 +412,12 @@
           } else {
             // FAILURE VISUALS
             card.style.border = '2px solid red';
-            alert(`❌ Error: ${json.message || 'Unknown error'}`);
+            
+            // Format the detailed error from the backend
+            const errorDetails = json.details ? `\n\nBC Details: ${json.details}` : '';
+            
+            alert(`❌ Error: ${json.message || 'Unknown error'}${errorDetails}`);
+            
             btn.disabled = false;
             btn.textContent = "Try Again";
           }

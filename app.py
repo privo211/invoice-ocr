@@ -1043,14 +1043,31 @@ def create_purchase_invoice():
         
         if line_resp.status_code in (200, 201):
             success_count += 1
-            current_line_no += 10000 
+            current_line_no += 10000
         else:
             app.logger.error(f"❌ Line {idx} Failed")
             app.logger.error(line_resp.text)
+            
+            # Attempt to parse the exact Business Central error message
+            bc_error_msg = line_resp.text
+            try:
+                bc_error_json = line_resp.json()
+                if "error" in bc_error_json and "message" in bc_error_json["error"]:
+                    bc_error_msg = bc_error_json["error"]["message"]
+            except Exception:
+                pass # Fallback to raw text if it's not JSON
+                
             return jsonify({
-                "message": f"Failed to create purchase line {idx}",
-                "details": line_resp.text
-            }), line_resp.status_code
+                "message": f"Failed to create Line {idx}",
+                "details": bc_error_msg
+            }), line_resp.status_code 
+        # else:
+        #     app.logger.error(f"❌ Line {idx} Failed")
+        #     app.logger.error(line_resp.text)
+        #     return jsonify({
+        #         "message": f"Failed to create purchase line {idx}",
+        #         "details": line_resp.text
+        #     }), line_resp.status_code
 
     app.logger.info(f"✅ FINISHED: {success_count} lines created successfully.")
     
