@@ -209,7 +209,11 @@
                         data-desc="{{ line.Description }}">
                       
                       <td>{{ line.Type }}</td>
-                      <td>{{ line.No }}</td>
+                      
+                      <td style="width: 15%;">
+                        <input type="text" class="form-control table-input no-input" value="{{ line.No }}">
+                      </td>
+
                       <td>{{ line.Description }}</td>
                       
                       <td style="width: 15%;">
@@ -247,7 +251,8 @@
                      data-index="{{ loop.index }}" 
                      data-inv="{{ lines[0].VendorInvoiceNo }}"
                      data-date="{{ lines[0].DocumentDate }}"
-                     data-vendor-name="{{ lines[0].BuyFromVendorName }}">
+                     data-vendor-name="{{ lines[0].BuyFromVendorName }}"
+                     data-filename="{{ filename }}">
                Create Invoice in Business Central
              </button>
           {% endif %}
@@ -325,16 +330,15 @@
         const linesPayload = [];
         rows.forEach(row => {
           // FIND THE INPUTS WITHIN THE ROW
+          const noInput = row.querySelector('.no-input');
           const qtyInput = row.querySelector('.qty-input');
           const costInput = row.querySelector('.cost-input');
 
           linesPayload.push({
             "Document_Type": "Invoice",
             "Type": row.dataset.type,
-            "No": row.dataset.no,
+            "No": noInput ? noInput.value.trim() : row.dataset.no,
             "Description": row.dataset.desc,
-            
-            // READ VALUES FROM USER INPUTS
             "Quantity": parseFloat(qtyInput.value) || 0,
             "Direct_Unit_Cost": parseFloat(costInput.value) || 0
           });
@@ -345,6 +349,7 @@
           "Buy_from_Vendor_Name": btn.dataset.vendorName,
           "Vendor_Invoice_No": btn.dataset.inv,
           "Document_Date": btn.dataset.date,
+          "Filename": btn.dataset.filename,
           "PurchaseLines": linesPayload
         };
 

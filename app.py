@@ -52,7 +52,6 @@ DB_CONFIG = {
 load_dotenv()
 BC_TENANT = os.environ["AZURE_TENANT_ID"]
 BC_COMPANY = os.environ["BC_COMPANY"]
-#BC_ENV = os.environ["BC_ENV"]
 BC_ENV_DEFAULT = os.environ.get("BC_ENV", "SANDBOX-25C")
 CLIENT_ID = os.environ["AZURE_CLIENT_ID"]
 CLIENT_SECRET = os.environ["AZURE_CLIENT_SECRET"]
@@ -638,11 +637,24 @@ def index():
         vendor = request.form.get("vendor")
         files = request.files.getlist("pdfs")
       
+        # pdf_files = []
+        # for f in files:
+        #     if f and f.filename.lower().endswith(".pdf"):
+        #         pdf_bytes = f.read()
+        #         pdf_files.append((f.filename, pdf_bytes))
+                
         pdf_files = []
         for f in files:
             if f and f.filename.lower().endswith(".pdf"):
+                safe_filename = secure_filename(f.filename)
                 pdf_bytes = f.read()
-                pdf_files.append((f.filename, pdf_bytes))
+                pdf_files.append((safe_filename, pdf_bytes))
+                
+                # Save a temporary copy for the attachment process later ONLY for Kamterter
+                if vendor == "kamterter":
+                    temp_path = os.path.join(app.config["UPLOAD_FOLDER"], safe_filename)
+                    with open(temp_path, "wb") as temp_file:
+                        temp_file.write(pdf_bytes)
 
         if not pdf_files:
             return "No valid PDF files uploaded", 400
@@ -1048,6 +1060,61 @@ def create_purchase_invoice():
 
     app.logger.info(f"✅ FINISHED: {success_count} lines created successfully.")
     
+    # ==========================================
+    # 6. ATTACH THE PDF TO THE INVOICE
+    # ==========================================
+    filename = data.get("Filename")
+    if filename and system_id:
+        filepath = os.path.join(app.config["UPLOAD_FOLDER"], secure_filename(filename))
+        
+        if os.path.exists(filepath):
+            try:
+                app.logger.info(f"=== ATTACHING PDF: {filename} ===")
+                
+                # A. Get the Company ID (Standard APIs require the GUID, not the name)
+                company_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV_DEFAULT}/api/v2.0/companies?$filter=name eq '{BC_COMPANY}'"
+                comp_resp = requests.get(company_url, headers=headers)
+                company_id = comp_resp.json().get("value", [{}])[0].get("id")
+
+                if company_id:
+                    # B. Create the Attachment Metadata (Placeholder)
+                    attach_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV_DEFAULT}/api/v2.0/companies({company_id})/attachments"
+                    attach_payload = {
+                        "parentId": system_id,
+                        "fileName": filename
+                    }
+                    meta_resp = requests.post(attach_url, headers=headers, json=attach_payload)
+                    
+                    if meta_resp.status_code in (200, 201):
+                        attachment_id = meta_resp.json().get("id")
+                        
+                        # C. Upload the actual PDF bytes into the placeholder
+                        content_url = f"{attach_url}({attachment_id})/content"
+                        content_headers = {
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/pdf",
+                            "If-Match": "*" # Required to overwrite the empty stream
+                        }
+                        
+                        with open(filepath, "rb") as pdf_file:
+                            upload_resp = requests.patch(content_url, headers=content_headers, data=pdf_file)
+                            
+                        if upload_resp.status_code in (200, 204):
+                            app.logger.info(f"✅ PDF Attached successfully to Invoice {document_no}")
+                        else:
+                            app.logger.error(f"❌ Failed to upload PDF content: {upload_resp.text}")
+                    else:
+                        app.logger.error(f"❌ Failed to create attachment metadata: {meta_resp.text}")
+            except Exception as e:
+                app.logger.error(f"❌ Exception attaching PDF: {str(e)}")
+            finally:
+                # D. Delete the temporary file so your server doesn't fill up
+                try:
+                    os.remove(filepath)
+                    app.logger.info(f"🗑️ Deleted temporary file: {filepath}")
+                except Exception as e:
+                    app.logger.error(f"⚠️ Could not delete temp file {filepath}: {e}")
+                    
     return jsonify({
         "message": "Purchase invoice created",
         "No": document_no,
