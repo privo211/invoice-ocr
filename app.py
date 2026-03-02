@@ -60,8 +60,8 @@ REDIRECT_PATH = "/auth/callback"
 SCOPE_BC = ["https://api.businesscentral.dynamics.com/.default"]
 
 def get_bc_env(vendor: str | None = None) -> str:
-    """Return 'Production' if vendor in ["seminis", "hm_clause", "sakata", "syngenta"], else use default BC_ENV."""
-    if vendor and vendor.strip().lower() in ["seminis", "hm_clause", "sakata", "syngenta"]:
+    """Return 'Production' if vendor in ["seminis", "hm_clause", "sakata", "syngenta", "kamterter"], else use default BC_ENV."""
+    if vendor and vendor.strip().lower() in ["seminis", "hm_clause", "sakata", "syngenta", "kamterter"]:
         return "Production"
     return BC_ENV_DEFAULT
 
@@ -883,49 +883,6 @@ def index():
     stats = db_logger.get_log_stats()
     return render_template("index.html", user_name=session.get("user_name"), stats=stats)
 
-@app.route("/debug-check-fields")
-@login_required
-def debug_check_fields():
-    """
-    Fetches one record from Business Central to show the exact field names.
-    """
-    token = session.get('user_token')
-
-    bc_url = (
-        f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/{BC_ENV_DEFAULT}/ODataV4/"
-        f"Company('{BC_COMPANY}')/PurchaseLines?$top=1"
-    )
-
-    app.logger.info(f"--- DEBUGGING GET REQUEST ---")
-    app.logger.info(f"URL: {bc_url}")
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        resp = requests.get(bc_url, headers=headers)
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            
-            app.logger.info("✅ DEBUG DATA FETCHED SUCCESSFULLY")
-            app.logger.info(json.dumps(data, indent=2))
-            
-            return jsonify({
-                "help": "Use the keys below exactly as written (case-sensitive) in your POST payload.",
-                "endpoint": bc_url,
-                "sample_record": data.get("value", [])[0] if data.get("value") else "No records found"
-            })
-        else:
-            app.logger.error(f"❌ DEBUG GET FAILED: {resp.status_code}")
-            return jsonify({"error": resp.text}), resp.status_code
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 
 # --- Purchase Invoice Creation Route (Kamterter | OData V4) ---
 @app.route("/create-purchase-invoice", methods=["POST"])
@@ -959,11 +916,13 @@ def create_purchase_invoice():
         pass
 
     purchase_lines = data.get("PurchaseLines", [])
+    
+    bc_env = get_bc_env("kamterter")
 
     # 3. Base URL Setup
     odata_base = (
         f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/{BC_ENV_DEFAULT}/ODataV4/"
+        f"{BC_TENANT}/{bc_env}/ODataV4/"
         f"Company('{BC_COMPANY}')"
     )
     
@@ -1083,13 +1042,13 @@ def create_purchase_invoice():
                 app.logger.info(f"=== ATTACHING PDF: {filename} ===")
                 
                 # A. Get the Company ID (Standard APIs require the GUID, not the name)
-                company_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV_DEFAULT}/api/v2.0/companies?$filter=name eq '{BC_COMPANY}'"
+                company_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{bc_env}/api/v2.0/companies?$filter=name eq '{BC_COMPANY}'"
                 comp_resp = requests.get(company_url, headers=headers)
                 company_id = comp_resp.json().get("value", [{}])[0].get("id")
 
                 if company_id:
                     # B. Create the Attachment Metadata (Placeholder)
-                    attach_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{BC_ENV_DEFAULT}/api/v2.0/companies({company_id})/documentAttachments"
+                    attach_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{bc_env}/api/v2.0/companies({company_id})/documentAttachments"
                     attach_payload = {
                         "parentId": system_id,
                         "fileName": filename,
