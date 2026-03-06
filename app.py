@@ -25,6 +25,7 @@ import time
 import logging
 import psycopg2
 import db_logger
+import urllib.parse
 
 app = Flask(__name__)
 # Application setup
@@ -920,19 +921,45 @@ def create_purchase_invoice():
     bc_env = get_bc_env("kamterter")
 
     # 3. Base URL Setup
-    odata_base = (
-        f"https://api.businesscentral.dynamics.com/v2.0/"
-        f"{BC_TENANT}/{bc_env}/ODataV4/"
-        f"Company('{BC_COMPANY}')"
-    )
+    # odata_base = (
+    #     f"https://api.businesscentral.dynamics.com/v2.0/"
+    #     f"{BC_TENANT}/{bc_env}/ODataV4/"
+    #     f"Company('{BC_COMPANY}')"
+    # )
     
-    headers_url = f"{odata_base}/PurchaseHeaders"
-    lines_url = f"{odata_base}/PurchaseLines" 
+    # headers_url = f"{odata_base}/PurchaseHeaders"
+    # lines_url = f"{odata_base}/PurchaseLines" 
     
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
+    
+    # ==========================================
+    # 3. NATIVE API ROUTE SETUP
+    # ==========================================
+    # Get the Company ID (GUID) required for native APIs
+    company_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{bc_env}/api/v2.0/companies?$filter=name eq '{BC_COMPANY}'"
+    comp_resp = requests.get(company_url, headers=headers)
+    
+    if comp_resp.status_code != 200:
+        app.logger.error(f"❌ Failed to fetch Company ID: {comp_resp.text}")
+        return jsonify({"message": "Failed to fetch Company ID", "details": comp_resp.text}), 500
+
+    company_id = comp_resp.json().get("value", [{}])[0].get("id")
+    if not company_id:
+        return jsonify({"message": f"Company '{BC_COMPANY}' not found"}), 404
+
+    # Build the Native API Base URL using Publisher/Group/Version from AL code
+    api_base = (
+        f"https://api.businesscentral.dynamics.com/v2.0/"
+        f"{BC_TENANT}/{bc_env}/api/PVORA/VendorInvoiceAutomation/v2.0/"
+        f"companies({company_id})"
+    )
+    
+    # Use the EntitySetName defined in the AL Pages
+    headers_url = f"{api_base}/PurchaseHeaders"
+    lines_url = f"{api_base}/PurchaseLines"
 
     # 4. Create Header
     header_payload = {
@@ -1020,13 +1047,6 @@ def create_purchase_invoice():
                 "message": f"Failed to create Line {idx}",
                 "details": bc_error_msg
             }), line_resp.status_code 
-        # else:
-        #     app.logger.error(f"❌ Line {idx} Failed")
-        #     app.logger.error(line_resp.text)
-        #     return jsonify({
-        #         "message": f"Failed to create purchase line {idx}",
-        #         "details": line_resp.text
-        #     }), line_resp.status_code
 
     app.logger.info(f"✅ FINISHED: {success_count} lines created successfully.")
     
@@ -1041,42 +1061,42 @@ def create_purchase_invoice():
             try:
                 app.logger.info(f"=== ATTACHING PDF: {filename} ===")
                 
-                # A. Get the Company ID (Standard APIs require the GUID, not the name)
-                company_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{bc_env}/api/v2.0/companies?$filter=name eq '{BC_COMPANY}'"
-                comp_resp = requests.get(company_url, headers=headers)
-                company_id = comp_resp.json().get("value", [{}])[0].get("id")
+                # # A. Get the Company ID (Standard APIs require the GUID, not the name)
+                # company_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{bc_env}/api/v2.0/companies?$filter=name eq '{BC_COMPANY}'"
+                # comp_resp = requests.get(company_url, headers=headers)
+                # company_id = comp_resp.json().get("value", [{}])[0].get("id")
 
-                if company_id:
+                # if company_id:
                     # B. Create the Attachment Metadata (Placeholder)
-                    attach_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{bc_env}/api/v2.0/companies({company_id})/documentAttachments"
-                    attach_payload = {
-                        "parentId": system_id,
-                        "fileName": filename,
-                        "parentType": "Purchase Invoice"
+                attach_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{bc_env}/api/v2.0/companies({company_id})/documentAttachments"
+                attach_payload = {
+                    "parentId": system_id,
+                    "fileName": filename,
+                    "parentType": "Purchase Invoice"
+                }
+                    
+                meta_resp = requests.post(attach_url, headers=headers, json=attach_payload)
+                
+                if meta_resp.status_code in (200, 201):
+                    attachment_id = meta_resp.json().get("id")
+                    
+                    # C. Upload the actual PDF bytes into the placeholder
+                    content_url = f"{attach_url}({attachment_id})/attachmentContent"
+                    content_headers = {
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/pdf",
+                        "If-Match": "*" # Required by BC to overwrite the empty stream
                     }
                     
-                    meta_resp = requests.post(attach_url, headers=headers, json=attach_payload)
-                    
-                    if meta_resp.status_code in (200, 201):
-                        attachment_id = meta_resp.json().get("id")
+                    with open(filepath, "rb") as pdf_file:
+                        upload_resp = requests.patch(content_url, headers=content_headers, data=pdf_file)
                         
-                        # C. Upload the actual PDF bytes into the placeholder
-                        content_url = f"{attach_url}({attachment_id})/attachmentContent"
-                        content_headers = {
-                            "Authorization": f"Bearer {token}",
-                            "Content-Type": "application/pdf",
-                            "If-Match": "*" # Required by BC to overwrite the empty stream
-                        }
-                        
-                        with open(filepath, "rb") as pdf_file:
-                            upload_resp = requests.patch(content_url, headers=content_headers, data=pdf_file)
-                            
-                        if upload_resp.status_code in (200, 204):
-                            app.logger.info(f"✅ PDF Attached successfully to Invoice {document_no}")
-                        else:
-                            app.logger.error(f"❌ Failed to upload PDF content: {upload_resp.text}")
+                    if upload_resp.status_code in (200, 204):
+                        app.logger.info(f"✅ PDF Attached successfully to Invoice {document_no}")
                     else:
-                        app.logger.error(f"❌ Failed to create attachment metadata: {meta_resp.text}")
+                        app.logger.error(f"❌ Failed to upload PDF content: {upload_resp.text}")
+                else:
+                    app.logger.error(f"❌ Failed to create attachment metadata: {meta_resp.text}")
             except Exception as e:
                 app.logger.error(f"❌ Exception attaching PDF: {str(e)}")
             finally:
