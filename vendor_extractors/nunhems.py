@@ -495,21 +495,29 @@
 
 # vendor_extractors/nunhems.py
 """
-Nunhems / BASF invoice extractor.
+Nunhems / BASF invoice extractor — definitive version.
 
-Document types handled (by page):
-  1. Customs Invoice   – CONSIGNEE + H-S Code blocks  → lot items, qty, price, origin
-  2. Packing List      – "PACKING LIST" + Lot Number: → SeedCount (S/C), SeedForm, SeedSize
-  3. NAL Quality Cert  – "Quality Certificate"        → Purity, Inert, GrowerGerm, GrowerGermDate
-  4. Germ Letter       – "Test Date Confirmation"     → Germ %, GermDate
-  5. Standard Invoice  – "INVOICE" + "Net price"      → VendorInvoiceNo, PO (for logging/display)
+Core design principles:
+  1. PAGE-BY-PAGE CLASSIFICATION: Each PDF page is tagged before any parsing.
+     Customs invoice lines can never contaminate packing list / cert parsing.
+  2. OCR-AWARE LABEL PARSING: Azure OCR puts "Kind/variety:" on one line and
+     "LEEK KRYPTON F1" on the next. A helper reads the value from either the
+     same line (PyMuPDF) or the following line (Azure OCR).
+  3. EUROPEAN NUMBER PARSING: "5.523,00" -> 5523.0,  "344.791" -> 344791.0
+  4. AMOUNT vs UNIT-PRICE: Amounts have exactly 2 decimal places; unit prices
+     have 4 (e.g. "1.841,0000"). We only capture 2-decimal-place totals.
 
-The page-by-page approach ensures data from one document type never contaminates another.
+Document types handled per page:
+  - customs_invoice  : H-S Code blocks -> 5 real lot items
+  - packing_list     : Lot Number: lines -> SeedCount, SeedForm, SeedSize
+  - quality_cert     : NAL cert -> Purity, Inert, GrowerGerm, GrowerGermDate
+  - germ_letter      : Test Date Confirmation -> Germ, GermDate
+  - standard_invoice : INVOICE + Net price -> VendorInvoiceNo, PO (header only)
 """
 
 import os
 import re
-import fitz          # PyMuPDF
+import fitz
 import requests
 import time
 import pycountry
@@ -522,12 +530,52 @@ AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
 AZURE_KEY      = os.getenv("AZURE_KEY")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# EUROPEAN NUMBER PARSING
+# ─────────────────────────────────────────────────────────────────────────────
+
+def parse_euro_float(s: str) -> float:
+    """
+    Robustly parse a European or US formatted number string.
+
+    "5.523,00"   -> 5523.0      (dot=thousands, comma=decimal)
+    "344.791"    -> 344791.0    (dot=thousands, integer)
+    "1.841,0000" -> 1841.0      (4-decimal unit price)
+    "920,50"     -> 920.5
+    "5523.00"    -> 5523.0      (plain US float)
+    """
+    if not s:
+        return 0.0
+    clean = s.strip().replace(" ", "")
+
+    if "," in clean:
+        if "." in clean:
+            last_dot   = clean.rfind(".")
+            last_comma = clean.rfind(",")
+            if last_dot < last_comma:           # 1.000,00 -> European
+                clean = clean.replace(".", "").replace(",", ".")
+            else:                               # 1,000.00 -> US
+                clean = clean.replace(",", "")
+        else:
+            if re.search(r",\d{2,}$", clean):  # 523,00 or 523,0000
+                clean = clean.replace(",", ".")
+            else:
+                clean = clean.replace(",", "")
+    elif re.match(r"^\d{1,3}(\.\d{3})+$", clean):
+        # Pure-integer European thousands: "344.791" -> "344791"
+        clean = clean.replace(".", "")
+
+    try:
+        return float(clean)
+    except ValueError:
+        return 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def convert_to_alpha2(country_value: str) -> str:
-    """Convert country name or code to ISO Alpha-2 (e.g. 'ITALY' → 'IT')."""
     if not country_value:
         return ""
     country_value = country_value.strip()
@@ -539,100 +587,37 @@ def convert_to_alpha2(country_value: str) -> str:
         return country_value
 
 
-def _eu_float(s: str) -> float:
-    """
-    Convert a European-formatted number string to a Python float.
-
-    Examples
-    --------
-    '5.523,00'  → 5523.0      (dot = thousands sep, comma = decimal)
-    '1.841,0000' → 1841.0
-    '344.791'   → 344791.0    (integer with dot as thousands separator)
-    '5523.00'   → 5523.0      (plain US-style float – left unchanged)
-    """
-    if not s:
-        return 0.0
-    s = s.strip()
-    if "," in s:
-        # European decimal: remove dots (thousands) and replace comma with dot
-        s = s.replace(".", "").replace(",", ".")
-    elif re.match(r"^\d{1,3}(\.\d{3})+$", s):
-        # European integer like 344.791  →  344791
-        s = s.replace(".", "")
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
-
-
-def _get_pages(pdf_bytes: bytes) -> List[List[str]]:
-    """Return a list of pages; each page is a list of non-empty trimmed text lines."""
+def _get_pages_with_info(pdf_bytes: bytes) -> Tuple[List[List[str]], Dict]:
+    info = {"method": "PyMuPDF", "page_count": 0}
     pages: List[List[str]] = []
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        info["page_count"] = doc.page_count
+        has_text = False
         for page in doc:
-            lines = [l.strip() for l in page.get_text().split("\n") if l.strip()]
+            txt = page.get_text()
+            if txt.strip():
+                has_text = True
+            lines = [l.strip() for l in txt.split("\n") if l.strip()]
             pages.append(lines)
         doc.close()
+        if has_text:
+            return pages, info
     except Exception:
         pass
-    return pages
+    # OCR fallback — treat entire document as one page
+    info["method"] = "Azure OCR"
+    flat_lines = _extract_text_with_azure_ocr(pdf_bytes)
+    return [flat_lines], info
 
-
-def _page_info(pdf_bytes: bytes) -> Dict:
-    info = {"method": "PyMuPDF", "page_count": 0}
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        info["page_count"] = doc.page_count
-        doc.close()
-    except Exception:
-        pass
-    return info
-
-
-def _classify_page(lines: List[str]) -> str:
-    """
-    Determine the functional type of a PDF page from its text content.
-
-    Priority order avoids mis-classifying pages that contain multiple keywords
-    (e.g. the Shipping Information cover page ticks 'Packing List' as a checkbox).
-    """
-    text = " ".join(lines).upper()
-
-    if "QUALITY CERTIFICATE" in text:
-        return "quality_cert"
-
-    if "TEST DATE CONFIRMATION" in text:
-        return "germ_letter"
-
-    # Require "LOT NUMBER:" (with colon) so we don't trigger on the shipping
-    # info cover page that just has "Packing List" as a checkbox label.
-    if "PACKING LIST" in text and "LOT NUMBER:" in text:
-        return "packing_list"
-
-    # Customs invoice: must have CONSIGNEE *and* the H-S Code label
-    if "CONSIGNEE" in text and "H-S CODE" in text:
-        return "customs_invoice"
-
-    # Standard Nunhems invoice (INVOICE_012506533 style)
-    if "INVOICE" in text and "NET PRICE" in text:
-        return "standard_invoice"
-
-    return "other"
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# AZURE OCR FALLBACK  (unchanged from previous implementation)
-# ──────────────────────────────────────────────────────────────────────────────
 
 def _extract_text_with_azure_ocr(pdf_content: bytes) -> List[str]:
     if not AZURE_ENDPOINT or not AZURE_KEY:
-        raise ValueError("Azure OCR credentials are not set in environment variables.")
+        raise ValueError("Azure OCR credentials are not set.")
     headers = {"Ocp-Apim-Subscription-Key": AZURE_KEY, "Content-Type": "application/pdf"}
     response = requests.post(
         f"{AZURE_ENDPOINT}formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31",
-        headers=headers,
-        data=pdf_content,
+        headers=headers, data=pdf_content,
     )
     if response.status_code != 202:
         raise RuntimeError(f"OCR request failed: {response.text}")
@@ -652,32 +637,66 @@ def _extract_text_with_azure_ocr(pdf_content: bytes) -> List[str]:
     raise TimeoutError("OCR timed out")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+def _read_label_value(lines: List[str], idx: int, label: str) -> Optional[str]:
+    """
+    Read value for a labelled field that may be inline or on the next line.
+      (a) PyMuPDF:  "Kind/variety: LEEK KRYPTON F1"
+      (b) Azure OCR:"Kind/variety:"  then  "LEEK KRYPTON F1" on next line
+    """
+    line = lines[idx]
+    after_colon = re.sub(r"^" + re.escape(label) + r"\s*:\s*", "", line, flags=re.IGNORECASE).strip()
+    if after_colon:
+        return after_colon
+    if idx + 1 < len(lines):
+        nxt = lines[idx + 1].strip()
+        if nxt and not re.match(r"^[A-Za-z /]+:\s*$", nxt):
+            return nxt
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE CLASSIFIER
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _classify_page(lines: List[str]) -> str:
+    text = " ".join(lines).upper()
+
+    if "QUALITY CERTIFICATE" in text:
+        return "quality_cert"
+    if "TEST DATE CONFIRMATION" in text:
+        return "germ_letter"
+    # Require "LOT NUMBER:" label (with colon) to avoid false-positive on
+    # the shipping info cover page that mentions "Packing List" as a checkbox.
+    if "PACKING LIST" in text and "LOT NUMBER:" in text:
+        return "packing_list"
+    if "CONSIGNEE" in text and "H-S CODE" in text:
+        return "customs_invoice"
+    if "INVOICE" in text and "NET PRICE" in text:
+        return "standard_invoice"
+    return "other"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # QUALITY CERTIFICATE PARSER
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
-    """
-    Parse one NAL Quality Certificate page.
-    Returns  {lot_no: {GrowerGerm, GrowerGermDate, Purity, Inert, SeedCount}}
-    """
-    # ── find lot number ──────────────────────────────────────────────────────
     lot_no: Optional[str] = None
     for i, line in enumerate(lines):
         if re.search(r"Lot\s*/?\s*batch\s+number", line, re.IGNORECASE):
-            for j in range(i, min(i + 4, len(lines))):
-                if m := re.search(r"\b(\d{11})\b", lines[j]):
-                    lot_no = m.group(1)
-                    break
+            for offset in range(0, 4):
+                if i + offset < len(lines):
+                    m = re.search(r"\b(\d{11})\b", lines[i + offset])
+                    if m:
+                        lot_no = m.group(1)
+                        break
         if lot_no:
             break
-
     if not lot_no:
         return {}
 
     data: Dict = {}
 
-    # ── germination % ── look for first % after "Normal seedlings" heading ──
     for i, line in enumerate(lines):
         if "Normal seedlings" in line:
             for j in range(i + 1, min(i + 5, len(lines))):
@@ -686,33 +705,32 @@ def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
                     break
             break
 
-    # ── purity & inert ── row of float percentages after "Pure seeds" ───────
     for i, line in enumerate(lines):
         if re.match(r"^Pure\s+seeds?\s*$", line, re.IGNORECASE):
             for j in range(i + 1, min(i + 5, len(lines))):
-                floats = re.findall(r"(\d+[.,]\d+)\s*%?", lines[j])
+                floats = re.findall(r"(\d+[,.]?\d*)\s*%", lines[j])
+                if not floats:
+                    floats = re.findall(r"(\d+[,.]?\d+)", lines[j])
                 if floats:
                     try:
-                        pure  = float(floats[0].replace(",", "."))
-                        inert = float(floats[1].replace(",", ".")) if len(floats) > 1 else 0.0
-                        if pure >= 100.0:
+                        pure  = parse_euro_float(floats[0])
+                        inert = parse_euro_float(floats[1]) if len(floats) > 1 else 0.0
+                        if pure >= 99.99:
                             pure, inert = 99.99, 0.01
                         data["Purity"] = pure
                         data["Inert"]  = inert
-                    except ValueError:
+                    except (ValueError, IndexError):
                         pass
                     break
             break
 
-    # ── seed count (seeds/kg) ────────────────────────────────────────────────
     for line in lines:
         if m := re.search(r"([\d.,]+)\s*seeds?/kg", line, re.IGNORECASE):
-            sc = _eu_float(m.group(1))
+            sc = parse_euro_float(m.group(1))
             if sc > 0:
                 data["SeedCount"] = int(sc)
             break
 
-    # ── certificate date ─────────────────────────────────────────────────────
     for line in lines:
         if m := re.match(r"Date:\s*([A-Za-z]+\s+\d{1,2},\s*\d{4})", line):
             try:
@@ -724,19 +742,15 @@ def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
     return {lot_no: data}
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # GERM LETTER PARSER
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_germ_letter_page(lines: List[str]) -> Dict[str, Dict]:
-    """
-    Parse a BASF 'Test Date Confirmation' germ letter page.
-    Returns  {lot_no: {Germ, GermDate}}
-    """
     result: Dict[str, Dict] = {}
     for i, line in enumerate(lines):
         if m := re.search(r"\b(\d{11})\b", line):
-            lot = m.group(1)
+            lot     = m.group(1)
             context = " ".join(lines[i : i + 5])
             germ = germ_date = None
             if g := re.search(r"(\d+)\s*%", context):
@@ -749,18 +763,16 @@ def _parse_germ_letter_page(lines: List[str]) -> Dict[str, Dict]:
     return result
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # PACKING LIST PARSER
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
     """
-    Parse a Nunhems Packing List page.
-    Returns  {lot_no: {SeedCount, SeedForm, SeedSize}}
-
-    Each item block ends with a 'Lot Number:' line of the form:
-        33192501011 | 3 EA | S/C: 344.791 | Net weight: 0,870 KG |
-    The Seed Form and Seed Size appear above in labelled rows.
+    FIX for ProductForm bug: the backward window previously found the word
+    "TREATED" from the "Treated With: UNTREATED" line and stored it as the
+    SeedForm.  Now we ONLY take the line immediately following "Seed Form:"
+    and reject it if it looks like another label or a treatment keyword.
     """
     result: Dict[str, Dict] = {}
 
@@ -768,8 +780,9 @@ def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
         if not re.search(r"(?i)\bLot\s+Number:", line):
             continue
 
-        # The lot number might be inline or on the very next line
-        combined = line + (" " + lines[i + 1] if i + 1 < len(lines) else "")
+        combined = line
+        if i + 1 < len(lines):
+            combined += " " + lines[i + 1]
 
         lot_m = re.search(r"\b(\d{11})\b", combined)
         if not lot_m:
@@ -777,51 +790,59 @@ def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
         lot_no = lot_m.group(1)
         data   = result.setdefault(lot_no, {})
 
-        # S/C is European-formatted (e.g. "344.791" = 344,791 seeds/kg)
+        # S/C: European integer e.g. "344.791" = 344,791 seeds
         sc_m = re.search(r"S/C\s*:\s*([\d.,]+)", combined)
         if sc_m and "SeedCount" not in data:
-            sc = _eu_float(sc_m.group(1))
+            sc = parse_euro_float(sc_m.group(1))
             if sc > 0:
                 data["SeedCount"] = int(sc)
 
-        # Seed Form and Seed Size appear in labelled rows above the lot line
-        for j in range(max(0, i - 10), i):
-            bl = lines[j]
-            if bl.startswith("Seed Form:"):
-                sf = bl.replace("Seed Form:", "").strip()
-                if not sf and j + 1 < i:
-                    sf = lines[j + 1].strip()
-                if sf:
-                    data["SeedForm"] = sf
-            elif bl.startswith("Seed Size:"):
-                ss = bl.replace("Seed Size:", "").strip()
-                if not ss and j + 1 < i:
-                    ss = lines[j + 1].strip()
-                if ss:
-                    # Convert European decimal separator: "1,75-2,00" → "1.75-2.00"
-                    data["SeedSize"] = ss.replace(",", ".")
+        # Backward window for Seed Form / Seed Size labels
+        window_start = max(0, i - 20)
+        window = lines[window_start : i]
+
+        for j, w_line in enumerate(window):
+            # ── Seed Form ────────────────────────────────────────────────────
+            if re.match(r"^Seed\s+Form\s*:\s*$", w_line, re.IGNORECASE):
+                # Value is on the very next window line
+                if j + 1 < len(window):
+                    val = window[j + 1].strip()
+                    # Reject if it is another label or a treatment word
+                    if val and not re.match(
+                        r"^(Seed\s+(Size|Form|Count)|Treated|Order|Customer)", val, re.IGNORECASE
+                    ):
+                        data.setdefault("SeedForm", val)
+            elif re.match(r"^Seed\s+Form:\s+\S+", w_line, re.IGNORECASE):
+                val = re.sub(r"^Seed\s+Form:\s*", "", w_line, flags=re.IGNORECASE).strip()
+                if val:
+                    data.setdefault("SeedForm", val)
+
+            # ── Seed Size ────────────────────────────────────────────────────
+            if re.match(r"^Seed\s+Size\s*:\s*$", w_line, re.IGNORECASE):
+                if j + 1 < len(window):
+                    val = window[j + 1].strip()
+                    if val and not re.match(r"^(Seed|Treated)", val, re.IGNORECASE):
+                        data.setdefault("SeedSize", val.replace(",", "."))
+            elif re.match(r"^Seed\s+Size:\s+\S+", w_line, re.IGNORECASE):
+                val = re.sub(r"^Seed\s+Size:\s*", "", w_line, flags=re.IGNORECASE).strip()
+                if val:
+                    data.setdefault("SeedSize", val.replace(",", "."))
 
     return result
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# STANDARD INVOICE PARSER  (for invoice number / PO only)
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# STANDARD INVOICE HEADER PARSER
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_standard_invoice_header(lines: List[str]) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Extract VendorInvoiceNo and PO from a standard Nunhems INVOICE file.
-    Returns  (invoice_no, po_no)
-    """
     invoice_no: Optional[str] = None
     po_no:      Optional[str] = None
     text = "\n".join(lines)
 
-    # Invoice Number: 9-digit number near "Invoice Number"
     if m := re.search(r"Invoice\s+Number[:\s]+(\d{9})", text, re.IGNORECASE):
         invoice_no = m.group(1)
 
-    # Customer P.O. Number: 5-digit number
     for i, line in enumerate(lines):
         if re.search(r"Customer\s+P\.?O\.?\s+Number", line, re.IGNORECASE):
             search = " ".join(lines[i : i + 4])
@@ -832,44 +853,34 @@ def _parse_standard_invoice_header(lines: List[str]) -> Tuple[Optional[str], Opt
     return invoice_no, po_no
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # CUSTOMS INVOICE PARSER
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_po_from_customs_lines(lines: List[str]) -> Optional[str]:
-    """
-    Find the Customer P.O. number on a customs invoice.
-    The label 'Cus. P.O.:' appears in the shipping marks area; the value (5 digits)
-    is on the same line or within the next few lines.
-    """
     for i, line in enumerate(lines):
-        if re.search(r"Cus\.?\s*P\.?O\.?", line):
-            search = " ".join(lines[i : i + 5])
+        if re.search(r"Cus\.?\s*P\.?O\.?", line, re.IGNORECASE):
+            search = " ".join(lines[i : i + 4])
             if m := re.search(r"\b(\d{5})\b", search):
                 return f"PO-{m.group(1)}"
     return None
 
 
 def _parse_customs_invoice_pages(
-    lines:       List[str],
-    quality_map: Dict[str, Dict],
-    germ_map:    Dict[str, Dict],
-    packing_map: Dict[str, Dict],
+    lines:         List[str],
+    quality_map:   Dict[str, Dict],
+    germ_map:      Dict[str, Dict],
+    packing_map:   Dict[str, Dict],
     pkg_desc_list: List[str],
 ) -> Tuple[List[Dict], Optional[str]]:
     """
-    Parse the combined customs-invoice lines (all customs-invoice pages concatenated).
+    Parse all customs-invoice page lines using H-S Code blocks as item delimiters.
 
-    Each item is delimited by an 'H-S Code:' header followed by labelled fields:
-        H-S Code:       12099180
-        Kind/variety:   LEEK KRYPTON F1
-        Package Size:   3 POUCH(ES) of 100.000 SDS
-        Treated With:   UNTREATED
-        Lot Number:     33192501011 | 3 EA | Net weight: 0,870 KG |
-                        ITALY Origin*
-                        3 EA    1.841,0000    5.523,00   ← amount has exactly 2 dec places
-
-    Returns  (items, po_number)
+    Amount identification strategy:
+      - The total-amount line ends with a European number with exactly 2 decimal
+        places: e.g. "3 EA  1.841,0000  5.523,00"  or standalone "5.523,00"
+      - Unit-price lines have 4 decimal places ("1.841,0000") and are excluded.
+      - We take the LARGEST 2-decimal candidate in the block (total > unit price).
     """
     po_number = _extract_po_from_customs_lines(lines)
     items: List[Dict] = []
@@ -877,114 +888,89 @@ def _parse_customs_invoice_pages(
     i = 0
 
     while i < n:
-        # ── detect start of an H-S Code block ───────────────────────────────
-        if not re.match(r"^H-S\s*Code:", lines[i]):
+        if not re.match(r"^H-S\s*Code\s*:", lines[i], re.IGNORECASE):
             i += 1
             continue
 
-        block = {
-            "variety":        None,
-            "pkg_size_seeds": 0,
-            "treatment":      "Untreated",
-            "lot_no":         None,
-            "lot_ea":         0,
-            "origin":         None,
-            "amount":         0.0,
-        }
+        variety        = ""
+        pkg_size_str   = ""
+        pkg_size_seeds = 0
+        treatment      = "Untreated"
+        lot_no: Optional[str] = None
+        lot_ea         = 0
+        origin         = ""
+        amount         = 0.0
 
         j = i + 1
-        while j < min(i + 28, n):
+        while j < min(i + 35, n):
             bl = lines[j].strip()
 
-            # Next H-S Code block → stop
-            if re.match(r"^H-S\s*Code:", bl):
+            # Next H-S Code block -> stop
+            if re.match(r"^H-S\s*Code\s*:", bl, re.IGNORECASE):
                 break
 
-            # Kind/variety
-            if re.match(r"^Kind/variety:", bl):
-                val = bl.replace("Kind/variety:", "").strip()
-                if not val and j + 1 < n and not re.match(r"^(Package Size:|Treated With:|H-S\s*Code:)", lines[j + 1]):
-                    j += 1
-                    val = lines[j].strip()
-                block["variety"] = val
+            if re.match(r"^Kind/variety\s*:", bl, re.IGNORECASE):
+                val = _read_label_value(lines, j, "Kind/variety")
+                if val:
+                    variety = val.strip()
 
-            # Package Size  →  parse seeds-per-package from European format
-            elif re.match(r"^Package Size:", bl):
-                val = bl.replace("Package Size:", "").strip()
-                if not val and j + 1 < n:
-                    j += 1
-                    val = lines[j].strip()
-                # "3 POUCH(ES) of 100.000 SDS" or "40 NUNHEMS CAN(S) of 25.000 SDS"
-                if ps_m := re.search(r"of\s+([\d.,]+)\s*SDS", val, re.IGNORECASE):
-                    block["pkg_size_seeds"] = int(_eu_float(ps_m.group(1)))
+            elif re.match(r"^Package\s+Size\s*:", bl, re.IGNORECASE):
+                val = _read_label_value(lines, j, "Package Size")
+                if val:
+                    pkg_size_str = val.strip()
+                    if ps_m := re.search(r"(?:of\s+)?([\d.,]+)\s*SDS", pkg_size_str, re.IGNORECASE):
+                        pkg_size_seeds = int(parse_euro_float(ps_m.group(1)))
 
-            # Treated With
-            elif re.match(r"^Treated With:", bl):
-                val = bl.replace("Treated With:", "").strip()
-                if not val and j + 1 < n:
-                    j += 1
-                    val = lines[j].strip()
-                block["treatment"] = val or "Untreated"
+            elif re.match(r"^Treated\s+With\s*:", bl, re.IGNORECASE):
+                val = _read_label_value(lines, j, "Treated With")
+                if val:
+                    treatment = val.strip()
 
-            # Lot Number  →  parse lot ID and EA quantity
-            elif re.match(r"^Lot Number:", bl):
-                val = bl.replace("Lot Number:", "").strip()
-                if not val and j + 1 < n:
-                    j += 1
-                    val = lines[j].strip()
-                if lot_m := re.search(r"\b(\d{11})\b", val):
-                    block["lot_no"] = lot_m.group(1)
-                if ea_m := re.search(r"\b(\d+)\s*EA\b", val):
-                    block["lot_ea"] = int(ea_m.group(1))
+            elif re.match(r"^Lot\s+Number\s*:", bl, re.IGNORECASE):
+                val = _read_label_value(lines, j, "Lot Number")
+                if val:
+                    if lot_m := re.search(r"\b(\d{11})\b", val):
+                        lot_no = lot_m.group(1)
+                    if ea_m := re.search(r"\b(\d+)\s*EA\b", val):
+                        lot_ea = int(ea_m.group(1))
 
-            # Origin  e.g. "ITALY Origin*"
-            elif re.match(r"^[A-Z][A-Za-z]+(\s+[A-Z][A-Za-z]+)?\s+Origin\*?\s*$", bl):
-                country = re.sub(r"\s*Origin\*?\s*$", "", bl).strip()
-                block["origin"] = convert_to_alpha2(country)
+            # "[Country] Origin*" line
+            elif re.match(r"^[A-Z][A-Za-z ]+\s+Origin\*?\s*$", bl):
+                country = re.sub(r"\s*Origin\*?\s*$", "", bl, flags=re.IGNORECASE).strip()
+                origin = convert_to_alpha2(country)
 
-            # Amount line: European float with *exactly 2* decimal places at end
-            # (Unit-price lines have 4 decimal places so they are excluded)
-            elif block["lot_no"] and block["amount"] == 0.0:
+            # Amount: rightmost European number with exactly 2 decimal places
+            elif lot_no and not re.match(r"^\d{8}$", bl):
                 amt_m = re.search(r"([\d.]+,\d{2})\s*$", bl)
                 if amt_m:
-                    block["amount"] = _eu_float(amt_m.group(1))
+                    candidate = parse_euro_float(amt_m.group(1))
+                    if candidate > amount:
+                        amount = candidate
 
             j += 1
 
-        # ── build item if we have the minimum required fields ─────────────
-        if block["lot_no"] and block["variety"]:
-            lot_no         = block["lot_no"]
-            lot_ea         = block["lot_ea"]
-            pkg_size_seeds = block["pkg_size_seeds"]
-            variety        = block["variety"]
-            treatment      = block["treatment"]
-            origin         = block["origin"]
-            amount         = block["amount"]
-
-            # Human-readable description: "LEEK KRYPTON F1 100,000 SDS"
+        # Build item
+        if lot_no and (variety or pkg_size_str):
             if pkg_size_seeds > 0:
-                description = f"{variety.upper()} {pkg_size_seeds:,} SDS"
+                description = f"{variety.upper()} {pkg_size_seeds:,} SDS".strip()
             else:
-                description = variety.upper()
+                description = f"{variety.upper()} {pkg_size_str}".strip() or f"Item for Lot {lot_no}"
 
-            # Quantity in KS (thousands of seeds)
             if pkg_size_seeds > 0 and lot_ea > 0:
                 total_qty = (lot_ea * pkg_size_seeds) / 1000.0
             else:
                 total_qty = float(lot_ea)
 
-            usd_cost = round(amount / total_qty, 4) if total_qty > 0 else 0.0
+            usd_cost     = round(amount / total_qty, 4) if total_qty > 0 else 0.0
+            pkg_desc_str = f"{pkg_size_seeds:,} SEEDS" if pkg_size_seeds > 0 else \
+                           find_best_nunhems_package_description(description, pkg_desc_list)
 
-            # Package description for dropdown
-            pkg_desc_str = f"{pkg_size_seeds:,} SEEDS" if pkg_size_seeds > 0 else ""
-
-            # Merge auxiliary data
             q_data = quality_map.get(lot_no, {})
             g_data = germ_map.get(lot_no, {})
             p_data = packing_map.get(lot_no, {})
 
             items.append({
-                "VendorInvoiceNo":        None,          # filled later from standard invoice
+                "VendorInvoiceNo":        None,
                 "PurchaseOrder":          po_number,
                 "VendorItemDescription":  description,
                 "VendorLotNo":            lot_no,
@@ -996,98 +982,80 @@ def _parse_customs_invoice_pages(
                 "TotalPrice":             amount,
                 "USD_Actual_Cost_$":      f"{usd_cost:.4f}",
                 "PackageDescription":     pkg_desc_str,
-                # Germ letter
                 "Germ":                   g_data.get("Germ"),
                 "GermDate":               g_data.get("GermDate"),
-                # Packing list
                 "SeedCount":              p_data.get("SeedCount"),
                 "SeedForm":               p_data.get("SeedForm"),
                 "SeedSize":               p_data.get("SeedSize"),
-                # Quality certificate
                 "GrowerGerm":             q_data.get("GrowerGerm"),
                 "GrowerGermDate":         q_data.get("GrowerGermDate"),
                 "Purity":                 q_data.get("Purity"),
                 "Inert":                  q_data.get("Inert"),
             })
 
-        i = j  # continue from where inner loop stopped
+        i = j
 
     return items, po_number
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # PUBLIC INTERFACE
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def extract_nunhems_data_from_bytes(
-    pdf_files:    List[Tuple[str, bytes]],
+    pdf_files:     List[Tuple[str, bytes]],
     pkg_desc_list: List[str],
 ) -> Dict[str, List[Dict]]:
-    """
-    Main entry point for the Nunhems extractor.
-
-    Parameters
-    ----------
-    pdf_files     : list of (filename, pdf_bytes) tuples uploaded by the user
-    pkg_desc_list : package description options loaded from Business Central
-
-    Returns
-    -------
-    Dict mapping filename → list of extracted item dicts (one per customs-invoice line)
-    """
     if not pdf_files:
         return {}
 
-    # ── Step 1: Build auxiliary lookup maps from ALL pages of ALL files ──────
+    # Step 1: build auxiliary maps from ALL pages of ALL files
     quality_map: Dict[str, Dict] = {}
     germ_map:    Dict[str, Dict] = {}
     packing_map: Dict[str, Dict] = {}
 
     for _filename, pdf_bytes in pdf_files:
-        for page_lines in _get_pages(pdf_bytes):
+        pages, _ = _get_pages_with_info(pdf_bytes)
+        for page_lines in pages:
             ptype = _classify_page(page_lines)
             if ptype == "quality_cert":
                 quality_map.update(_parse_quality_cert_page(page_lines))
             elif ptype == "germ_letter":
                 germ_map.update(_parse_germ_letter_page(page_lines))
             elif ptype == "packing_list":
-                pack_data = _parse_packing_list_page(page_lines)
-                for lot, lot_data in pack_data.items():
-                    if lot not in packing_map:
-                        packing_map[lot] = lot_data
-                    else:
-                        packing_map[lot].update(lot_data)
+                for lot, lot_data in _parse_packing_list_page(page_lines).items():
+                    existing = packing_map.setdefault(lot, {})
+                    for k, v in lot_data.items():
+                        if v and k not in existing:
+                            existing[k] = v
 
-    # ── Step 2: Find the vendor invoice number from the standard invoice ──────
+    # Step 2: find vendor invoice number from the standard invoice file
     global_invoice_no: Optional[str] = None
     global_po_no:      Optional[str] = None
 
     for _filename, pdf_bytes in pdf_files:
-        pages = _get_pages(pdf_bytes)
+        pages, _ = _get_pages_with_info(pdf_bytes)
         if any(_classify_page(p) == "standard_invoice" for p in pages):
-            all_lines = [l for p in pages for l in p]
-            inv_no, po_no = _parse_standard_invoice_header(all_lines)
+            flat = [l for p in pages for l in p]
+            inv_no, po_no = _parse_standard_invoice_header(flat)
             if inv_no:
                 global_invoice_no = inv_no
             if po_no:
                 global_po_no = po_no
             break
 
-    # ── Step 3: Extract items from files that contain customs invoices ────────
+    # Step 3: extract items from customs invoice pages only
     grouped_results: Dict[str, List[Dict]] = {}
 
     for filename, pdf_bytes in pdf_files:
-        info  = _page_info(pdf_bytes)
-        pages = _get_pages(pdf_bytes)
+        pages, info = _get_pages_with_info(pdf_bytes)
 
-        # Collect lines only from customs-invoice classified pages
         customs_lines: List[str] = []
         for page_lines in pages:
             if _classify_page(page_lines) == "customs_invoice":
                 customs_lines.extend(page_lines)
 
         if not customs_lines:
-            # Log auxiliary files (germ letters, certs, packing lists, standard invoice)
             log_processing_event(
                 vendor="Nunhems",
                 filename=filename,
@@ -1100,23 +1068,18 @@ def extract_nunhems_data_from_bytes(
             customs_lines, quality_map, germ_map, packing_map, pkg_desc_list
         )
 
-        # Back-fill the vendor invoice number from the standard invoice file
-        if global_invoice_no:
-            for item in items:
+        effective_po = po_number or global_po_no
+        for item in items:
+            if global_invoice_no and not item.get("VendorInvoiceNo"):
                 item["VendorInvoiceNo"] = global_invoice_no
-
-        # If customs invoice didn't have a PO but we found one elsewhere, use it
-        if not po_number and global_po_no:
-            po_number = global_po_no
-            for item in items:
-                if not item.get("PurchaseOrder"):
-                    item["PurchaseOrder"] = po_number
+            if effective_po and not item.get("PurchaseOrder"):
+                item["PurchaseOrder"] = effective_po
 
         log_processing_event(
             vendor="Nunhems",
             filename=filename,
             extraction_info=info,
-            po_number=po_number,
+            po_number=effective_po,
         )
 
         if items:
@@ -1126,12 +1089,11 @@ def extract_nunhems_data_from_bytes(
 
 
 def find_best_nunhems_package_description(vendor_desc: str, pkg_desc_list: List[str]) -> str:
-    """Find the best matching package description from the BC list."""
     if not vendor_desc or not pkg_desc_list:
         return ""
     if m := re.search(r"([\d,]+)\s+SDS", vendor_desc, re.IGNORECASE):
         try:
-            qty_num   = int(m.group(1).replace(",", ""))
+            qty_num   = int(m.group(1).replace(",", "").replace(".", ""))
             candidate = f"{qty_num:,} SEEDS"
             if candidate in pkg_desc_list:
                 return candidate
@@ -1139,3 +1101,97 @@ def find_best_nunhems_package_description(vendor_desc: str, pkg_desc_list: List[
             pass
     matches = get_close_matches(vendor_desc, pkg_desc_list, n=1, cutoff=0.6)
     return matches[0] if matches else ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LEGACY FALLBACK (standard Nunhems invoice format, kept for compatibility)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _process_single_nunhems_invoice(
+    lines:         List[str],
+    quality_map:   dict,
+    germ_map:      dict,
+    packing_map:   dict,
+    pkg_desc_list: List[str],
+) -> List[Dict]:
+    text_content      = "\n".join(lines)
+    vendor_invoice_no = None
+    po_number         = None
+
+    if m := re.search(r"Invoice\s+Number[:\s]+([\s\S]*?)\b(\d{9})\b", text_content, re.IGNORECASE):
+        vendor_invoice_no = m.group(2)
+    if m := re.search(r"Customer\s+P\.?O\.?\s+Number[:\s]+([\s\S]*?)\b(\d{5})\b", text_content, re.IGNORECASE):
+        po_number = f"PO-{m.group(2)}"
+
+    items = []
+    item_header_indices = [
+        i for i, line in enumerate(lines)
+        if re.search(r"(\d+[\d,]*)\s+SDS(?!\/LB)", line)
+    ]
+
+    for idx, start_i in enumerate(item_header_indices):
+        end_i       = item_header_indices[idx + 1] if idx + 1 < len(item_header_indices) else len(lines)
+        block_lines = lines[start_i - 2 : end_i]
+        block_text  = "\n".join(block_lines)
+        sds_line    = lines[start_i]
+
+        packaging_context_match = re.search(r"([\d,]+)\s+SDS", sds_line)
+        packaging_context_str   = f"{packaging_context_match.group(1)} SDS" if packaging_context_match else ""
+        desc_part1 = lines[start_i - 1].strip() if start_i > 0 else ""
+        desc_part2 = lines[start_i + 1].strip() if start_i + 1 < len(lines) else ""
+        vendor_item_description = f"{desc_part1} {desc_part2} {sds_line}".strip()
+
+        treatment  = "Untreated"
+        if "TREATED" in block_text.upper():
+            treatment = "Treated"
+
+        unit_price = 0.0
+        pq_match   = re.compile(
+            r"([\d,]+(?:\.\d{2})?)\s+Net price\s+([\d,]+\.\d{2})", re.IGNORECASE
+        ).search(block_text)
+        if pq_match:
+            unit_price = float(pq_match.group(2).replace(",", ""))
+
+        for l_line in block_lines:
+            lot_match = re.search(r"(\d{11})\s*\|\s*([\d,]+)\s*\|", l_line)
+            if not lot_match:
+                continue
+            vendor_lot = lot_match.group(1)
+            lot_qty    = int(float(lot_match.group(2).replace(",", "")))
+
+            origin_country = None
+            if origin_match := re.search(r"\|\s*([A-Za-z\s]+?)\s+ORIGIN", l_line, re.IGNORECASE):
+                origin_country = convert_to_alpha2(origin_match.group(1))
+
+            quality_info = quality_map.get(vendor_lot, {})
+            germ_info    = germ_map.get(vendor_lot, {})
+            packing_info = packing_map.get(vendor_lot, {})
+            package_desc = find_best_nunhems_package_description(packaging_context_str, pkg_desc_list)
+            calculated_cost = unit_price / lot_qty if lot_qty else 0.0
+
+            seed_size = packing_info.get("SeedSize")
+            if seed_size:
+                seed_size = seed_size.replace(",", ".")
+
+            items.append({
+                "VendorInvoiceNo":        vendor_invoice_no,
+                "PurchaseOrder":          po_number,
+                "VendorLotNo":            vendor_lot,
+                "VendorItemDescription":  vendor_item_description,
+                "OriginCountry":          origin_country,
+                "TotalPrice":             round(unit_price, 2),
+                "TotalQuantity":          lot_qty,
+                "USD_Actual_Cost_$":      f"{calculated_cost:.5f}",
+                "VendorTreatment":        treatment,
+                "Purity":                 quality_info.get("Purity"),
+                "Inert":                  quality_info.get("Inert"),
+                "Germ":                   germ_info.get("Germ"),
+                "GermDate":               germ_info.get("GermDate"),
+                "SeedCount":              packing_info.get("SeedCount"),
+                "SeedForm":               packing_info.get("SeedForm"),
+                "SeedSize":               seed_size,
+                "GrowerGerm":             quality_info.get("GrowerGerm"),
+                "GrowerGermDate":         quality_info.get("GrowerGermDate"),
+                "PackageDescription":     package_desc,
+            })
+    return items
