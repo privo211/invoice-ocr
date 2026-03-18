@@ -493,6 +493,772 @@
 #     return items
 
 
+# # vendor_extractors/nunhems.py
+# """
+# Nunhems / BASF invoice extractor — definitive version with DEBUG logging.
+
+# KEY FIX: Azure Form Recognizer returns per-page results. Previously we were
+# flattening all 1030 lines into a single "page", causing _classify_page() to
+# see every keyword at once (QUALITY CERTIFICATE, CONSIGNEE, H-S CODE, etc.)
+# and always pick quality_cert (first check wins). Now we preserve the page
+# structure from OCR so each page gets its own correct classification.
+# """
+
+# import os
+# import re
+# import fitz
+# import requests
+# import time
+# import pycountry
+# from datetime import datetime
+# from difflib import get_close_matches
+# from typing import Dict, List, Optional, Tuple
+# from db_logger import log_processing_event
+
+# AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
+# AZURE_KEY      = os.getenv("AZURE_KEY")
+
+
+# # ─────────────────────────────────────────────────────────────────────────────
+# # EUROPEAN NUMBER PARSING
+# # ─────────────────────────────────────────────────────────────────────────────
+
+# def parse_euro_float(value):
+#   """
+#   Swaps all commas with dots and all dots with commas in a string representation of a float.
+#   Args: value: The input number, as a string or a float/int which will be converted to string.
+#   Returns: The string value with swapped separators.
+#   """
+#   # Convert the input to a string first, in case it's a float/int
+#   s = str(value)
+
+#   # Create a translation table:
+#   # ord(',') maps comma to dot
+#   # ord('.') maps dot to comma
+#   # This mapping is done simultaneously
+#   translation_table = str.maketrans(',.', '.,')
+
+#   # Apply the translation
+#   swapped_s = s.translate(translation_table)
+
+#   return swapped_s
+
+# # def parse_euro_float(s: str) -> float:
+# #     """
+# #     Robustly parse a European or US formatted number string.
+# #     "5.523,00" -> 5523.0 | "344.791" -> 344791.0 | "1.841,0000" -> 1841.0
+# #     """
+# #     if not s:
+# #         return 0.0
+# #     clean = s.strip().replace(" ", "")
+
+# #     if "," in clean:
+# #         if "." in clean:
+# #             last_dot   = clean.rfind(".")
+# #             last_comma = clean.rfind(",")
+# #             if last_dot < last_comma:
+# #                 clean = clean.replace(".", "").replace(",", ".")
+# #             else:
+# #                 clean = clean.replace(",", "")
+# #         else:
+# #             if re.search(r",\d{2,}$", clean):
+# #                 clean = clean.replace(",", ".")
+# #             else:
+# #                 clean = clean.replace(",", "")
+# #     elif re.match(r"^\d{1,3}(\.\d{3})+$", clean):
+# #         # European integer thousands: "344.791" -> "344791"
+# #         clean = clean.replace(".", "")
+
+# #     try:
+# #         return float(clean)
+# #     except ValueError:
+# #         return 0.0
+
+
+# # ─────────────────────────────────────────────────────────────────────────────
+# # HELPERS
+# # ─────────────────────────────────────────────────────────────────────────────
+
+# def convert_to_alpha2(country_value: str) -> str:
+#     if not country_value:
+#         return ""
+#     country_value = country_value.strip()
+#     if len(country_value) == 2:
+#         return country_value.upper()
+#     try:
+#         return pycountry.countries.lookup(country_value).alpha_2
+#     except LookupError:
+#         return country_value
+
+
+# def _extract_text_with_azure_ocr(pdf_content: bytes) -> List[List[str]]:
+#     """
+#     Send PDF to Azure Form Recognizer and return PER-PAGE results.
+#     Returns List[List[str]] — one inner list per PDF page.
+#     """
+#     if not AZURE_ENDPOINT or not AZURE_KEY:
+#         raise ValueError("Azure OCR credentials are not set.")
+#     headers = {"Ocp-Apim-Subscription-Key": AZURE_KEY, "Content-Type": "application/pdf"}
+#     response = requests.post(
+#         f"{AZURE_ENDPOINT}formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31",
+#         headers=headers, data=pdf_content,
+#     )
+#     if response.status_code != 202:
+#         raise RuntimeError(f"OCR request failed: {response.text}")
+#     op_url = response.headers["Operation-Location"]
+#     for _ in range(30):
+#         time.sleep(1.5)
+#         result = requests.get(op_url, headers={"Ocp-Apim-Subscription-Key": AZURE_KEY}).json()
+#         if result.get("status") == "succeeded":
+#             pages_out = []
+#             for page in result["analyzeResult"]["pages"]:
+#                 page_lines = [
+#                     ln.get("content", "").strip()
+#                     for ln in page.get("lines", [])
+#                     if ln.get("content", "").strip()
+#                 ]
+#                 pages_out.append(page_lines)
+#             return pages_out
+#         if result.get("status") == "failed":
+#             raise RuntimeError("OCR analysis failed")
+#     raise TimeoutError("OCR timed out")
+
+
+# def _get_pages_with_info(pdf_bytes: bytes, filename: str = "") -> Tuple[List[List[str]], Dict]:
+#     info = {"method": "PyMuPDF", "page_count": 0}
+#     pages: List[List[str]] = []
+#     try:
+#         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+#         info["page_count"] = doc.page_count
+#         print(f"\nDEBUG [{filename}]: Opened with PyMuPDF. Page count: {doc.page_count}")
+#         has_text = False
+#         for pg_num, page in enumerate(doc):
+#             txt = page.get_text()
+#             lines = [l.strip() for l in txt.split("\n") if l.strip()]
+#             pages.append(lines)
+#             if txt.strip():
+#                 has_text = True
+#             print(f"  Page {pg_num + 1}: {len(lines)} lines, has_text={bool(txt.strip())}, "
+#                   f"first_line={repr(lines[0]) if lines else '(empty)'}")
+#         doc.close()
+#         if has_text:
+#             print(f"DEBUG [{filename}]: PyMuPDF succeeded, returning {len(pages)} pages.")
+#             return pages, info
+#         else:
+#             print(f"DEBUG [{filename}]: PyMuPDF found NO text — falling back to Azure OCR.")
+#     except Exception as e:
+#         print(f"DEBUG [{filename}]: PyMuPDF exception: {e}")
+
+#     info["method"] = "Azure OCR"
+#     print(f"DEBUG [{filename}]: Sending to Azure OCR...")
+#     ocr_pages = _extract_text_with_azure_ocr(pdf_bytes)
+#     info["page_count"] = len(ocr_pages)
+#     total_lines = sum(len(p) for p in ocr_pages)
+#     print(f"DEBUG [{filename}]: Azure OCR returned {len(ocr_pages)} pages, {total_lines} total lines.")
+#     for pg_num, pg_lines in enumerate(ocr_pages):
+#         print(f"  OCR Page {pg_num + 1}: {len(pg_lines)} lines, "
+#               f"first_line={repr(pg_lines[0]) if pg_lines else '(empty)'}")
+#     return ocr_pages, info
+
+
+# def _read_label_value(lines: List[str], idx: int, label: str) -> Optional[str]:
+#     line = lines[idx]
+#     after_colon = re.sub(r"^" + re.escape(label) + r"\s*:\s*", "", line, flags=re.IGNORECASE).strip()
+#     if after_colon:
+#         return after_colon
+#     if idx + 1 < len(lines):
+#         nxt = lines[idx + 1].strip()
+#         if nxt and not re.match(r"^[A-Za-z /]+:\s*$", nxt):
+#             return nxt
+#     return None
+
+
+# # ─────────────────────────────────────────────────────────────────────────────
+# # PAGE CLASSIFIER
+# # ─────────────────────────────────────────────────────────────────────────────
+
+# def _classify_page(lines: List[str]) -> str:
+#     text = " ".join(lines).upper()
+
+#     if "QUALITY CERTIFICATE" in text:
+#         return "quality_cert"
+#     if "TEST DATE CONFIRMATION" in text:
+#         return "germ_letter"
+#     if "PACKING LIST" in text and "LOT NUMBER:" in text:
+#         return "packing_list"
+#     if "CONSIGNEE" in text and "H-S CODE" in text:
+#         return "customs_invoice"
+#     if "INVOICE" in text and "NET PRICE" in text:
+#         return "standard_invoice"
+#     return "other"
+
+
+# def _classify_page_debug(lines: List[str], page_num: int) -> str:
+#     text = " ".join(lines).upper()
+#     result = _classify_page(lines)
+#     checks = {
+#         "QUALITY CERTIFICATE": "QUALITY CERTIFICATE" in text,
+#         "TEST DATE CONFIRMATION": "TEST DATE CONFIRMATION" in text,
+#         "PACKING LIST": "PACKING LIST" in text,
+#         "LOT NUMBER:": "LOT NUMBER:" in text,
+#         "CONSIGNEE": "CONSIGNEE" in text,
+#         "H-S CODE": "H-S CODE" in text,
+#         "INVOICE": "INVOICE" in text,
+#         "NET PRICE": "NET PRICE" in text,
+#     }
+#     hits = [k for k, v in checks.items() if v]
+#     print(f"  Page {page_num}: classified as '{result}'. Keywords found: {hits}")
+#     if result == "other":
+#         print(f"    -> First 3 lines: {lines[:3]}")
+#     return result
+
+
+# # ─────────────────────────────────────────────────────────────────────────────
+# # QUALITY CERTIFICATE PARSER
+# # ─────────────────────────────────────────────────────────────────────────────
+
+# def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
+#     lot_no: Optional[str] = None
+#     for i, line in enumerate(lines):
+#         if re.search(r"Lot\s*/?\s*batch\s+number", line, re.IGNORECASE):
+#             for offset in range(0, 4):
+#                 if i + offset < len(lines):
+#                     m = re.search(r"\b(\d{11})\b", lines[i + offset])
+#                     if m:
+#                         lot_no = m.group(1)
+#                         break
+#         if lot_no:
+#             break
+#     if not lot_no:
+#         return {}
+
+#     data: Dict = {}
+
+#     for i, line in enumerate(lines):
+#         if "Normal seedlings" in line:
+#             for j in range(i + 1, min(i + 5, len(lines))):
+#                 if m := re.search(r"(\d+)\s*%", lines[j]):
+#                     data["GrowerGerm"] = int(m.group(1))
+#                     break
+#             break
+
+#     for i, line in enumerate(lines):
+#         if re.match(r"^Pure\s+seeds?\s*$", line, re.IGNORECASE):
+#             for j in range(i + 1, min(i + 5, len(lines))):
+#                 floats = re.findall(r"(\d+[,.]?\d*)\s*%", lines[j])
+#                 if not floats:
+#                     floats = re.findall(r"(\d+[,.]?\d+)", lines[j])
+#                 if floats:
+#                     try:
+#                         pure  = parse_euro_float(floats[0])
+#                         inert = parse_euro_float(floats[1]) if len(floats) > 1 else 0.0
+#                         if pure == 100.0:
+#                             pure = 99.99
+#                             inert = 0.01
+#                         data["Purity"] = pure
+#                         data["Inert"]  = inert
+#                     except (ValueError, IndexError):
+#                         pass
+#                     break
+#             break
+
+#     for line in lines:
+#         if m := re.search(r"([\d.,]+)\s*seeds?/kg", line, re.IGNORECASE):
+#             sc = int(parse_euro_float(m.group(1)).replace(",", ""))
+#             if sc > 0:
+#                 data["SeedCount"] = sc
+#             break
+
+#     # Look for Date mapping properly (handling Azure OCR line splits)
+#     for i, line in enumerate(lines):
+#         if re.match(r"^Date\s*:", line, re.IGNORECASE):
+#             val = _read_label_value(lines, i, "Date")
+#             if val:
+#                 if m := re.search(r"([A-Za-z]+\s+\d{1,2},\s*\d{4})", val):
+#                     try:
+#                         dt = datetime.strptime(m.group(1), "%B %d, %Y")
+#                         data["GrowerGermDate"] = dt.strftime("%m/%d/%Y")
+#                     except ValueError:
+#                         pass
+#             break
+
+#     return {lot_no: data}
+
+
+# # ─────────────────────────────────────────────────────────────────────────────
+# # GERM LETTER PARSER
+# # ─────────────────────────────────────────────────────────────────────────────
+
+# def _parse_germ_letter_page(lines: List[str]) -> Dict[str, Dict]:
+#     result: Dict[str, Dict] = {}
+#     for i, line in enumerate(lines):
+#         if m := re.search(r"\b(\d{11})\b", line):
+#             lot     = m.group(1)
+#             context = " ".join(lines[i : i + 5])
+#             germ = germ_date = None
+#             if g := re.search(r"(\d+)\s*%", context):
+#                 germ = int(g.group(1))
+#             if d := re.search(r"\b(\d{1,2})/(\d{4})\b", context):
+#                 month, year = d.groups()
+#                 germ_date = f"{int(month):02d}/01/{year}"
+#             if germ or germ_date:
+#                 result[lot] = {"Germ": germ, "GermDate": germ_date}
+#     return result
+
+
+# # ─────────────────────────────────────────────────────────────────────────────
+# # PACKING LIST PARSER
+# # ─────────────────────────────────────────────────────────────────────────────
+
+# def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
+#     result: Dict[str, Dict] = {}
+
+#     for i, line in enumerate(lines):
+#         if not re.search(r"(?i)\bLot\s+Number:", line):
+#             continue
+
+#         combined = line
+#         if i + 1 < len(lines):
+#             combined += " " + lines[i + 1]
+
+#         lot_m = re.search(r"\b(\d{11})\b", combined)
+#         if not lot_m:
+#             continue
+#         lot_no = lot_m.group(1)
+#         data   = result.setdefault(lot_no, {})
+
+#         sc_m = re.search(r"S/C\s*:\s*([\d.,]+)", combined)
+#         if sc_m and "SeedCount" not in data:
+#             sc = int(parse_euro_float(sc_m.group(1)).replace(",", ""))
+#             if sc > 0:
+#                 data["SeedCount"] = sc
+
+#         window_start = max(0, i - 20)
+#         window = lines[window_start : i]
+
+#         for j, w_line in enumerate(window):
+#             if re.match(r"^Seed\s+Form\s*:\s*$", w_line, re.IGNORECASE):
+#                 if j + 1 < len(window):
+#                     val = window[j + 1].strip()
+#                     if val and not re.match(r"^(Seed\s+(Size|Form|Count)|Treated|Order|Customer)", val, re.IGNORECASE):
+#                         data.setdefault("SeedForm", val)
+#             elif re.match(r"^Seed\s+Form:\s+\S+", w_line, re.IGNORECASE):
+#                 val = re.sub(r"^Seed\s+Form:\s*", "", w_line, flags=re.IGNORECASE).strip()
+#                 if val:
+#                     data.setdefault("SeedForm", val)
+
+#             if re.match(r"^Seed\s+Size\s*:\s*$", w_line, re.IGNORECASE):
+#                 if j + 1 < len(window):
+#                     val = window[j + 1].strip()
+#                     if val and not re.match(r"^(Seed|Treated)", val, re.IGNORECASE):
+#                         data.setdefault("SeedSize", val.replace(",", "."))
+#             elif re.match(r"^Seed\s+Size:\s+\S+", w_line, re.IGNORECASE):
+#                 val = re.sub(r"^Seed\s+Size:\s*", "", w_line, flags=re.IGNORECASE).strip()
+#                 if val:
+#                     data.setdefault("SeedSize", val.replace(",", "."))
+
+#     return result
+
+
+# # ─────────────────────────────────────────────────────────────────────────────
+# # STANDARD INVOICE HEADER PARSER
+# # ─────────────────────────────────────────────────────────────────────────────
+
+# def _parse_standard_invoice_header(lines: List[str]) -> Tuple[Optional[str], Optional[str]]:
+#     invoice_no: Optional[str] = None
+#     po_no:      Optional[str] = None
+#     text = "\n".join(lines)
+
+#     if m := re.search(r"Invoice\s+Number[:\s]+(\d{9})", text, re.IGNORECASE):
+#         invoice_no = m.group(1)
+
+#     for i, line in enumerate(lines):
+#         if re.search(r"Customer\s+P\.?O\.?\s+Number", line, re.IGNORECASE):
+#             search = " ".join(lines[i : i + 6])
+#             if m := re.search(r"\b(\d{5})\b", search):
+#                 po_no = f"PO-{m.group(1)}"
+#             break
+
+#     if not po_no:
+#         for i, line in enumerate(lines):
+#             if re.search(r"(Cus\.?\s*P\.?O\.?|P\.O\.\s*Number|Purchase Order)", line, re.IGNORECASE):
+#                 search = " ".join(lines[i : i + 4])
+#                 if m := re.search(r"\b(\d{5})\b", search):
+#                     po_no = f"PO-{m.group(1)}"
+#                     break
+
+#     if not po_no:
+#         for line in lines[:50]:
+#             line_stripped = line.strip()
+#             if re.match(r"^\d{5}$", line_stripped):
+#                 po_no = f"PO-{line_stripped}"
+#                 break
+
+#     return invoice_no, po_no
+
+
+# # ─────────────────────────────────────────────────────────────────────────────
+# # CUSTOMS INVOICE PARSER
+# # ─────────────────────────────────────────────────────────────────────────────
+
+# def _extract_po_from_customs_lines(lines: List[str]) -> Optional[str]:
+#     for i, line in enumerate(lines):
+#         if re.search(r"Cus\.?\s*P\.?O\.?", line, re.IGNORECASE):
+#             search = " ".join(lines[i : i + 4])
+#             if m := re.search(r"\b(\d{5})\b", search):
+#                 return f"PO-{m.group(1)}"
+#     return None
+
+
+# def _parse_customs_invoice_pages(
+#     lines:         List[str],
+#     quality_map:   Dict[str, Dict],
+#     germ_map:      Dict[str, Dict],
+#     packing_map:   Dict[str, Dict],
+#     pkg_desc_list: List[str],
+# ) -> Tuple[List[Dict], Optional[str]]:
+#     po_number = _extract_po_from_customs_lines(lines)
+#     print(f"\nDEBUG [customs_invoice_parser]: Total lines to parse: {len(lines)}")
+#     print(f"DEBUG [customs_invoice_parser]: PO found: {po_number}")
+
+#     hs_hits = [i for i, ln in enumerate(lines) if re.match(r"^H-S\s*Code\s*:", ln, re.IGNORECASE)]
+#     print(f"DEBUG [customs_invoice_parser]: H-S Code hits ({len(hs_hits)} found):")
+
+#     items: List[Dict] = []
+#     n = len(lines)
+
+#     for idx, i in enumerate(hs_hits):
+#         print(f"\nDEBUG [customs_invoice_parser]: --- H-S block at line {i} ---")
+        
+#         # Isolate the block lines until the next H-S Code
+#         end_i = hs_hits[idx+1] if idx + 1 < len(hs_hits) else min(i + 50, n)
+#         block_lines = lines[i:end_i]
+
+#         variety        = ""
+#         pkg_size_str   = ""
+#         pkg_size_seeds = 0
+#         treatment      = "Untreated"
+#         lot_no: Optional[str] = None
+#         lot_ea         = 0
+#         origin         = ""
+#         amount         = 0.0
+
+#         for j, bl in enumerate(block_lines):
+#             bl_strip = bl.strip()
+            
+#             # --- Kind / Variety ---
+#             if re.match(r"^Kind/variety\s*:", bl_strip, re.IGNORECASE):
+#                 val = _read_label_value(block_lines, j, "Kind/variety")
+#                 if val: variety = val.strip()
+
+#             # --- Package Size (with lock to prevent overwriting) ---
+#             if re.match(r"^Package\s+Size\s*:", bl_strip, re.IGNORECASE):
+#                 val = _read_label_value(block_lines, j, "Package Size")
+#                 if val:
+#                     pkg_size_str = val.strip()
+#             elif not pkg_size_str and ("SDS" in bl_strip.upper() or "SEEDS" in bl_strip.upper()):
+#                 # Only lock in if it has numbers (a real size) and isn't a company name
+#                 if re.search(r"\d", bl_strip) and not re.match(r"^(Kind/variety|Lot Number|H-S Code)", bl_strip, re.IGNORECASE):
+#                     pkg_size_str = bl_strip
+
+#             # --- Treated With ---
+#             if re.match(r"^Treated\s+With\s*:", bl_strip, re.IGNORECASE):
+#                 val = _read_label_value(block_lines, j, "Treated With")
+#                 if val:
+#                     t_val = val.strip().capitalize()
+#                     if t_val.upper() == "UNTREATED": treatment = "Untreated"
+#                     elif t_val.upper() == "TREATED": treatment = "Treated"
+
+#             # --- Lot Number ---
+#             if re.match(r"^Lot\s+Number\s*:", bl_strip, re.IGNORECASE):
+#                 val = _read_label_value(block_lines, j, "Lot Number")
+#                 if val:
+#                     if lot_m := re.search(r"\b(\d{11})\b", val):
+#                         lot_no = lot_m.group(1)
+#                     if ea_m := re.search(r"\b(\d+)\s*EA\b", val, re.IGNORECASE):
+#                         lot_ea = int(ea_m.group(1))
+
+#             # --- Origin ---
+#             if re.match(r"^[A-Z][A-Za-z ]+\s+Origin\*?\s*$", bl_strip):
+#                 country = re.sub(r"\s*Origin\*?\s*$", "", bl_strip, flags=re.IGNORECASE).strip()
+#                 origin = convert_to_alpha2(country)
+
+#         # Secondary pass for Quantity (EA) and Amount (Price)
+#         for bl in block_lines:
+#             bl_strip = bl.strip()
+            
+#             # If Lot line missed the EA quantity, check elsewhere in block
+#             if not lot_ea:
+#                 if ea_m := re.search(r"\b(\d+)\s*EA\b", bl_strip, re.IGNORECASE):
+#                     lot_ea = int(ea_m.group(1))
+
+#             # Find Amount: Highest European number with exactly 2 decimal places
+#             # Ignore 8-digit H-S codes or 11-digit lot numbers
+#             if lot_no and not re.match(r"^\d{8}$", bl_strip) and not re.search(r"\b\d{11}\b", bl_strip):
+#                 amt_m = re.search(r"([\d.]+,\d{2})\s*$", bl_strip)
+#                 if amt_m:
+#                     candidate = parse_euro_float(amt_m.group(1))
+#                     # Avoid grabbing unit price by selecting the largest
+#                     if candidate > amount and candidate < 1000000 and candidate != float(lot_ea):
+#                         amount = candidate
+
+#         # --- Data Formulation ---
+#         if pkg_size_str:
+#             if ps_m := re.search(r"(?:of\s+)?([\d.,]+)\s*SDS", pkg_size_str, re.IGNORECASE):
+#                 pkg_size_seeds = int(parse_euro_float(ps_m.group(1)))
+
+#         if lot_no and (variety or pkg_size_str):
+#             # Perfect description formatting with comma
+#             if pkg_size_seeds > 0:
+#                 description = f"{variety.upper()} {pkg_size_seeds:,} SDS".strip()
+#             else:
+#                 description = f"{variety.upper()} {pkg_size_str}".strip() or f"Item for Lot {lot_no}"
+
+#             if pkg_size_seeds > 0 and lot_ea > 0:
+#                 total_qty = (lot_ea * pkg_size_seeds) / 1000.0
+#             else:
+#                 total_qty = float(lot_ea)
+
+#             usd_cost = round(amount / total_qty, 4) if total_qty > 0 else 0.0
+#             pkg_desc_str = f"{pkg_size_seeds:,} SEEDS" if pkg_size_seeds > 0 else \
+#                            find_best_nunhems_package_description(description, pkg_desc_list)
+
+#             q_data = quality_map.get(lot_no, {})
+#             g_data = germ_map.get(lot_no, {})
+#             p_data = packing_map.get(lot_no, {})
+
+#             # Format seed size to have decimal dot instead of comma
+#             seed_size = p_data.get("SeedSize")
+#             if seed_size:
+#                 seed_size = seed_size.replace(",", ".")
+
+#             print(f"  -> ITEM CREATED: {description}, qty={total_qty}, price={amount}, cost={usd_cost}")
+
+#             items.append({
+#                 "VendorInvoiceNo":        None,
+#                 "PurchaseOrder":          po_number,
+#                 "VendorItemDescription":  description,
+#                 "VendorLotNo":            lot_no,
+#                 "OriginCountry":          origin,
+#                 "VendorTreatment":        treatment,
+#                 "TreatmentsDescription":  "",
+#                 "TreatmentsDescription2": "",
+#                 "TotalQuantity":          total_qty,
+#                 "TotalPrice":             amount,
+#                 "USD_Actual_Cost_$":      f"{usd_cost:.2f}",
+#                 "PackageDescription":     pkg_desc_str,
+#                 "Germ":                   g_data.get("Germ"),
+#                 "GermDate":               g_data.get("GermDate"),
+#                 "SeedCount":              p_data.get("SeedCount"),
+#                 "SeedForm":               p_data.get("SeedForm"),
+#                 "SeedSize":               seed_size,
+#                 "GrowerGerm":             q_data.get("GrowerGerm"),
+#                 "GrowerGermDate":         q_data.get("GrowerGermDate"),
+#                 "Purity":                 q_data.get("Purity"),
+#                 "Inert":                  q_data.get("Inert"),
+#             })
+
+#     print(f"\nDEBUG [customs_invoice_parser]: Extracted {len(items)} items total.")
+#     return items, po_number
+
+
+# # ─────────────────────────────────────────────────────────────────────────────
+# # PUBLIC INTERFACE
+# # ─────────────────────────────────────────────────────────────────────────────
+
+# def extract_nunhems_data_from_bytes(
+#     pdf_files:     List[Tuple[str, bytes]],
+#     pkg_desc_list: List[str],
+# ) -> Dict[str, List[Dict]]:
+#     if not pdf_files:
+#         return {}
+
+#     print(f"\n{'='*60}")
+#     print(f"DEBUG: extract_nunhems_data_from_bytes called with {len(pdf_files)} file(s):")
+
+#     # ── Step 1: Build auxiliary lookup maps ──────────────────────────────────
+#     print(f"\nDEBUG: === Step 1: Building auxiliary maps ===")
+#     quality_map: Dict[str, Dict] = {}
+#     germ_map:    Dict[str, Dict] = {}
+#     packing_map: Dict[str, Dict] = {}
+
+#     for filename, pdf_bytes in pdf_files:
+#         pages, _ = _get_pages_with_info(pdf_bytes, filename)
+#         for pg_num, page_lines in enumerate(pages, 1):
+#             ptype = _classify_page_debug(page_lines, pg_num)
+#             if ptype == "quality_cert":
+#                 result = _parse_quality_cert_page(page_lines)
+#                 quality_map.update(result)
+#             elif ptype == "germ_letter":
+#                 result = _parse_germ_letter_page(page_lines)
+#                 germ_map.update(result)
+#             elif ptype == "packing_list":
+#                 result = _parse_packing_list_page(page_lines)
+#                 for lot, lot_data in result.items():
+#                     existing = packing_map.setdefault(lot, {})
+#                     for k, v in lot_data.items():
+#                         if v and k not in existing:
+#                             existing[k] = v
+
+#     # ── Step 2: Find vendor invoice number ───────────────────────────────────
+#     print(f"\nDEBUG: === Step 2: Searching for standard invoice ===")
+#     global_invoice_no: Optional[str] = None
+#     global_po_no:      Optional[str] = None
+
+#     for filename, pdf_bytes in pdf_files:
+#         pages, _ = _get_pages_with_info(pdf_bytes, filename)
+#         page_types = [_classify_page(p) for p in pages]
+#         if "standard_invoice" in page_types:
+#             flat = [l for p in pages for l in p]
+#             inv_no, po_no = _parse_standard_invoice_header(flat)
+#             global_invoice_no = inv_no
+#             global_po_no      = po_no
+#             print(f"  -> Found standard invoice: inv_no={inv_no}, po_no={po_no}")
+#             break
+
+#     # ── Step 3: Extract items from customs invoice pages ─────────────────────
+#     print(f"\nDEBUG: === Step 3: Extracting from customs invoice pages ===")
+#     grouped_results: Dict[str, List[Dict]] = {}
+
+#     for filename, pdf_bytes in pdf_files:
+#         pages, info = _get_pages_with_info(pdf_bytes, filename)
+
+#         customs_lines: List[str] = []
+#         for pg_num, page_lines in enumerate(pages, 1):
+#             ptype = _classify_page(page_lines)
+#             if ptype == "customs_invoice":
+#                 customs_lines.extend(page_lines)
+
+#         if not customs_lines:
+#             log_processing_event(vendor="Nunhems", filename=filename, extraction_info=info, po_number=global_po_no)
+#             continue
+
+#         items, po_number = _parse_customs_invoice_pages(
+#             customs_lines, quality_map, germ_map, packing_map, pkg_desc_list
+#         )
+
+#         effective_po = po_number or global_po_no
+#         for item in items:
+#             if global_invoice_no and not item.get("VendorInvoiceNo"):
+#                 item["VendorInvoiceNo"] = global_invoice_no
+#             if effective_po and not item.get("PurchaseOrder"):
+#                 item["PurchaseOrder"] = effective_po
+
+#         log_processing_event(vendor="Nunhems", filename=filename, extraction_info=info, po_number=effective_po)
+
+#         if items:
+#             grouped_results[filename] = items
+
+#     print(f"\nDEBUG: === Final result: {len(grouped_results)} file(s) with data ===")
+#     print(f"{'='*60}\n")
+#     return grouped_results
+
+
+# def find_best_nunhems_package_description(vendor_desc: str, pkg_desc_list: List[str]) -> str:
+#     if not vendor_desc or not pkg_desc_list:
+#         return ""
+#     if m := re.search(r"([\d,]+)\s+SDS", vendor_desc, re.IGNORECASE):
+#         try:
+#             qty_num   = int(m.group(1).replace(",", "").replace(".", ""))
+#             candidate = f"{qty_num:,} SEEDS"
+#             if candidate in pkg_desc_list:
+#                 return candidate
+#         except ValueError:
+#             pass
+#     matches = get_close_matches(vendor_desc, pkg_desc_list, n=1, cutoff=0.6)
+#     return matches[0] if matches else ""
+
+
+# # ─────────────────────────────────────────────────────────────────────────────
+# # LEGACY FALLBACK
+# # ─────────────────────────────────────────────────────────────────────────────
+
+# def _process_single_nunhems_invoice(
+#     lines:         List[str],
+#     quality_map:   dict,
+#     germ_map:      dict,
+#     packing_map:   dict,
+#     pkg_desc_list: List[str],
+# ) -> List[Dict]:
+#     text_content      = "\n".join(lines)
+#     vendor_invoice_no = None
+#     po_number         = None
+
+#     if m := re.search(r"Invoice\s+Number[:\s]+([\s\S]*?)\b(\d{9})\b", text_content, re.IGNORECASE):
+#         vendor_invoice_no = m.group(2)
+#     if m := re.search(r"Customer\s+P\.?O\.?\s+Number[:\s]+([\s\S]*?)\b(\d{5})\b", text_content, re.IGNORECASE):
+#         po_number = f"PO-{m.group(2)}"
+
+#     items = []
+#     item_header_indices = [
+#         i for i, line in enumerate(lines)
+#         if re.search(r"(\d+[\d,]*)\s+SDS(?!\/LB)", line)
+#     ]
+
+#     for idx, start_i in enumerate(item_header_indices):
+#         end_i       = item_header_indices[idx + 1] if idx + 1 < len(item_header_indices) else len(lines)
+#         block_lines = lines[start_i - 2 : end_i]
+#         block_text  = "\n".join(block_lines)
+#         sds_line    = lines[start_i]
+
+#         packaging_context_match = re.search(r"([\d,]+)\s+SDS", sds_line)
+#         packaging_context_str   = f"{packaging_context_match.group(1)} SDS" if packaging_context_match else ""
+#         desc_part1 = lines[start_i - 1].strip() if start_i > 0 else ""
+#         desc_part2 = lines[start_i + 1].strip() if start_i + 1 < len(lines) else ""
+#         vendor_item_description = f"{desc_part1} {desc_part2} {sds_line}".strip()
+
+#         treatment = "Untreated"
+#         if "TREATED" in block_text.upper():
+#             treatment = "Treated"
+
+#         unit_price = 0.0
+#         pq_match   = re.compile(
+#             r"([\d,]+(?:\.\d{2})?)\s+Net price\s+([\d,]+\.\d{2})", re.IGNORECASE
+#         ).search(block_text)
+#         if pq_match:
+#             unit_price = float(pq_match.group(2).replace(",", ""))
+
+#         for l_line in block_lines:
+#             lot_match = re.search(r"(\d{11})\s*\|\s*([\d,]+)\s*\|", l_line)
+#             if not lot_match:
+#                 continue
+#             vendor_lot = lot_match.group(1)
+#             lot_qty    = int(float(lot_match.group(2).replace(",", "")))
+#             origin_country = None
+#             if origin_match := re.search(r"\|\s*([A-Za-z\s]+?)\s+ORIGIN", l_line, re.IGNORECASE):
+#                 origin_country = convert_to_alpha2(origin_match.group(1))
+#             quality_info = quality_map.get(vendor_lot, {})
+#             germ_info    = germ_map.get(vendor_lot, {})
+#             packing_info = packing_map.get(vendor_lot, {})
+#             package_desc = find_best_nunhems_package_description(packaging_context_str, pkg_desc_list)
+#             calculated_cost = unit_price / lot_qty if lot_qty else 0.0
+#             seed_size = packing_info.get("SeedSize")
+#             if seed_size:
+#                 seed_size = seed_size.replace(",", ".")
+#             items.append({
+#                 "VendorInvoiceNo":        vendor_invoice_no,
+#                 "PurchaseOrder":          po_number,
+#                 "VendorLotNo":            vendor_lot,
+#                 "VendorItemDescription":  vendor_item_description,
+#                 "OriginCountry":          origin_country,
+#                 "TotalPrice":             round(unit_price, 2),
+#                 "TotalQuantity":          lot_qty,
+#                 "USD_Actual_Cost_$":      f"{calculated_cost:.5f}",
+#                 "VendorTreatment":        treatment,
+#                 "Purity":                 quality_info.get("Purity"),
+#                 "Inert":                  quality_info.get("Inert"),
+#                 "Germ":                   germ_info.get("Germ"),
+#                 "GermDate":               germ_info.get("GermDate"),
+#                 "SeedCount":              packing_info.get("SeedCount"),
+#                 "SeedForm":               packing_info.get("SeedForm"),
+#                 "SeedSize":               seed_size,
+#                 "GrowerGerm":             quality_info.get("GrowerGerm"),
+#                 "GrowerGermDate":         quality_info.get("GrowerGermDate"),
+#                 "PackageDescription":     package_desc,
+#             })
+#     return items
+
+
 # vendor_extractors/nunhems.py
 """
 Nunhems / BASF invoice extractor — definitive version with DEBUG logging.
@@ -524,55 +1290,39 @@ AZURE_KEY      = os.getenv("AZURE_KEY")
 # ─────────────────────────────────────────────────────────────────────────────
 
 def parse_euro_float(value):
-  """
-  Swaps all commas with dots and all dots with commas in a string representation of a float.
-  Args: value: The input number, as a string or a float/int which will be converted to string.
-  Returns: The string value with swapped separators.
-  """
-  # Convert the input to a string first, in case it's a float/int
-  s = str(value)
+    """
+    Swaps all commas with dots and all dots with commas in a string representation of a float.
 
-  # Create a translation table:
-  # ord(',') maps comma to dot
-  # ord('.') maps dot to comma
-  # This mapping is done simultaneously
-  translation_table = str.maketrans(',.', '.,')
+    Args:
+      value: The input number, as a string or a float/int which will be converted to string.
 
-  # Apply the translation
-  swapped_s = s.translate(translation_table)
+    Returns:
+      The string with swapped separators.
+    """
+    # Convert the input to a string first, in case it's a float/int
+    s = str(value).strip()
 
-  return swapped_s
+    # Create a translation table:
+    # ord(',') maps comma to dot
+    # ord('.') maps dot to comma
+    # This mapping is done simultaneously
+    translation_table = str.maketrans(',.', '.,')
 
-# def parse_euro_float(s: str) -> float:
-#     """
-#     Robustly parse a European or US formatted number string.
-#     "5.523,00" -> 5523.0 | "344.791" -> 344791.0 | "1.841,0000" -> 1841.0
-#     """
-#     if not s:
-#         return 0.0
-#     clean = s.strip().replace(" ", "")
+    # Apply the translation
+    swapped_s = s.translate(translation_table)
 
-#     if "," in clean:
-#         if "." in clean:
-#             last_dot   = clean.rfind(".")
-#             last_comma = clean.rfind(",")
-#             if last_dot < last_comma:
-#                 clean = clean.replace(".", "").replace(",", ".")
-#             else:
-#                 clean = clean.replace(",", "")
-#         else:
-#             if re.search(r",\d{2,}$", clean):
-#                 clean = clean.replace(",", ".")
-#             else:
-#                 clean = clean.replace(",", "")
-#     elif re.match(r"^\d{1,3}(\.\d{3})+$", clean):
-#         # European integer thousands: "344.791" -> "344791"
-#         clean = clean.replace(".", "")
+    return swapped_s
 
-#     try:
-#         return float(clean)
-#     except ValueError:
-#         return 0.0
+def to_float(val_str: str) -> float:
+    """Helper to safely cast the user's parse_euro_float string output into a Python float."""
+    if not val_str: 
+        return 0.0
+    swapped = parse_euro_float(val_str)
+    try:
+        # Remove the thousands comma so Python can cast to float
+        return float(swapped.replace(',', ''))
+    except ValueError:
+        return 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -750,8 +1500,8 @@ def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
                     floats = re.findall(r"(\d+[,.]?\d+)", lines[j])
                 if floats:
                     try:
-                        pure  = parse_euro_float(floats[0])
-                        inert = parse_euro_float(floats[1]) if len(floats) > 1 else 0.0
+                        pure  = to_float(floats[0])
+                        inert = to_float(floats[1]) if len(floats) > 1 else 0.0
                         if pure == 100.0:
                             pure = 99.99
                             inert = 0.01
@@ -764,22 +1514,29 @@ def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
 
     for line in lines:
         if m := re.search(r"([\d.,]+)\s*seeds?/kg", line, re.IGNORECASE):
-            sc = int(parse_euro_float(m.group(1)).replace(",", ""))
+            sc = int(to_float(m.group(1)))
             if sc > 0:
                 data["SeedCount"] = sc
             break
 
-    # Look for Date mapping properly (handling Azure OCR line splits)
+    # Look for Date mapping properly (handling Azure OCR line splits & double spaces)
     for i, line in enumerate(lines):
         if re.match(r"^Date\s*:", line, re.IGNORECASE):
             val = _read_label_value(lines, i, "Date")
             if val:
-                if m := re.search(r"([A-Za-z]+\s+\d{1,2},\s*\d{4})", val):
+                clean_val = re.sub(r"\s+", " ", val.strip())
+                if m := re.search(r"([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})", clean_val):
+                    month_str, day_str, year_str = m.groups()
                     try:
-                        dt = datetime.strptime(m.group(1), "%B %d, %Y")
+                        dt = datetime.strptime(f"{month_str} {day_str}, {year_str}", "%B %d, %Y")
                         data["GrowerGermDate"] = dt.strftime("%m/%d/%Y")
                     except ValueError:
-                        pass
+                        try:
+                            # Fallback for abbreviated months
+                            dt = datetime.strptime(f"{month_str} {day_str}, {year_str}", "%b %d, %Y")
+                            data["GrowerGermDate"] = dt.strftime("%m/%d/%Y")
+                        except ValueError:
+                            pass
             break
 
     return {lot_no: data}
@@ -829,7 +1586,7 @@ def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
 
         sc_m = re.search(r"S/C\s*:\s*([\d.,]+)", combined)
         if sc_m and "SeedCount" not in data:
-            sc = int(parse_euro_float(sc_m.group(1)).replace(",", ""))
+            sc = int(to_float(sc_m.group(1)))
             if sc > 0:
                 data["SeedCount"] = sc
 
@@ -997,7 +1754,7 @@ def _parse_customs_invoice_pages(
             if lot_no and not re.match(r"^\d{8}$", bl_strip) and not re.search(r"\b\d{11}\b", bl_strip):
                 amt_m = re.search(r"([\d.]+,\d{2})\s*$", bl_strip)
                 if amt_m:
-                    candidate = parse_euro_float(amt_m.group(1))
+                    candidate = to_float(amt_m.group(1))
                     # Avoid grabbing unit price by selecting the largest
                     if candidate > amount and candidate < 1000000 and candidate != float(lot_ea):
                         amount = candidate
@@ -1005,7 +1762,7 @@ def _parse_customs_invoice_pages(
         # --- Data Formulation ---
         if pkg_size_str:
             if ps_m := re.search(r"(?:of\s+)?([\d.,]+)\s*SDS", pkg_size_str, re.IGNORECASE):
-                pkg_size_seeds = int(parse_euro_float(ps_m.group(1)))
+                pkg_size_seeds = int(to_float(ps_m.group(1)))
 
         if lot_no and (variety or pkg_size_str):
             # Perfect description formatting with comma
@@ -1019,7 +1776,7 @@ def _parse_customs_invoice_pages(
             else:
                 total_qty = float(lot_ea)
 
-            usd_cost = round(amount / total_qty, 4) if total_qty > 0 else 0.0
+            usd_cost = round(amount / total_qty, 2) if total_qty > 0 else 0.0
             pkg_desc_str = f"{pkg_size_seeds:,} SEEDS" if pkg_size_seeds > 0 else \
                            find_best_nunhems_package_description(description, pkg_desc_list)
 
