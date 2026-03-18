@@ -527,7 +527,7 @@ def parse_euro_float(value):
   """
   Swaps all commas with dots and all dots with commas in a string representation of a float.
   Args: value: The input number, as a string or a float/int which will be converted to string.
-  Returns: The float value with swapped separators.
+  Returns: The string value with swapped separators.
   """
   # Convert the input to a string first, in case it's a float/int
   s = str(value)
@@ -540,9 +540,8 @@ def parse_euro_float(value):
 
   # Apply the translation
   swapped_s = s.translate(translation_table)
-  fvalue = float(swapped_s)
 
-  return fvalue
+  return swapped_s
 
 # def parse_euro_float(s: str) -> float:
 #     """
@@ -765,9 +764,9 @@ def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
 
     for line in lines:
         if m := re.search(r"([\d.,]+)\s*seeds?/kg", line, re.IGNORECASE):
-            sc = parse_euro_float(m.group(1))
+            sc = int(parse_euro_float(m.group(1)))
             if sc > 0:
-                data["SeedCount"] = int(sc)
+                data["SeedCount"] = sc
             break
 
     # Look for Date mapping properly (handling Azure OCR line splits)
@@ -830,9 +829,9 @@ def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
 
         sc_m = re.search(r"S/C\s*:\s*([\d.,]+)", combined)
         if sc_m and "SeedCount" not in data:
-            sc = parse_euro_float(sc_m.group(1))
+            sc = int(parse_euro_float(sc_m.group(1)))
             if sc > 0:
-                data["SeedCount"] = int(sc)
+                data["SeedCount"] = sc
 
         window_start = max(0, i - 20)
         window = lines[window_start : i]
