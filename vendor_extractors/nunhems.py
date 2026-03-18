@@ -496,6 +496,12 @@
 # vendor_extractors/nunhems.py
 """
 Nunhems / BASF invoice extractor — definitive version with DEBUG logging.
+
+KEY FIX: Azure Form Recognizer returns per-page results. Previously we were
+flattening all 1030 lines into a single "page", causing _classify_page() to
+see every keyword at once (QUALITY CERTIFICATE, CONSIGNEE, H-S CODE, etc.)
+and always pick quality_cert (first check wins). Now we preserve the page
+structure from OCR so each page gets its own correct classification.
 """
 
 import os
@@ -518,6 +524,10 @@ AZURE_KEY      = os.getenv("AZURE_KEY")
 # ─────────────────────────────────────────────────────────────────────────────
 
 def parse_euro_float(s: str) -> float:
+    """
+    Robustly parse a European or US formatted number string.
+    "5.523,00" -> 5523.0 | "344.791" -> 344791.0 | "1.841,0000" -> 1841.0
+    """
     if not s:
         return 0.0
     clean = s.strip().replace(" ", "")
@@ -536,6 +546,7 @@ def parse_euro_float(s: str) -> float:
             else:
                 clean = clean.replace(",", "")
     elif re.match(r"^\d{1,3}(\.\d{3})+$", clean):
+        # European integer thousands: "344.791" -> "344791"
         clean = clean.replace(".", "")
 
     try:
@@ -560,7 +571,48 @@ def convert_to_alpha2(country_value: str) -> str:
         return country_value
 
 
+def _extract_text_with_azure_ocr(pdf_content: bytes) -> List[List[str]]:
+    """
+    Send PDF to Azure Form Recognizer and return PER-PAGE results.
+    Returns List[List[str]] — one inner list per PDF page.
+
+    KEY FIX: Previously returned a flat List[str] (all pages merged),
+    which destroyed the page structure needed for _classify_page().
+    """
+    if not AZURE_ENDPOINT or not AZURE_KEY:
+        raise ValueError("Azure OCR credentials are not set.")
+    headers = {"Ocp-Apim-Subscription-Key": AZURE_KEY, "Content-Type": "application/pdf"}
+    response = requests.post(
+        f"{AZURE_ENDPOINT}formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31",
+        headers=headers, data=pdf_content,
+    )
+    if response.status_code != 202:
+        raise RuntimeError(f"OCR request failed: {response.text}")
+    op_url = response.headers["Operation-Location"]
+    for _ in range(30):
+        time.sleep(1.5)
+        result = requests.get(op_url, headers={"Ocp-Apim-Subscription-Key": AZURE_KEY}).json()
+        if result.get("status") == "succeeded":
+            # ── PRESERVE per-page structure ──────────────────────────────────
+            pages_out = []
+            for page in result["analyzeResult"]["pages"]:
+                page_lines = [
+                    ln.get("content", "").strip()
+                    for ln in page.get("lines", [])
+                    if ln.get("content", "").strip()
+                ]
+                pages_out.append(page_lines)
+            return pages_out
+        if result.get("status") == "failed":
+            raise RuntimeError("OCR analysis failed")
+    raise TimeoutError("OCR timed out")
+
+
 def _get_pages_with_info(pdf_bytes: bytes, filename: str = "") -> Tuple[List[List[str]], Dict]:
+    """
+    Extract text pages from a PDF, with Azure OCR fallback.
+    Returns (pages, info) where pages is List[List[str]] — one list per page.
+    """
     info = {"method": "PyMuPDF", "page_count": 0}
     pages: List[List[str]] = []
     try:
@@ -587,40 +639,23 @@ def _get_pages_with_info(pdf_bytes: bytes, filename: str = "") -> Tuple[List[Lis
 
     info["method"] = "Azure OCR"
     print(f"DEBUG [{filename}]: Sending to Azure OCR...")
-    flat_lines = _extract_text_with_azure_ocr(pdf_bytes)
-    print(f"DEBUG [{filename}]: Azure OCR returned {len(flat_lines)} lines.")
-    if flat_lines:
-        print(f"  First 5 OCR lines: {flat_lines[:5]}")
-    return [flat_lines], info
-
-
-def _extract_text_with_azure_ocr(pdf_content: bytes) -> List[str]:
-    if not AZURE_ENDPOINT or not AZURE_KEY:
-        raise ValueError("Azure OCR credentials are not set.")
-    headers = {"Ocp-Apim-Subscription-Key": AZURE_KEY, "Content-Type": "application/pdf"}
-    response = requests.post(
-        f"{AZURE_ENDPOINT}formrecognizer/documentModels/prebuilt-layout:analyze?api-version=2023-07-31",
-        headers=headers, data=pdf_content,
-    )
-    if response.status_code != 202:
-        raise RuntimeError(f"OCR request failed: {response.text}")
-    op_url = response.headers["Operation-Location"]
-    for _ in range(30):
-        time.sleep(1.5)
-        result = requests.get(op_url, headers={"Ocp-Apim-Subscription-Key": AZURE_KEY}).json()
-        if result.get("status") == "succeeded":
-            return [
-                ln.get("content", "").strip()
-                for page in result["analyzeResult"]["pages"]
-                for ln in page["lines"]
-                if ln.get("content", "").strip()
-            ]
-        if result.get("status") == "failed":
-            raise RuntimeError("OCR analysis failed")
-    raise TimeoutError("OCR timed out")
+    # Now returns List[List[str]] — per page, not flat
+    ocr_pages = _extract_text_with_azure_ocr(pdf_bytes)
+    info["page_count"] = len(ocr_pages)
+    total_lines = sum(len(p) for p in ocr_pages)
+    print(f"DEBUG [{filename}]: Azure OCR returned {len(ocr_pages)} pages, {total_lines} total lines.")
+    for pg_num, pg_lines in enumerate(ocr_pages):
+        print(f"  OCR Page {pg_num + 1}: {len(pg_lines)} lines, "
+              f"first_line={repr(pg_lines[0]) if pg_lines else '(empty)'}")
+    return ocr_pages, info
 
 
 def _read_label_value(lines: List[str], idx: int, label: str) -> Optional[str]:
+    """
+    Read value for a labelled field that may be inline or on the next line.
+      (a) PyMuPDF:  "Kind/variety: LEEK KRYPTON F1"
+      (b) Azure OCR:"Kind/variety:"  then  "LEEK KRYPTON F1" on next line
+    """
     line = lines[idx]
     after_colon = re.sub(r"^" + re.escape(label) + r"\s*:\s*", "", line, flags=re.IGNORECASE).strip()
     if after_colon:
@@ -643,6 +678,8 @@ def _classify_page(lines: List[str]) -> str:
         return "quality_cert"
     if "TEST DATE CONFIRMATION" in text:
         return "germ_letter"
+    # Require "LOT NUMBER:" (with colon) to avoid false-positive on the
+    # shipping info cover page that mentions "Packing List" as a checkbox label.
     if "PACKING LIST" in text and "LOT NUMBER:" in text:
         return "packing_list"
     if "CONSIGNEE" in text and "H-S CODE" in text:
@@ -653,11 +690,8 @@ def _classify_page(lines: List[str]) -> str:
 
 
 def _classify_page_debug(lines: List[str], page_num: int) -> str:
-    """Same as _classify_page but prints diagnostic info."""
     text = " ".join(lines).upper()
     result = _classify_page(lines)
-
-    # Show which keywords were found/missing for the key check
     checks = {
         "QUALITY CERTIFICATE": "QUALITY CERTIFICATE" in text,
         "TEST DATE CONFIRMATION": "TEST DATE CONFIRMATION" in text,
@@ -671,7 +705,6 @@ def _classify_page_debug(lines: List[str], page_num: int) -> str:
     hits = [k for k, v in checks.items() if v]
     print(f"  Page {page_num}: classified as '{result}'. Keywords found: {hits}")
     if result == "other":
-        # Print first 3 lines so we can see what's on this page
         print(f"    -> First 3 lines: {lines[:3]}")
     return result
 
@@ -768,6 +801,10 @@ def _parse_germ_letter_page(lines: List[str]) -> Dict[str, Dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
+    """
+    FIX for ProductForm bug: only capture the line immediately after "Seed Form:"
+    and reject it if it matches a treatment/label keyword.
+    """
     result: Dict[str, Dict] = {}
 
     for i, line in enumerate(lines):
@@ -784,16 +821,19 @@ def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
         lot_no = lot_m.group(1)
         data   = result.setdefault(lot_no, {})
 
+        # S/C: European integer e.g. "344.791" = 344,791 seeds
         sc_m = re.search(r"S/C\s*:\s*([\d.,]+)", combined)
         if sc_m and "SeedCount" not in data:
             sc = parse_euro_float(sc_m.group(1))
             if sc > 0:
                 data["SeedCount"] = int(sc)
 
+        # Backward window for Seed Form / Seed Size labels
         window_start = max(0, i - 20)
         window = lines[window_start : i]
 
         for j, w_line in enumerate(window):
+            # Seed Form — split-line (OCR) or inline (PyMuPDF)
             if re.match(r"^Seed\s+Form\s*:\s*$", w_line, re.IGNORECASE):
                 if j + 1 < len(window):
                     val = window[j + 1].strip()
@@ -806,6 +846,7 @@ def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
                 if val:
                     data.setdefault("SeedForm", val)
 
+            # Seed Size
             if re.match(r"^Seed\s+Size\s*:\s*$", w_line, re.IGNORECASE):
                 if j + 1 < len(window):
                     val = window[j + 1].strip()
@@ -824,19 +865,47 @@ def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_standard_invoice_header(lines: List[str]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extract VendorInvoiceNo and PO from a standard Nunhems INVOICE file.
+    Uses broad PO search across the whole document as a fallback since
+    PyMuPDF may read table columns in a different order than expected.
+    """
     invoice_no: Optional[str] = None
     po_no:      Optional[str] = None
     text = "\n".join(lines)
 
+    # Invoice Number: 9-digit number
     if m := re.search(r"Invoice\s+Number[:\s]+(\d{9})", text, re.IGNORECASE):
         invoice_no = m.group(1)
 
+    # PO: look near the "Customer P.O. Number" label first
     for i, line in enumerate(lines):
         if re.search(r"Customer\s+P\.?O\.?\s+Number", line, re.IGNORECASE):
-            search = " ".join(lines[i : i + 4])
+            search = " ".join(lines[i : i + 6])
             if m := re.search(r"\b(\d{5})\b", search):
                 po_no = f"PO-{m.group(1)}"
             break
+
+    # Fallback: "Cus. P.O." label (appears in customs/packing docs) or
+    # a standalone 5-digit number that appears right after any PO-related label
+    if not po_no:
+        for i, line in enumerate(lines):
+            if re.search(r"(Cus\.?\s*P\.?O\.?|P\.O\.\s*Number|Purchase Order)", line, re.IGNORECASE):
+                search = " ".join(lines[i : i + 4])
+                if m := re.search(r"\b(\d{5})\b", search):
+                    po_no = f"PO-{m.group(1)}"
+                    break
+
+    # Last resort: the PO number also appears in the filename for this invoice
+    # pattern: "PO_89811" in the filename — but we don't have the filename here.
+    # Instead scan for a 5-digit number that appears on its own line (table cell)
+    # near the top of the document (header area only — first 50 lines)
+    if not po_no:
+        for line in lines[:50]:
+            line_stripped = line.strip()
+            if re.match(r"^\d{5}$", line_stripped):
+                po_no = f"PO-{line_stripped}"
+                break
 
     return invoice_no, po_no
 
@@ -865,7 +934,6 @@ def _parse_customs_invoice_pages(
     print(f"\nDEBUG [customs_invoice_parser]: Total lines to parse: {len(lines)}")
     print(f"DEBUG [customs_invoice_parser]: PO found: {po_number}")
 
-    # Show all H-S Code hits so we can confirm they exist
     hs_hits = [(i, lines[i]) for i in range(len(lines)) if re.match(r"^H-S\s*Code\s*:", lines[i], re.IGNORECASE)]
     print(f"DEBUG [customs_invoice_parser]: H-S Code hits ({len(hs_hits)} found):")
     for idx, ln in hs_hits:
@@ -885,7 +953,7 @@ def _parse_customs_invoice_pages(
             i += 1
             continue
 
-        print(f"\nDEBUG [customs_invoice_parser]: --- Processing H-S block at line {i} ---")
+        print(f"\nDEBUG [customs_invoice_parser]: --- H-S block at line {i} ---")
 
         variety        = ""
         pkg_size_str   = ""
@@ -935,9 +1003,10 @@ def _parse_customs_invoice_pages(
             elif re.match(r"^[A-Z][A-Za-z ]+\s+Origin\*?\s*$", bl):
                 country = re.sub(r"\s*Origin\*?\s*$", "", bl, flags=re.IGNORECASE).strip()
                 origin = convert_to_alpha2(country)
-                print(f"  Origin line -> {repr(bl)} -> {origin}")
+                print(f"  Origin -> {repr(bl)} -> {origin}")
 
             elif lot_no and not re.match(r"^\d{8}$", bl):
+                # Amount: rightmost European number with exactly 2 decimal places
                 amt_m = re.search(r"([\d.]+,\d{2})\s*$", bl)
                 if amt_m:
                     candidate = parse_euro_float(amt_m.group(1))
@@ -970,7 +1039,7 @@ def _parse_customs_invoice_pages(
             p_data = packing_map.get(lot_no, {})
 
             print(f"  -> ITEM CREATED: {description}, qty={total_qty}, price={amount}, cost={usd_cost}")
-            print(f"     quality_linked={bool(q_data)}, germ_linked={bool(g_data)}, packing_linked={bool(p_data)}")
+            print(f"     quality={bool(q_data)}, germ={bool(g_data)}, packing={bool(p_data)}, packing_data={p_data}")
 
             items.append({
                 "VendorInvoiceNo":        None,
@@ -996,7 +1065,7 @@ def _parse_customs_invoice_pages(
                 "Inert":                  q_data.get("Inert"),
             })
         else:
-            print(f"  -> ITEM SKIPPED (missing lot_no={lot_no} or both variety+pkg empty)")
+            print(f"  -> ITEM SKIPPED (lot_no={lot_no}, variety={repr(variety)}, pkg={repr(pkg_size_str)})")
 
         i = j
 
@@ -1020,7 +1089,7 @@ def extract_nunhems_data_from_bytes(
     for fn, fb in pdf_files:
         print(f"  - {fn} ({len(fb)} bytes)")
 
-    # Step 1: Build auxiliary maps
+    # ── Step 1: Build auxiliary lookup maps ──────────────────────────────────
     print(f"\nDEBUG: === Step 1: Building auxiliary maps ===")
     quality_map: Dict[str, Dict] = {}
     germ_map:    Dict[str, Dict] = {}
@@ -1055,7 +1124,7 @@ def extract_nunhems_data_from_bytes(
     for lot, pd in packing_map.items():
         print(f"    {lot}: {pd}")
 
-    # Step 2: Find standard invoice header
+    # ── Step 2: Find vendor invoice number ───────────────────────────────────
     print(f"\nDEBUG: === Step 2: Searching for standard invoice ===")
     global_invoice_no: Optional[str] = None
     global_po_no:      Optional[str] = None
@@ -1072,7 +1141,7 @@ def extract_nunhems_data_from_bytes(
             print(f"  -> Found standard invoice: inv_no={inv_no}, po_no={po_no}")
             break
 
-    # Step 3: Extract items from customs invoice pages
+    # ── Step 3: Extract items from customs invoice pages ─────────────────────
     print(f"\nDEBUG: === Step 3: Extracting from customs invoice pages ===")
     grouped_results: Dict[str, List[Dict]] = {}
 
@@ -1086,20 +1155,16 @@ def extract_nunhems_data_from_bytes(
             if ptype == "customs_invoice":
                 customs_lines.extend(page_lines)
                 customs_page_count += 1
-                print(f"  '{filename}' page {pg_num}: classified as customs_invoice, "
-                      f"added {len(page_lines)} lines (total so far: {len(customs_lines)})")
+                print(f"  '{filename}' page {pg_num}: customs_invoice, "
+                      f"added {len(page_lines)} lines (total: {len(customs_lines)})")
 
-        print(f"  '{filename}': {customs_page_count} customs invoice pages, "
-              f"{len(customs_lines)} total lines collected")
+        print(f"  '{filename}': {customs_page_count} customs pages, "
+              f"{len(customs_lines)} total lines")
 
         if not customs_lines:
-            print(f"  -> SKIPPING '{filename}' (no customs invoice pages found)")
-            log_processing_event(
-                vendor="Nunhems",
-                filename=filename,
-                extraction_info=info,
-                po_number=global_po_no,
-            )
+            print(f"  -> SKIPPING '{filename}' (no customs invoice pages)")
+            log_processing_event(vendor="Nunhems", filename=filename,
+                                 extraction_info=info, po_number=global_po_no)
             continue
 
         items, po_number = _parse_customs_invoice_pages(
@@ -1113,12 +1178,8 @@ def extract_nunhems_data_from_bytes(
             if effective_po and not item.get("PurchaseOrder"):
                 item["PurchaseOrder"] = effective_po
 
-        log_processing_event(
-            vendor="Nunhems",
-            filename=filename,
-            extraction_info=info,
-            po_number=effective_po,
-        )
+        log_processing_event(vendor="Nunhems", filename=filename,
+                             extraction_info=info, po_number=effective_po)
 
         if items:
             grouped_results[filename] = items
@@ -1184,7 +1245,7 @@ def _process_single_nunhems_invoice(
         desc_part2 = lines[start_i + 1].strip() if start_i + 1 < len(lines) else ""
         vendor_item_description = f"{desc_part1} {desc_part2} {sds_line}".strip()
 
-        treatment  = "Untreated"
+        treatment = "Untreated"
         if "TREATED" in block_text.upper():
             treatment = "Treated"
 
@@ -1201,21 +1262,17 @@ def _process_single_nunhems_invoice(
                 continue
             vendor_lot = lot_match.group(1)
             lot_qty    = int(float(lot_match.group(2).replace(",", "")))
-
             origin_country = None
             if origin_match := re.search(r"\|\s*([A-Za-z\s]+?)\s+ORIGIN", l_line, re.IGNORECASE):
                 origin_country = convert_to_alpha2(origin_match.group(1))
-
             quality_info = quality_map.get(vendor_lot, {})
             germ_info    = germ_map.get(vendor_lot, {})
             packing_info = packing_map.get(vendor_lot, {})
             package_desc = find_best_nunhems_package_description(packaging_context_str, pkg_desc_list)
             calculated_cost = unit_price / lot_qty if lot_qty else 0.0
-
             seed_size = packing_info.get("SeedSize")
             if seed_size:
                 seed_size = seed_size.replace(",", ".")
-
             items.append({
                 "VendorInvoiceNo":        vendor_invoice_no,
                 "PurchaseOrder":          po_number,
