@@ -732,8 +732,9 @@ def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
                     try:
                         pure  = parse_euro_float(floats[0])
                         inert = parse_euro_float(floats[1]) if len(floats) > 1 else 0.0
-                        if pure >= 99.99:
-                            pure, inert = 99.99, 0.01
+                        if pure == 100.0:
+                            pure = 99.99
+                            inert = 0.01
                         data["Purity"] = pure
                         data["Inert"]  = inert
                     except (ValueError, IndexError):
@@ -748,13 +749,18 @@ def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
                 data["SeedCount"] = int(sc)
             break
 
-    for line in lines:
-        if m := re.match(r"Date:\s*([A-Za-z]+\s+\d{1,2},\s*\d{4})", line):
-            try:
-                dt = datetime.strptime(m.group(1), "%B %d, %Y")
-                data["GrowerGermDate"] = dt.strftime("%m/%d/%Y")
-            except ValueError:
-                pass
+    # Look for Date mapping properly (handling Azure OCR line splits)
+    for i, line in enumerate(lines):
+        if re.match(r"^Date\s*:", line, re.IGNORECASE):
+            val = _read_label_value(lines, i, "Date")
+            if val:
+                if m := re.search(r"([A-Za-z]+\s+\d{1,2},\s*\d{4})", val):
+                    try:
+                        dt = datetime.strptime(m.group(1), "%B %d, %Y")
+                        data["GrowerGermDate"] = dt.strftime("%m/%d/%Y")
+                    except ValueError:
+                        pass
+            break
 
     return {lot_no: data}
 
@@ -904,8 +910,8 @@ def _parse_customs_invoice_pages(
     for idx, i in enumerate(hs_hits):
         print(f"\nDEBUG [customs_invoice_parser]: --- H-S block at line {i} ---")
         
-        # Isolate the block lines until the next H-S Code (or max 35 lines)
-        end_i = hs_hits[idx+1] if idx + 1 < len(hs_hits) else min(i + 35, n)
+        # Isolate the block lines until the next H-S Code
+        end_i = hs_hits[idx+1] if idx + 1 < len(hs_hits) else min(i + 50, n)
         block_lines = lines[i:end_i]
 
         variety        = ""
@@ -925,10 +931,14 @@ def _parse_customs_invoice_pages(
                 val = _read_label_value(block_lines, j, "Kind/variety")
                 if val: variety = val.strip()
 
-            # --- Package Size (Scan anywhere for 'SDS' or 'SEEDS') ---
-            if "SDS" in bl_strip.upper() or "SEEDS" in bl_strip.upper():
-                # Avoid picking up lines that are explicitly another label
-                if not re.match(r"^(Kind/variety|Lot Number|H-S Code)", bl_strip, re.IGNORECASE):
+            # --- Package Size (with lock to prevent overwriting) ---
+            if re.match(r"^Package\s+Size\s*:", bl_strip, re.IGNORECASE):
+                val = _read_label_value(block_lines, j, "Package Size")
+                if val:
+                    pkg_size_str = val.strip()
+            elif not pkg_size_str and ("SDS" in bl_strip.upper() or "SEEDS" in bl_strip.upper()):
+                # Only lock in if it has numbers (a real size) and isn't a company name
+                if re.search(r"\d", bl_strip) and not re.match(r"^(Kind/variety|Lot Number|H-S Code)", bl_strip, re.IGNORECASE):
                     pkg_size_str = bl_strip
 
             # --- Treated With ---
@@ -968,6 +978,7 @@ def _parse_customs_invoice_pages(
                 amt_m = re.search(r"([\d.]+,\d{2})\s*$", bl_strip)
                 if amt_m:
                     candidate = parse_euro_float(amt_m.group(1))
+                    # Avoid grabbing unit price by selecting the largest
                     if candidate > amount and candidate < 1000000 and candidate != float(lot_ea):
                         amount = candidate
 
@@ -988,7 +999,7 @@ def _parse_customs_invoice_pages(
             else:
                 total_qty = float(lot_ea)
 
-            usd_cost = round(amount / total_qty, 2) if total_qty > 0 else 0.0
+            usd_cost = round(amount / total_qty, 4) if total_qty > 0 else 0.0
             pkg_desc_str = f"{pkg_size_seeds:,} SEEDS" if pkg_size_seeds > 0 else \
                            find_best_nunhems_package_description(description, pkg_desc_list)
 
