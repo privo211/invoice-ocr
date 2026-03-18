@@ -287,6 +287,8 @@ def find_best_bc_item_match(vendor_desc: str, bc_options: list[dict], vendor: st
         threshold = 40  # Lowered threshold to work with Cap Bonus
     if vendor == "seminis":
         threshold = 50
+    if vendor == "nunhems":
+        threshold = 50
     
     if best_score >= threshold:
         return best_match_no

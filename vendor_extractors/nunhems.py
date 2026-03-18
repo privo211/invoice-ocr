@@ -730,8 +730,8 @@ def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
                     floats = re.findall(r"(\d+[,.]?\d+)", lines[j])
                 if floats:
                     try:
-                        pure  = parse_euro_float(floats[0])
-                        inert = parse_euro_float(floats[1]) if len(floats) > 1 else 0.0
+                        pure  = floats[0]
+                        inert = floats[1] if len(floats) > 1 else 0.0
                         if pure == 100.0:
                             pure = 99.99
                             inert = 0.01
