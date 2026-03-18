@@ -575,9 +575,6 @@ def _extract_text_with_azure_ocr(pdf_content: bytes) -> List[List[str]]:
     """
     Send PDF to Azure Form Recognizer and return PER-PAGE results.
     Returns List[List[str]] — one inner list per PDF page.
-
-    KEY FIX: Previously returned a flat List[str] (all pages merged),
-    which destroyed the page structure needed for _classify_page().
     """
     if not AZURE_ENDPOINT or not AZURE_KEY:
         raise ValueError("Azure OCR credentials are not set.")
@@ -593,7 +590,6 @@ def _extract_text_with_azure_ocr(pdf_content: bytes) -> List[List[str]]:
         time.sleep(1.5)
         result = requests.get(op_url, headers={"Ocp-Apim-Subscription-Key": AZURE_KEY}).json()
         if result.get("status") == "succeeded":
-            # ── PRESERVE per-page structure ──────────────────────────────────
             pages_out = []
             for page in result["analyzeResult"]["pages"]:
                 page_lines = [
@@ -609,10 +605,6 @@ def _extract_text_with_azure_ocr(pdf_content: bytes) -> List[List[str]]:
 
 
 def _get_pages_with_info(pdf_bytes: bytes, filename: str = "") -> Tuple[List[List[str]], Dict]:
-    """
-    Extract text pages from a PDF, with Azure OCR fallback.
-    Returns (pages, info) where pages is List[List[str]] — one list per page.
-    """
     info = {"method": "PyMuPDF", "page_count": 0}
     pages: List[List[str]] = []
     try:
@@ -639,7 +631,6 @@ def _get_pages_with_info(pdf_bytes: bytes, filename: str = "") -> Tuple[List[Lis
 
     info["method"] = "Azure OCR"
     print(f"DEBUG [{filename}]: Sending to Azure OCR...")
-    # Now returns List[List[str]] — per page, not flat
     ocr_pages = _extract_text_with_azure_ocr(pdf_bytes)
     info["page_count"] = len(ocr_pages)
     total_lines = sum(len(p) for p in ocr_pages)
@@ -651,11 +642,6 @@ def _get_pages_with_info(pdf_bytes: bytes, filename: str = "") -> Tuple[List[Lis
 
 
 def _read_label_value(lines: List[str], idx: int, label: str) -> Optional[str]:
-    """
-    Read value for a labelled field that may be inline or on the next line.
-      (a) PyMuPDF:  "Kind/variety: LEEK KRYPTON F1"
-      (b) Azure OCR:"Kind/variety:"  then  "LEEK KRYPTON F1" on next line
-    """
     line = lines[idx]
     after_colon = re.sub(r"^" + re.escape(label) + r"\s*:\s*", "", line, flags=re.IGNORECASE).strip()
     if after_colon:
@@ -678,8 +664,6 @@ def _classify_page(lines: List[str]) -> str:
         return "quality_cert"
     if "TEST DATE CONFIRMATION" in text:
         return "germ_letter"
-    # Require "LOT NUMBER:" (with colon) to avoid false-positive on the
-    # shipping info cover page that mentions "Packing List" as a checkbox label.
     if "PACKING LIST" in text and "LOT NUMBER:" in text:
         return "packing_list"
     if "CONSIGNEE" in text and "H-S CODE" in text:
@@ -801,10 +785,6 @@ def _parse_germ_letter_page(lines: List[str]) -> Dict[str, Dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
-    """
-    FIX for ProductForm bug: only capture the line immediately after "Seed Form:"
-    and reject it if it matches a treatment/label keyword.
-    """
     result: Dict[str, Dict] = {}
 
     for i, line in enumerate(lines):
@@ -821,32 +801,26 @@ def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
         lot_no = lot_m.group(1)
         data   = result.setdefault(lot_no, {})
 
-        # S/C: European integer e.g. "344.791" = 344,791 seeds
         sc_m = re.search(r"S/C\s*:\s*([\d.,]+)", combined)
         if sc_m and "SeedCount" not in data:
             sc = parse_euro_float(sc_m.group(1))
             if sc > 0:
                 data["SeedCount"] = int(sc)
 
-        # Backward window for Seed Form / Seed Size labels
         window_start = max(0, i - 20)
         window = lines[window_start : i]
 
         for j, w_line in enumerate(window):
-            # Seed Form — split-line (OCR) or inline (PyMuPDF)
             if re.match(r"^Seed\s+Form\s*:\s*$", w_line, re.IGNORECASE):
                 if j + 1 < len(window):
                     val = window[j + 1].strip()
-                    if val and not re.match(
-                        r"^(Seed\s+(Size|Form|Count)|Treated|Order|Customer)", val, re.IGNORECASE
-                    ):
+                    if val and not re.match(r"^(Seed\s+(Size|Form|Count)|Treated|Order|Customer)", val, re.IGNORECASE):
                         data.setdefault("SeedForm", val)
             elif re.match(r"^Seed\s+Form:\s+\S+", w_line, re.IGNORECASE):
                 val = re.sub(r"^Seed\s+Form:\s*", "", w_line, flags=re.IGNORECASE).strip()
                 if val:
                     data.setdefault("SeedForm", val)
 
-            # Seed Size
             if re.match(r"^Seed\s+Size\s*:\s*$", w_line, re.IGNORECASE):
                 if j + 1 < len(window):
                     val = window[j + 1].strip()
@@ -865,20 +839,13 @@ def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_standard_invoice_header(lines: List[str]) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Extract VendorInvoiceNo and PO from a standard Nunhems INVOICE file.
-    Uses broad PO search across the whole document as a fallback since
-    PyMuPDF may read table columns in a different order than expected.
-    """
     invoice_no: Optional[str] = None
     po_no:      Optional[str] = None
     text = "\n".join(lines)
 
-    # Invoice Number: 9-digit number
     if m := re.search(r"Invoice\s+Number[:\s]+(\d{9})", text, re.IGNORECASE):
         invoice_no = m.group(1)
 
-    # PO: look near the "Customer P.O. Number" label first
     for i, line in enumerate(lines):
         if re.search(r"Customer\s+P\.?O\.?\s+Number", line, re.IGNORECASE):
             search = " ".join(lines[i : i + 6])
@@ -886,8 +853,6 @@ def _parse_standard_invoice_header(lines: List[str]) -> Tuple[Optional[str], Opt
                 po_no = f"PO-{m.group(1)}"
             break
 
-    # Fallback: "Cus. P.O." label (appears in customs/packing docs) or
-    # a standalone 5-digit number that appears right after any PO-related label
     if not po_no:
         for i, line in enumerate(lines):
             if re.search(r"(Cus\.?\s*P\.?O\.?|P\.O\.\s*Number|Purchase Order)", line, re.IGNORECASE):
@@ -896,10 +861,6 @@ def _parse_standard_invoice_header(lines: List[str]) -> Tuple[Optional[str], Opt
                     po_no = f"PO-{m.group(1)}"
                     break
 
-    # Last resort: the PO number also appears in the filename for this invoice
-    # pattern: "PO_89811" in the filename — but we don't have the filename here.
-    # Instead scan for a 5-digit number that appears on its own line (table cell)
-    # near the top of the document (header area only — first 50 lines)
     if not po_no:
         for line in lines[:50]:
             line_stripped = line.strip()
@@ -934,26 +895,18 @@ def _parse_customs_invoice_pages(
     print(f"\nDEBUG [customs_invoice_parser]: Total lines to parse: {len(lines)}")
     print(f"DEBUG [customs_invoice_parser]: PO found: {po_number}")
 
-    hs_hits = [(i, lines[i]) for i in range(len(lines)) if re.match(r"^H-S\s*Code\s*:", lines[i], re.IGNORECASE)]
+    hs_hits = [i for i, ln in enumerate(lines) if re.match(r"^H-S\s*Code\s*:", ln, re.IGNORECASE)]
     print(f"DEBUG [customs_invoice_parser]: H-S Code hits ({len(hs_hits)} found):")
-    for idx, ln in hs_hits:
-        print(f"  Line {idx}: {repr(ln)}")
-
-    if not hs_hits:
-        print("DEBUG [customs_invoice_parser]: *** NO H-S Code blocks found! Dumping first 40 lines: ***")
-        for idx, ln in enumerate(lines[:40]):
-            print(f"  [{idx}] {repr(ln)}")
 
     items: List[Dict] = []
     n = len(lines)
-    i = 0
 
-    while i < n:
-        if not re.match(r"^H-S\s*Code\s*:", lines[i], re.IGNORECASE):
-            i += 1
-            continue
-
+    for idx, i in enumerate(hs_hits):
         print(f"\nDEBUG [customs_invoice_parser]: --- H-S block at line {i} ---")
+        
+        # Isolate the block lines until the next H-S Code (or max 35 lines)
+        end_i = hs_hits[idx+1] if idx + 1 < len(hs_hits) else min(i + 35, n)
+        block_lines = lines[i:end_i]
 
         variety        = ""
         pkg_size_str   = ""
@@ -964,62 +917,67 @@ def _parse_customs_invoice_pages(
         origin         = ""
         amount         = 0.0
 
-        j = i + 1
-        while j < min(i + 35, n):
-            bl = lines[j].strip()
+        for j, bl in enumerate(block_lines):
+            bl_strip = bl.strip()
+            
+            # --- Kind / Variety ---
+            if re.match(r"^Kind/variety\s*:", bl_strip, re.IGNORECASE):
+                val = _read_label_value(block_lines, j, "Kind/variety")
+                if val: variety = val.strip()
 
-            if re.match(r"^H-S\s*Code\s*:", bl, re.IGNORECASE):
-                break
+            # --- Package Size (Scan anywhere for 'SDS' or 'SEEDS') ---
+            if "SDS" in bl_strip.upper() or "SEEDS" in bl_strip.upper():
+                # Avoid picking up lines that are explicitly another label
+                if not re.match(r"^(Kind/variety|Lot Number|H-S Code)", bl_strip, re.IGNORECASE):
+                    pkg_size_str = bl_strip
 
-            if re.match(r"^Kind/variety\s*:", bl, re.IGNORECASE):
-                val = _read_label_value(lines, j, "Kind/variety")
+            # --- Treated With ---
+            if re.match(r"^Treated\s+With\s*:", bl_strip, re.IGNORECASE):
+                val = _read_label_value(block_lines, j, "Treated With")
                 if val:
-                    variety = val.strip()
-                print(f"  Kind/variety -> {repr(variety)}")
+                    t_val = val.strip().capitalize()
+                    if t_val.upper() == "UNTREATED": treatment = "Untreated"
+                    elif t_val.upper() == "TREATED": treatment = "Treated"
 
-            elif re.match(r"^Package\s+Size\s*:", bl, re.IGNORECASE):
-                val = _read_label_value(lines, j, "Package Size")
-                if val:
-                    pkg_size_str = val.strip()
-                    if ps_m := re.search(r"(?:of\s+)?([\d.,]+)\s*SDS", pkg_size_str, re.IGNORECASE):
-                        pkg_size_seeds = int(parse_euro_float(ps_m.group(1)))
-                print(f"  Package Size -> {repr(pkg_size_str)} -> seeds={pkg_size_seeds}")
-
-            elif re.match(r"^Treated\s+With\s*:", bl, re.IGNORECASE):
-                val = _read_label_value(lines, j, "Treated With")
-                if val:
-                    treatment = val.strip()
-                print(f"  Treated With -> {repr(treatment)}")
-
-            elif re.match(r"^Lot\s+Number\s*:", bl, re.IGNORECASE):
-                val = _read_label_value(lines, j, "Lot Number")
+            # --- Lot Number ---
+            if re.match(r"^Lot\s+Number\s*:", bl_strip, re.IGNORECASE):
+                val = _read_label_value(block_lines, j, "Lot Number")
                 if val:
                     if lot_m := re.search(r"\b(\d{11})\b", val):
                         lot_no = lot_m.group(1)
-                    if ea_m := re.search(r"\b(\d+)\s*EA\b", val):
+                    if ea_m := re.search(r"\b(\d+)\s*EA\b", val, re.IGNORECASE):
                         lot_ea = int(ea_m.group(1))
-                print(f"  Lot Number -> {repr(val)} -> lot={lot_no}, ea={lot_ea}")
 
-            elif re.match(r"^[A-Z][A-Za-z ]+\s+Origin\*?\s*$", bl):
-                country = re.sub(r"\s*Origin\*?\s*$", "", bl, flags=re.IGNORECASE).strip()
+            # --- Origin ---
+            if re.match(r"^[A-Z][A-Za-z ]+\s+Origin\*?\s*$", bl_strip):
+                country = re.sub(r"\s*Origin\*?\s*$", "", bl_strip, flags=re.IGNORECASE).strip()
                 origin = convert_to_alpha2(country)
-                print(f"  Origin -> {repr(bl)} -> {origin}")
 
-            elif lot_no and not re.match(r"^\d{8}$", bl):
-                # Amount: rightmost European number with exactly 2 decimal places
-                amt_m = re.search(r"([\d.]+,\d{2})\s*$", bl)
+        # Secondary pass for Quantity (EA) and Amount (Price)
+        for bl in block_lines:
+            bl_strip = bl.strip()
+            
+            # If Lot line missed the EA quantity, check elsewhere in block
+            if not lot_ea:
+                if ea_m := re.search(r"\b(\d+)\s*EA\b", bl_strip, re.IGNORECASE):
+                    lot_ea = int(ea_m.group(1))
+
+            # Find Amount: Highest European number with exactly 2 decimal places
+            # Ignore 8-digit H-S codes or 11-digit lot numbers
+            if lot_no and not re.match(r"^\d{8}$", bl_strip) and not re.search(r"\b\d{11}\b", bl_strip):
+                amt_m = re.search(r"([\d.]+,\d{2})\s*$", bl_strip)
                 if amt_m:
                     candidate = parse_euro_float(amt_m.group(1))
-                    if candidate > amount:
+                    if candidate > amount and candidate < 1000000 and candidate != float(lot_ea):
                         amount = candidate
-                        print(f"  Amount candidate -> {repr(amt_m.group(1))} -> {candidate}")
 
-            j += 1
-
-        print(f"  RESULT: lot={lot_no}, variety={repr(variety)}, seeds={pkg_size_seeds}, "
-              f"ea={lot_ea}, amount={amount}, origin={origin}")
+        # --- Data Formulation ---
+        if pkg_size_str:
+            if ps_m := re.search(r"(?:of\s+)?([\d.,]+)\s*SDS", pkg_size_str, re.IGNORECASE):
+                pkg_size_seeds = int(parse_euro_float(ps_m.group(1)))
 
         if lot_no and (variety or pkg_size_str):
+            # Perfect description formatting with comma
             if pkg_size_seeds > 0:
                 description = f"{variety.upper()} {pkg_size_seeds:,} SDS".strip()
             else:
@@ -1030,7 +988,7 @@ def _parse_customs_invoice_pages(
             else:
                 total_qty = float(lot_ea)
 
-            usd_cost     = round(amount / total_qty, 4) if total_qty > 0 else 0.0
+            usd_cost = round(amount / total_qty, 2) if total_qty > 0 else 0.0
             pkg_desc_str = f"{pkg_size_seeds:,} SEEDS" if pkg_size_seeds > 0 else \
                            find_best_nunhems_package_description(description, pkg_desc_list)
 
@@ -1038,8 +996,12 @@ def _parse_customs_invoice_pages(
             g_data = germ_map.get(lot_no, {})
             p_data = packing_map.get(lot_no, {})
 
+            # Format seed size to have decimal dot instead of comma
+            seed_size = p_data.get("SeedSize")
+            if seed_size:
+                seed_size = seed_size.replace(",", ".")
+
             print(f"  -> ITEM CREATED: {description}, qty={total_qty}, price={amount}, cost={usd_cost}")
-            print(f"     quality={bool(q_data)}, germ={bool(g_data)}, packing={bool(p_data)}, packing_data={p_data}")
 
             items.append({
                 "VendorInvoiceNo":        None,
@@ -1052,22 +1014,18 @@ def _parse_customs_invoice_pages(
                 "TreatmentsDescription2": "",
                 "TotalQuantity":          total_qty,
                 "TotalPrice":             amount,
-                "USD_Actual_Cost_$":      f"{usd_cost:.4f}",
+                "USD_Actual_Cost_$":      f"{usd_cost:.2f}",
                 "PackageDescription":     pkg_desc_str,
                 "Germ":                   g_data.get("Germ"),
                 "GermDate":               g_data.get("GermDate"),
                 "SeedCount":              p_data.get("SeedCount"),
                 "SeedForm":               p_data.get("SeedForm"),
-                "SeedSize":               p_data.get("SeedSize"),
+                "SeedSize":               seed_size,
                 "GrowerGerm":             q_data.get("GrowerGerm"),
                 "GrowerGermDate":         q_data.get("GrowerGermDate"),
                 "Purity":                 q_data.get("Purity"),
                 "Inert":                  q_data.get("Inert"),
             })
-        else:
-            print(f"  -> ITEM SKIPPED (lot_no={lot_no}, variety={repr(variety)}, pkg={repr(pkg_size_str)})")
-
-        i = j
 
     print(f"\nDEBUG [customs_invoice_parser]: Extracted {len(items)} items total.")
     return items, po_number
@@ -1086,8 +1044,6 @@ def extract_nunhems_data_from_bytes(
 
     print(f"\n{'='*60}")
     print(f"DEBUG: extract_nunhems_data_from_bytes called with {len(pdf_files)} file(s):")
-    for fn, fb in pdf_files:
-        print(f"  - {fn} ({len(fb)} bytes)")
 
     # ── Step 1: Build auxiliary lookup maps ──────────────────────────────────
     print(f"\nDEBUG: === Step 1: Building auxiliary maps ===")
@@ -1096,18 +1052,15 @@ def extract_nunhems_data_from_bytes(
     packing_map: Dict[str, Dict] = {}
 
     for filename, pdf_bytes in pdf_files:
-        print(f"\nDEBUG: Classifying pages in '{filename}':")
         pages, _ = _get_pages_with_info(pdf_bytes, filename)
         for pg_num, page_lines in enumerate(pages, 1):
             ptype = _classify_page_debug(page_lines, pg_num)
             if ptype == "quality_cert":
                 result = _parse_quality_cert_page(page_lines)
                 quality_map.update(result)
-                print(f"    -> quality_cert: lots found = {list(result.keys())}")
             elif ptype == "germ_letter":
                 result = _parse_germ_letter_page(page_lines)
                 germ_map.update(result)
-                print(f"    -> germ_letter: lots found = {list(result.keys())}")
             elif ptype == "packing_list":
                 result = _parse_packing_list_page(page_lines)
                 for lot, lot_data in result.items():
@@ -1115,14 +1068,6 @@ def extract_nunhems_data_from_bytes(
                     for k, v in lot_data.items():
                         if v and k not in existing:
                             existing[k] = v
-                print(f"    -> packing_list: lots found = {list(result.keys())}")
-
-    print(f"\nDEBUG: Auxiliary maps built:")
-    print(f"  quality_map lots : {list(quality_map.keys())}")
-    print(f"  germ_map lots    : {list(germ_map.keys())}")
-    print(f"  packing_map lots : {list(packing_map.keys())}")
-    for lot, pd in packing_map.items():
-        print(f"    {lot}: {pd}")
 
     # ── Step 2: Find vendor invoice number ───────────────────────────────────
     print(f"\nDEBUG: === Step 2: Searching for standard invoice ===")
@@ -1132,7 +1077,6 @@ def extract_nunhems_data_from_bytes(
     for filename, pdf_bytes in pdf_files:
         pages, _ = _get_pages_with_info(pdf_bytes, filename)
         page_types = [_classify_page(p) for p in pages]
-        print(f"  '{filename}': page types = {page_types}")
         if "standard_invoice" in page_types:
             flat = [l for p in pages for l in p]
             inv_no, po_no = _parse_standard_invoice_header(flat)
@@ -1149,22 +1093,13 @@ def extract_nunhems_data_from_bytes(
         pages, info = _get_pages_with_info(pdf_bytes, filename)
 
         customs_lines: List[str] = []
-        customs_page_count = 0
         for pg_num, page_lines in enumerate(pages, 1):
             ptype = _classify_page(page_lines)
             if ptype == "customs_invoice":
                 customs_lines.extend(page_lines)
-                customs_page_count += 1
-                print(f"  '{filename}' page {pg_num}: customs_invoice, "
-                      f"added {len(page_lines)} lines (total: {len(customs_lines)})")
-
-        print(f"  '{filename}': {customs_page_count} customs pages, "
-              f"{len(customs_lines)} total lines")
 
         if not customs_lines:
-            print(f"  -> SKIPPING '{filename}' (no customs invoice pages)")
-            log_processing_event(vendor="Nunhems", filename=filename,
-                                 extraction_info=info, po_number=global_po_no)
+            log_processing_event(vendor="Nunhems", filename=filename, extraction_info=info, po_number=global_po_no)
             continue
 
         items, po_number = _parse_customs_invoice_pages(
@@ -1178,14 +1113,10 @@ def extract_nunhems_data_from_bytes(
             if effective_po and not item.get("PurchaseOrder"):
                 item["PurchaseOrder"] = effective_po
 
-        log_processing_event(vendor="Nunhems", filename=filename,
-                             extraction_info=info, po_number=effective_po)
+        log_processing_event(vendor="Nunhems", filename=filename, extraction_info=info, po_number=effective_po)
 
         if items:
             grouped_results[filename] = items
-            print(f"  -> '{filename}': {len(items)} items stored.")
-        else:
-            print(f"  -> '{filename}': customs lines found but 0 items extracted!")
 
     print(f"\nDEBUG: === Final result: {len(grouped_results)} file(s) with data ===")
     print(f"{'='*60}\n")
