@@ -1,4 +1,3 @@
-# vendor_extractors/nunhems.py
 import math
 import os
 import re
