@@ -523,36 +523,60 @@ AZURE_KEY      = os.getenv("AZURE_KEY")
 # EUROPEAN NUMBER PARSING
 # ─────────────────────────────────────────────────────────────────────────────
 
-def parse_euro_float(s: str) -> float:
-    """
-    Robustly parse a European or US formatted number string.
-    "5.523,00" -> 5523.0 | "344.791" -> 344791.0 | "1.841,0000" -> 1841.0
-    """
-    if not s:
-        return 0.0
-    clean = s.strip().replace(" ", "")
+def parse_euro_float(value):
+  """
+  Swaps all commas with dots and all dots with commas in a string representation of a float.
 
-    if "," in clean:
-        if "." in clean:
-            last_dot   = clean.rfind(".")
-            last_comma = clean.rfind(",")
-            if last_dot < last_comma:
-                clean = clean.replace(".", "").replace(",", ".")
-            else:
-                clean = clean.replace(",", "")
-        else:
-            if re.search(r",\d{2,}$", clean):
-                clean = clean.replace(",", ".")
-            else:
-                clean = clean.replace(",", "")
-    elif re.match(r"^\d{1,3}(\.\d{3})+$", clean):
-        # European integer thousands: "344.791" -> "344791"
-        clean = clean.replace(".", "")
+  Args:
+    value: The input number, as a string or a float/int which will be converted to string.
 
-    try:
-        return float(clean)
-    except ValueError:
-        return 0.0
+  Returns:
+    The string with swapped separators.
+  """
+  # Convert the input to a string first, in case it's a float/int
+  s = str(value)
+
+  # Create a translation table:
+  # ord(',') maps comma to dot
+  # ord('.') maps dot to comma
+  # This mapping is done simultaneously
+  translation_table = str.maketrans(',.', '.,')
+
+  # Apply the translation
+  swapped_s = s.translate(translation_table)
+
+  return swapped_s
+
+# def parse_euro_float(s: str) -> float:
+#     """
+#     Robustly parse a European or US formatted number string.
+#     "5.523,00" -> 5523.0 | "344.791" -> 344791.0 | "1.841,0000" -> 1841.0
+#     """
+#     if not s:
+#         return 0.0
+#     clean = s.strip().replace(" ", "")
+
+#     if "," in clean:
+#         if "." in clean:
+#             last_dot   = clean.rfind(".")
+#             last_comma = clean.rfind(",")
+#             if last_dot < last_comma:
+#                 clean = clean.replace(".", "").replace(",", ".")
+#             else:
+#                 clean = clean.replace(",", "")
+#         else:
+#             if re.search(r",\d{2,}$", clean):
+#                 clean = clean.replace(",", ".")
+#             else:
+#                 clean = clean.replace(",", "")
+#     elif re.match(r"^\d{1,3}(\.\d{3})+$", clean):
+#         # European integer thousands: "344.791" -> "344791"
+#         clean = clean.replace(".", "")
+
+#     try:
+#         return float(clean)
+#     except ValueError:
+#         return 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -730,8 +754,8 @@ def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
                     floats = re.findall(r"(\d+[,.]?\d+)", lines[j])
                 if floats:
                     try:
-                        pure  = floats[0]
-                        inert = floats[1] if len(floats) > 1 else 0.0
+                        pure  = parse_euro_float(floats[0])
+                        inert = parse_euro_float(floats[1]) if len(floats) > 1 else 0.0
                         if pure == 100.0:
                             pure = 99.99
                             inert = 0.01
