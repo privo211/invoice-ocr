@@ -359,7 +359,7 @@
                   <dt class="col-sm-4">Vendor Lot No.</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="VendorLotNo" contenteditable="true">
-                      {{ item.VendorLotNo or '' }}
+                      {{ item.VendorLot or '' }}
                     </div>
                   </dd>
                   
