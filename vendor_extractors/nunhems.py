@@ -764,7 +764,7 @@ def _parse_quality_cert_page(lines: List[str]) -> Dict[str, Dict]:
 
     for line in lines:
         if m := re.search(r"([\d.,]+)\s*seeds?/kg", line, re.IGNORECASE):
-            sc = int(parse_euro_float(m.group(1)))
+            sc = int(parse_euro_float(sc_m.group(1).replace(",", "")))
             if sc > 0:
                 data["SeedCount"] = sc
             break
@@ -829,7 +829,7 @@ def _parse_packing_list_page(lines: List[str]) -> Dict[str, Dict]:
 
         sc_m = re.search(r"S/C\s*:\s*([\d.,]+)", combined)
         if sc_m and "SeedCount" not in data:
-            sc = int(parse_euro_float(sc_m.group(1)))
+            sc = int(parse_euro_float(sc_m.group(1).replace(",", "")))
             if sc > 0:
                 data["SeedCount"] = sc
 
