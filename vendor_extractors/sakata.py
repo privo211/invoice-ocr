@@ -1365,6 +1365,7 @@ def extract_seed_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]])
                     full_text += t + "\n"
                 # ── END FIX 3 ──────────────────────────────────────────────────────────
             doc.close()
+            print(f"DEBUG: Extracted text from {fname} for analysis report parsing:\n{full_text}")
 
             if not full_text:
                 continue
