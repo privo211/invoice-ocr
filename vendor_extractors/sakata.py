@@ -1268,6 +1268,8 @@ def parse_lot_block(raw_text: str) -> Dict:
     Parse the raw text block of a single lot into structured fields.
     """
     parts = raw_text.replace(",", "").split("\n")
+    print(f"DEBUG: Extracted raw_text:\n{raw_text}")
+    print(f"DEBUG: Split into parts:\n{parts}")
     try:
         lot_no = parts[0].strip()
         
@@ -1339,6 +1341,7 @@ def parse_lot_block(raw_text: str) -> Dict:
             "SproutCount": sprout, "Inert": None
         }
     except Exception as e:
+        print(f"DEBUG: Error occurred while parsing lot block:\n{raw_text}")
         return {"error": str(e), "raw": raw_text}
 
 @timed_func("extract_seed_analysis_reports_from_bytes")
@@ -1365,7 +1368,6 @@ def extract_seed_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]])
                     full_text += t + "\n"
                 # ── END FIX 3 ──────────────────────────────────────────────────────────
             doc.close()
-            print(f"DEBUG: Extracted text from {fname} for analysis report parsing:\n{full_text}")
 
             if not full_text:
                 continue
