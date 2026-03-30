@@ -39,9 +39,9 @@ def timed_func(label: str):
     return decorator
 
 class PurityData(TypedDict):
-    Purity: Union[float, str]
-    Inert: Union[float, str]
-    GrowerGerm: Union[float, None]
+    Purity: Union[float, str, None]
+    Inert: Union[float, str, None]
+    GrowerGerm: Union[int, float, None]
     GrowerGermDate: Union[str, None]
 
 # ── OCR HELPERS ────────────────────────────────────────────────────────────────
@@ -79,38 +79,40 @@ def _extract_text_with_azure_ocr(pdf_content: bytes) -> str:
     raise TimeoutError("Azure OCR timed out.")
 
 def _parse_ocr_lot_line(line: str) -> Dict:
-    """Robust parser for flattened OCR lot strings (ignores newlines)."""
+    """Robust parser for flattened OCR lot strings using targeted regex to prevent column shifting."""
     lot = {
         "VendorLotNo": None, "CurrentGerm": None, "GermDate": None,
         "SeedCount": None, "SeedSize": None, "GrowerGerm": None,
         "GrowerGermDate": None, "Purity": None, "OriginCountry": "",
         "SproutCount": None, "Inert": None
     }
-    tokens = line.replace(",", "").split()
-    if not tokens: return lot
 
-    lot["VendorLotNo"] = tokens[0]
+    lot_m = re.search(r"^(\d{6}-[\d-]+)", line.strip())
+    if lot_m: lot["VendorLotNo"] = lot_m.group(1)
 
-    for i, tok in enumerate(tokens[1:], start=1):
-        if re.match(r"^\d{1,2}/\d{1,2}/\d{4}$", tok):
-            lot["GermDate"] = tok
-        elif re.match(r"^\d{2}\.\d{2}$", tok):
-            val = float(tok)
-            if val >= 50: lot["Purity"] = val
-        elif re.match(r"^[A-Z]{2,3}$", tok, re.IGNORECASE) and i > len(tokens) - 4:
-            lot["OriginCountry"] = convert_to_alpha2(tok.upper())
+    # Date
+    date_m = re.search(r"\b(\d{1,2}/\d{1,2}/\d{4})\b", line)
+    if date_m:
+        lot["GermDate"] = date_m.group(1)
+        # Germ is usually the 2 digits right before the date
+        before_date = line[:date_m.start()]
+        germ_m = re.findall(r"\b(\d{2})\b", before_date)
+        if germ_m: lot["CurrentGerm"] = int(germ_m[-1])
 
-    # Map remaining values based on position relative to the date
-    date_idx = next((i for i, t in enumerate(tokens) if re.match(r"^\d{1,2}/\d{1,2}/\d{4}$", t)), -1)
-    if date_idx != -1:
-        if date_idx > 1 and tokens[date_idx-1].isdigit():
-            lot["CurrentGerm"] = int(tokens[date_idx-1])
-        if date_idx + 1 < len(tokens) and tokens[date_idx+1].isdigit():
-            lot["SeedCount"] = int(tokens[date_idx+1])
-        if date_idx + 2 < len(tokens):
-            tok = tokens[date_idx+2]
-            if re.match(r"^\d+(\.\d+)?$", tok) and float(tok) < 50:
-                lot["SeedSize"] = tok
+    # Seed Count (comma separated number > 1000)
+    sc_m = re.search(r"\b(\d{2,3},\d{3})\b", line)
+    if sc_m:
+        lot["SeedCount"] = int(sc_m.group(1).replace(',', ''))
+        # Seed size is usually a small number right after the seed count
+        after_sc = line[sc_m.end():]
+        size_m = re.search(r"^\s*([\d\.]+)", after_sc)
+        if size_m and float(size_m.group(1)) < 50:
+            lot["SeedSize"] = size_m.group(1)
+
+    # Country (Look at the very end of the string)
+    country_m = re.search(r"\b(USA|US|CAN|MEX|[A-Z]{2,3})\b$", line.strip(), re.IGNORECASE)
+    if country_m:
+        lot["OriginCountry"] = convert_to_alpha2(country_m.group(1).upper())
 
     return lot
 
@@ -119,10 +121,10 @@ def _extract_invoice_from_ocr_text(ocr_text: str, fallback_po: str, token: str) 
     items = []
     flat_text = ocr_text.replace("\n", " ")
 
-    m_po = re.search(r"\bPO[-\s#:]*(\d{5})\b", ocr_text, re.IGNORECASE)
+    # Improved PO Search
+    m_po = re.search(r"(?:PO|Purchase\s+order)[-\s#:]*(\d{5})\b", flat_text, re.IGNORECASE)
     header_po = f"PO-{m_po.group(1)}" if m_po else fallback_po
 
-    # Find items using a horizontal regex
     item_pattern = re.compile(
         r"(?:(?:\b\d+\s+)?\b(?P<item_no>\d{8})\b\s+"
         r"(?P<desc>.*?)\s+"
@@ -143,7 +145,7 @@ def _extract_invoice_from_ocr_text(ocr_text: str, fallback_po: str, token: str) 
         shipped_str = match.group("shipped").replace(",", "")
         total_str = match.group("total_price").replace(",", "")
 
-        shipped = int(float(shipped_str)) if shipped_str else None
+        shipped = float(shipped_str) if shipped_str else None
         total_price = float(total_str) if total_str else None
 
         m_pkg = re.search(r"(\d+)(?=\s*[Mm]\b|\s*[Ll][Bb]\b|M$|LB$)", desc)
@@ -152,8 +154,10 @@ def _extract_invoice_from_ocr_text(ocr_text: str, fallback_po: str, token: str) 
         usd_actual_cost = None
         if pkg_qty and shipped and total_price:
             usd_actual_cost = "{:.4f}".format(total_price / (shipped * pkg_qty))
+            
+        # Add the calculation logic here (136 * 100)
+        original_qty = int(shipped * pkg_qty) if shipped and pkg_qty else shipped
 
-        # Chunk out the text belonging to this specific item to extract lots
         start_idx = match.end()
         end_idx = matches[i+1].start() if i + 1 < len(matches) else len(flat_text)
         chunk = flat_text[start_idx:end_idx]
@@ -164,7 +168,11 @@ def _extract_invoice_from_ocr_text(ocr_text: str, fallback_po: str, token: str) 
         for j, lm in enumerate(lot_matches):
             l_start = lm.start()
             l_end = lot_matches[j+1].start() if j + 1 < len(lot_matches) else len(chunk)
-            lots_raw.append(chunk[l_start:l_end].strip())
+            lot_chunk = chunk[l_start:l_end].strip()
+            
+            # CRITICAL FIX: Only accept lot chunks that contain a date to prevent false positives (like 280205-70)
+            if re.search(r"\d{1,2}/\d{1,2}/\d{4}", lot_chunk):
+                lots_raw.append(lot_chunk)
 
         treatment_name = None
         tn_match = re.search(r"Treatment name:\s*([A-Za-z]+,?\s*[A-Za-z]+)", chunk)
@@ -175,6 +183,7 @@ def _extract_invoice_from_ocr_text(ocr_text: str, fallback_po: str, token: str) 
             "VendorItemNumber": item_no,
             "VendorDescription": desc,
             "QtyShipped": shipped,
+            "OriginalReceivedQty": original_qty, 
             "USD_Actual_Cost_$": usd_actual_cost,
             "PackageDescription": find_best_package_description(desc),
             "TreatmentName": treatment_name,
@@ -424,66 +433,53 @@ def parse_lot_block(raw_text: str) -> Dict:
 
 @timed_func("extract_seed_analysis_reports_from_bytes")
 def extract_seed_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]]) -> Dict[str, PurityData]:
+    """Extracts Pure Seed %, Inert %, Normal Seedling % and Date Issued dynamically from whole text."""
     report_map: Dict[str, PurityData] = {}
     for fname, bts in pdf_files:
         try:
-            doc = fitz.open(stream=bts, filetype="pdf")
-            full_text = ""
-            for page in doc:
-                t = page.get_text()
-                if "Purity Analysis" in t or "Purity\nAnalysis" in t or "Lot Number:" in t:
-                    full_text += t + "\n"
-            doc.close()
-
-            if not full_text: continue
+            with fitz.open(stream=bts, filetype="pdf") as doc:
+                text = "".join(page.get_text() for page in doc)
             
-            segments = re.split(r"Lot Number:\s*([\d-]+)", full_text)
-            for i in range(1, len(segments), 2):
-                lot_no = segments[i].strip()
-                block = segments[i + 1]
-                lines = [l.strip() for l in block.splitlines() if l.strip()]
+            if "Report of Seed Analysis" not in text and "Purity Analysis" not in text:
+                continue
 
-                date_completed = None
-                for k, line in enumerate(lines):
-                    if re.search(r"^Date\s+Test\s+Completed\s*:", line, re.IGNORECASE):
-                        if k + 1 < len(lines):
-                            date_str = lines[k + 1].strip()
-                            if re.match(r"\d{1,2}/\d{1,2}/\d{4}", date_str):
-                                date_completed = date_str
-                        break
+            # 1. Vendor Lot Number
+            lot_match = re.search(r"Lot Number:[\s\n]*([\d-]+)", text, re.IGNORECASE)
+            if not lot_match: continue
+            lot_no = lot_match.group(1).strip()
 
-                header_idx = next(
-                    (j for j, l in enumerate(lines)
-                    if re.search(r"Weed\s*%", l, re.IGNORECASE) or re.search(r"Weed\s+Seed\s*%", l, re.IGNORECASE)),
-                    None
-                )
+            # 2. Date Issued (Maps to GrowerGermDate/Certificate Date)
+            date_match = re.search(r"Date Issued:[\s\n]*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+            date_issued = date_match.group(1) if date_match else None
 
-                if header_idx is None: continue
+            # 3. Table Values 
+            # PyMuPDF flattens tables inconsistently. We search for the end of the headers 
+            # ("Days Tested") and grab the sequence of numbers right after it.
+            pure, inert, normal = None, None, None
+            
+            header_end_match = re.search(r"Days[\s\n]*Tested", text, re.IGNORECASE)
+            if header_end_match:
+                subtext = text[header_end_match.end():]
+                # Finds the row of numbers e.g., 99.99, 0.01, 0.00, 0.00, 99, X...
+                tokens = re.findall(r"\b(?:\d+(?:\.\d+)?|X|TR|-TR-)\b", subtext)
+                
+                if len(tokens) >= 5:
+                    p_val = tokens[0]  # Pure Seed %
+                    i_val = tokens[1]  # Inert Matter %
+                    n_val = tokens[4]  # Normal Seedling % (GrowerGerm)
+                    
+                    if p_val.replace('.', '', 1).isdigit(): pure = float(p_val)
+                    if i_val.replace('.', '', 1).isdigit(): inert = float(i_val)
+                    if n_val.isdigit(): normal = int(n_val)
 
-                vals = []
-                for ln in lines[header_idx + 1:]:
-                    tokens = re.split(r"\s+", ln)
-                    for tok in tokens:
-                        if re.fullmatch(r"(TR|-TR-)", tok, re.IGNORECASE):
-                            vals.append("0.0")
-                        elif re.fullmatch(r"\d+(?:\.\d+)?", tok):
-                            vals.append(tok)
-                        if len(vals) == 5: break
-                    if len(vals) == 5: break
-
-                if len(vals) < 5: continue
-
-                pure, inert, _, _, grower_germ = vals
-                pure_val = float(pure)
-                if pure_val == 100.0: pure, inert = "99.99", "0.01"
-
-                report_map[lot_no] = {
-                    "Purity": pure, "Inert": inert,
-                    "GrowerGerm": grower_germ, "GrowerGermDate": date_completed
-                }
+            report_map[lot_no] = {
+                "Purity": pure,
+                "Inert": inert,
+                "GrowerGerm": normal,
+                "GrowerGermDate": date_issued
+            }
         except Exception as e:
             logger.warning(f"Could not process {fname} for seed analysis. Error: {e}")
-            continue
             
     return report_map
 
@@ -500,10 +496,9 @@ def extract_invoice_from_pdf(
         else: raise ValueError("Source must be file path (str) or bytes.")
         
         first_page_text = doc[0].get_text()
-        header_po_match = re.search(r"\bPO[-\s#:]*(\d{5})\b", first_page_text, re.IGNORECASE)
-        header_po_match = header_po_match or re.search(
-            r"Purchase\s*order.*?(\d{5})", first_page_text, re.IGNORECASE | re.DOTALL
-        )
+        
+        # Improved PO search
+        header_po_match = re.search(r"(?:PO|Purchase\s*order)[-\s#:]*(\d{5})\b", first_page_text, re.IGNORECASE | re.DOTALL)
         header_po = f"PO-{header_po_match.group(1)}" if header_po_match else fallback_po
 
         all_blocks = []
@@ -523,7 +518,7 @@ def extract_invoice_from_pdf(
                 if current:
                     treatment_name = re.search(r"Treatment name:\s*(.*)", text_acc)
                     current["TreatmentName"] = treatment_name.group(1).strip() if treatment_name else None
-                    po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
+                    po_match = re.search(r"(?:PO|Purchase\s+order)[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
                     current["PurchaseOrder"] = (f"PO-{po_match.group(1)}" if po_match else header_po)
                     try:
                         current["BCOptions"] = get_po_items(current["PurchaseOrder"], token) if current["PurchaseOrder"] else []
@@ -546,15 +541,19 @@ def extract_invoice_from_pdf(
                 desc = " ".join(parts[2:ui])
                 m_pkg = re.search(r"(\d+)(?=\s*[Mm]\b|\s*[Ll][Bb]\b|M$|LB$)", desc)
                 pkg_qty = int(m_pkg.group(1)) if m_pkg else None
-                shipped = int(float(parts[ui + 2])) if len(parts) > ui + 2 else None
+                shipped = float(parts[ui + 2].replace(',', '')) if len(parts) > ui + 2 else None
                 
                 usd_actual_cost = None
                 if all(v is not None and v != 0 for v in [pkg_qty, shipped, total_price]):
                     usd_actual_cost = "{:.4f}".format(total_price / (shipped * pkg_qty))
+                    
+                # Standard calc
+                original_qty = int(shipped * pkg_qty) if shipped and pkg_qty else shipped
 
                 current = {
                     "VendorItemNumber": item_no, "VendorDescription": desc, "QtyShipped": shipped,
-                    "USD_Actual_Cost_$": usd_actual_cost, "PackageDescription": find_best_package_description(desc),
+                    "OriginalReceivedQty": original_qty, "USD_Actual_Cost_$": usd_actual_cost, 
+                    "PackageDescription": find_best_package_description(desc),
                     "TreatmentName": None, "PurchaseOrder": "", "TotalPrice": total_price, "Lots": []
                 }
                 text_acc = item_line_acc + "\n"
@@ -570,7 +569,7 @@ def extract_invoice_from_pdf(
         if current:
             treatment_name = re.search(r"Treatment name:\s*(.*)", text_acc)
             current["TreatmentName"] = treatment_name.group(1).strip() if treatment_name else None
-            po_match = re.search(r"\bPO[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
+            po_match = re.search(r"(?:PO|Purchase\s+order)[-\s:]*(\d{5})\b", text_acc, re.IGNORECASE)
             current["PurchaseOrder"] = (f"PO-{po_match.group(1)}" if po_match else header_po)
             try:
                 current["BCOptions"] = get_po_items(current["PurchaseOrder"], token) if current["PurchaseOrder"] else []
@@ -635,6 +634,12 @@ def extract_sakata_data_from_bytes(pdf_files: list[tuple[str, bytes]], token: st
             logger.warning(f"Could not read PDF '{filename}', skipping. Error: {e}")
             continue
 
+        # --- ADDED DEBUG PRINTING ---
+        print(f"\n{'='*30} START RAW TEXT: {filename} ({extraction_method}) {'='*30}")
+        print(full_doc_text)
+        print(f"{'='*32} END RAW TEXT: {filename} {'='*32}\n")
+        # ----------------------------
+
         if not is_invoice: continue
 
         logger.info(f"Processing as invoice: {filename} (method: {extraction_method})")
@@ -663,9 +668,12 @@ def extract_sakata_data_from_bytes(pdf_files: list[tuple[str, bytes]], token: st
                 else:
                     lot = parse_lot_block(raw_lot_text)
                 
+                # INJECT INVOICE-LEVEL FIELDS INTO LOT
                 lot["USD_Actual_Cost_$"] = itm.get("USD_Actual_Cost_$")
                 lot["PackageDescription"] = itm.get("PackageDescription")
+                lot["OriginalReceivedQty"] = itm.get("OriginalReceivedQty")
                 
+                # INJECT SEED ANALYSIS REPORT DATA
                 vendor_lot_no = lot.get("VendorLotNo")
                 if vendor_lot_no in report_map:
                     lot.update(report_map[vendor_lot_no])
