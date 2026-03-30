@@ -79,7 +79,6 @@ def _extract_text_with_azure_ocr(pdf_content: bytes) -> str:
     raise TimeoutError("Azure OCR timed out.")
 
 def _parse_ocr_lot_line(chunk: str, vendor_lot_no: str) -> Dict:
-    """Robust parser for shattered OCR lot chunks (handles multi-line values)."""
     lot = {
         "VendorLotNo": vendor_lot_no, "CurrentGerm": None, "GermDate": None,
         "SeedCount": None, "SeedSize": None, "GrowerGerm": None,
@@ -87,49 +86,39 @@ def _parse_ocr_lot_line(chunk: str, vendor_lot_no: str) -> Dict:
         "SproutCount": None, "Inert": None
     }
 
-    # 1. Date: Find the standard MM/DD/YYYY format
     date_m = re.search(r"\b(\d{1,2}/\d{1,2}/\d{4})\b", chunk)
     if date_m:
         lot["GermDate"] = date_m.group(1)
 
-    # 2. Current Germ: Usually a 2-digit number floating around (often near the date or lot qty)
-    # Let's look for a 2 digit number between 80 and 99
     germ_m = re.search(r"\b(8[0-9]|9[0-9])\b", chunk)
     if germ_m:
          lot["CurrentGerm"] = int(germ_m.group(1))
 
-    # 3. Seed Count: A number with a comma > 1,000
     sc_m = re.search(r"\b(\d{2,3},\d{3})\b", chunk)
     if sc_m:
         lot["SeedCount"] = int(sc_m.group(1).replace(',', ''))
 
-    # 4. Seed Size: Usually a small single digit or decimal floating alone
     size_m = re.search(r"\b([1-9](?:\.\d{1,2})?)\b(?!\s*(?:/|-|%|USD|EA|M|LB))", chunk)
     if size_m:
         val = float(size_m.group(1))
-        if val < 50 and val not in [lot["CurrentGerm"]]:  # Avoid confusing with germ or purity
+        if val < 50 and val not in [lot.get("CurrentGerm")]:  
              lot["SeedSize"] = size_m.group(1)
 
-    # 5. Country: USA, CAN, MEX, etc.
     country_m = re.search(r"\b(USA|US|CAN|MEX|[A-Z]{2,3})\b", chunk, re.IGNORECASE)
     if country_m:
-        # Avoid matching random headers like "EA" or "INV"
         if country_m.group(1).upper() not in ["EA", "INV", "USD", "PO"]:
             lot["OriginCountry"] = convert_to_alpha2(country_m.group(1).upper())
 
     return lot
 
 def _extract_invoice_from_ocr_text(ocr_text: str, fallback_po: str, token: str) -> List[Dict]:
-    """Extracts items from flat text, immune to arbitrary OCR line breaks."""
     items = []
     
-    # Improved PO Search (Searches the raw text before replacing newlines)
     m_po = re.search(r"(?:Purchase\s+order)\s*(\d{5})\b", ocr_text, re.IGNORECASE)
     header_po = f"PO-{m_po.group(1)}" if m_po else fallback_po
 
     flat_text = ocr_text.replace("\n", " ")
 
-    # Find Line Items
     item_pattern = re.compile(
         r"(?:(?:\b\d+\s+)?\b(?P<item_no>\d{8})\b\s+"
         r"(?P<desc>.*?)\s+"
@@ -160,28 +149,23 @@ def _extract_invoice_from_ocr_text(ocr_text: str, fallback_po: str, token: str) 
         if pkg_qty and shipped and total_price:
             usd_actual_cost = "{:.4f}".format(total_price / (shipped * pkg_qty))
             
-        original_qty = int(shipped * pkg_qty) if shipped and pkg_qty else shipped
+        original_qty = int(shipped * pkg_qty) if shipped and pkg_qty else None
 
-        # Chunk out the text belonging to this specific item to extract lots
         start_idx = match.end()
         end_idx = matches[i+1].start() if i + 1 < len(matches) else len(flat_text)
         chunk = flat_text[start_idx:end_idx]
 
-        # Find lots WITHIN this item's chunk
         lot_pattern = re.compile(r"\b(\d{6}-[\d-]+)\b")
         lot_matches = list(lot_pattern.finditer(chunk))
         lots_raw = []
         
         for j, lm in enumerate(lot_matches):
             vendor_lot_no = lm.group(1)
-            # The data for this lot starts at the lot number and ends at the next lot number (or end of chunk)
             l_start = lm.start()
             l_end = lot_matches[j+1].start() if j + 1 < len(lot_matches) else len(chunk)
             lot_chunk = chunk[l_start:l_end]
             
-            # Avoid false positives like bank account numbers (280205-70)
             if "Route:" not in lot_chunk and "Acct:" not in chunk[max(0, l_start-20):l_start]:
-                # Pass the whole chunk to the parser
                 parsed_lot = _parse_ocr_lot_line(lot_chunk, vendor_lot_no)
                 lots_raw.append(parsed_lot)
 
@@ -200,7 +184,7 @@ def _extract_invoice_from_ocr_text(ocr_text: str, fallback_po: str, token: str) 
             "TreatmentName": treatment_name,
             "PurchaseOrder": header_po,
             "TotalPrice": total_price,
-            "Lots": lots_raw  # Note: These are now dictionaries, not strings
+            "Lots": lots_raw  
         }
 
         try:
@@ -444,12 +428,22 @@ def parse_lot_block(raw_text: str) -> Dict:
 
 @timed_func("extract_seed_analysis_reports_from_bytes")
 def extract_seed_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]]) -> Dict[str, PurityData]:
-    """Extracts Pure Seed %, Inert %, Normal Seedling % and Date Issued dynamically from whole text."""
+    """Extracts Pure Seed %, Inert %, Normal Seedling % and Date Issued dynamically with OCR fallback."""
     report_map: Dict[str, PurityData] = {}
     for fname, bts in pdf_files:
         try:
+            # 1. Try PyMuPDF First
             with fitz.open(stream=bts, filetype="pdf") as doc:
                 text = "".join(page.get_text() for page in doc)
+            
+            # 2. If it's empty (scanned image), use Azure OCR
+            if len(text.strip()) < 100:
+                logger.info(f"'{fname}' appears to be a scanned report. Attempting Azure OCR.")
+                try:
+                    text = _extract_text_with_azure_ocr(bts)
+                except Exception as e:
+                    logger.warning(f"Failed to OCR report {fname}: {e}")
+                    continue
             
             if "Report of Seed Analysis" not in text and "Purity Analysis" not in text:
                 continue
@@ -459,29 +453,37 @@ def extract_seed_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]])
             if not lot_match: continue
             lot_no = lot_match.group(1).strip()
 
-            # 2. Date Issued (Maps to GrowerGermDate/Certificate Date)
+            # 2. Date Issued 
             date_match = re.search(r"Date Issued:[\s\n]*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
             date_issued = date_match.group(1) if date_match else None
 
             # 3. Table Values 
-            # PyMuPDF flattens tables inconsistently. We search for the end of the headers 
-            # ("Days Tested") and grab the sequence of numbers right after it.
             pure, inert, normal = None, None, None
             
-            header_end_match = re.search(r"Days[\s\n]*Tested", text, re.IGNORECASE)
-            if header_end_match:
-                subtext = text[header_end_match.end():]
-                # Finds the row of numbers e.g., 99.99, 0.01, 0.00, 0.00, 99, X...
-                tokens = re.findall(r"\b(?:\d+(?:\.\d+)?|X|TR|-TR-)\b", subtext)
-                
-                if len(tokens) >= 5:
-                    p_val = tokens[0]  # Pure Seed %
-                    i_val = tokens[1]  # Inert Matter %
-                    n_val = tokens[4]  # Normal Seedling % (GrowerGerm)
+            # Since OCR formats this as an explicit block, we can look for the numbers directly
+            # 99.99 0.01 0.00 0.00 99 X 0 0 1 400 10
+            # Look for 2 decimals followed by 2 decimals followed by 2 decimals
+            nums_match = re.search(r"\b(\d{2}\.\d{2})\s+(\d{1,2}\.\d{2})\s+(?:\d{1,2}\.\d{2})\s+(?:\d{1,2}\.\d{2})\s+(\d{1,3})\b", text)
+            
+            if nums_match:
+                pure = float(nums_match.group(1))
+                inert = float(nums_match.group(2))
+                normal = int(nums_match.group(3))
+            else:
+                # Fallback to the old method if the tight regex misses
+                header_end_match = re.search(r"Days[\s\n]*Tested", text, re.IGNORECASE)
+                if header_end_match:
+                    subtext = text[header_end_match.end():]
+                    tokens = re.findall(r"\b(?:\d+(?:\.\d+)?|X|TR|-TR-)\b", subtext)
                     
-                    if p_val.replace('.', '', 1).isdigit(): pure = float(p_val)
-                    if i_val.replace('.', '', 1).isdigit(): inert = float(i_val)
-                    if n_val.isdigit(): normal = int(n_val)
+                    if len(tokens) >= 5:
+                        p_val = tokens[0]  
+                        i_val = tokens[1]  
+                        n_val = tokens[4]  
+                        
+                        if p_val.replace('.', '', 1).isdigit(): pure = float(p_val)
+                        if i_val.replace('.', '', 1).isdigit(): inert = float(i_val)
+                        if n_val.isdigit(): normal = int(n_val)
 
             report_map[lot_no] = {
                 "Purity": pure,
@@ -559,7 +561,7 @@ def extract_invoice_from_pdf(
                     usd_actual_cost = "{:.4f}".format(total_price / (shipped * pkg_qty))
                     
                 # Standard calc
-                original_qty = int(shipped * pkg_qty) if shipped and pkg_qty else shipped
+                original_qty = int(shipped * pkg_qty) if shipped and pkg_qty else None
 
                 current = {
                     "VendorItemNumber": item_no, "VendorDescription": desc, "QtyShipped": shipped,
@@ -645,12 +647,6 @@ def extract_sakata_data_from_bytes(pdf_files: list[tuple[str, bytes]], token: st
             logger.warning(f"Could not read PDF '{filename}', skipping. Error: {e}")
             continue
 
-        # --- ADDED DEBUG PRINTING ---
-        print(f"\n{'='*30} START RAW TEXT: {filename} ({extraction_method}) {'='*30}")
-        print(full_doc_text)
-        print(f"{'='*32} END RAW TEXT: {filename} {'='*32}\n")
-        # ----------------------------
-
         if not is_invoice: continue
 
         logger.info(f"Processing as invoice: {filename} (method: {extraction_method})")
@@ -670,26 +666,20 @@ def extract_sakata_data_from_bytes(pdf_files: list[tuple[str, bytes]], token: st
             raw_items = _extract_invoice_from_ocr_text(full_doc_text, fallback_po, token)
         else:
             raw_items = extract_invoice_from_pdf(source=pdf_bytes, fallback_po=fallback_po, token=token)
-            
+
         for itm in raw_items:
             parsed_lots = []
-            
-            # itm["Lots"] now contains strings (if PyMuPDF) or dicts (if Azure OCR)
             for raw_lot_data in itm.get("Lots", []):
                 
-                # If PyMuPDF, parse the block string into a dictionary
                 if extraction_method != "Azure OCR":
                     lot = parse_lot_block(raw_lot_data)
                 else:
-                    # If Azure OCR, it was already parsed in _extract_invoice_from_ocr_text
                     lot = raw_lot_data
                 
-                # INJECT INVOICE-LEVEL FIELDS INTO LOT
                 lot["USD_Actual_Cost_$"] = itm.get("USD_Actual_Cost_$")
                 lot["PackageDescription"] = itm.get("PackageDescription")
                 lot["OriginalReceivedQty"] = itm.get("OriginalReceivedQty")
                 
-                # INJECT SEED ANALYSIS REPORT DATA
                 vendor_lot_no = lot.get("VendorLotNo")
                 if vendor_lot_no in report_map:
                     lot.update(report_map[vendor_lot_no])
