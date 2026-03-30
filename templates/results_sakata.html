@@ -475,8 +475,8 @@
                     
                     <dt class="col-sm-4">Original Received Qty.</dt>
                     <dd class="col-sm-8">
-                      <div class="field-box" data-field="TotalQuantity" contenteditable="true">
-                        {{ "{:,.4f}".format(lot.TotalQuantity|float) if lot.TotalQuantity else '' }}
+                      <div class="field-box" data-field="OriginalReceivedQty" contenteditable="true">
+                        {{ lot["OriginalReceivedQty"] or "" }}
                       </div>
                     </dd>
 
