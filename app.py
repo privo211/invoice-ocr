@@ -62,7 +62,7 @@ SCOPE_BC = ["https://api.businesscentral.dynamics.com/.default"]
 
 def get_bc_env(vendor: str | None = None) -> str:
     """Return 'Production' if vendor in ["seminis", "hm_clause", "sakata", "syngenta", "kamterter"], else use default BC_ENV."""
-    if vendor and vendor.strip().lower() in ["seminis", "hm_clause", "sakata", "syngenta", "kamterter"]:
+    if vendor and vendor.strip().lower() in ["seminis", "hm_clause", "syngenta", "kamterter"]:
         return "Production"
     return BC_ENV_DEFAULT
 
