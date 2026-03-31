@@ -214,7 +214,8 @@
                         <input type="text" class="form-control table-input no-input" value="{{ line.No }}">
                       </td>
 
-                      <td>{{ line.Description }}</td>
+                      <!-- <td>{{ line.Description }}</td> -->
+                      <td class="desc-display">{{ line.Description }}</td>
 
                       <td style="width: 15%;">
                         <input type="number" step="0.01" class="form-control table-input qty-input" value="{{ line.Quantity }}">
@@ -292,6 +293,51 @@
     // --- LIVE SUBTOTAL & GRAND TOTAL UPDATE LOGIC ---
     document.querySelectorAll('table').forEach(table => {
       table.addEventListener('input', (e) => {
+        // 1. Update Description dynamically based on No. input
+        if (e.target.classList.contains('no-input')) {
+          const row = e.target.closest('tr');
+          const descCell = row.querySelector('.desc-display');
+          
+          if (descCell) {
+            const origNo = row.dataset.no;
+            const origDesc = row.dataset.desc;
+            const currentNo = e.target.value.trim();
+
+            if (origNo && origDesc.lastIndexOf(origNo) !== -1) {
+              const lastIndex = origDesc.lastIndexOf(origNo);
+              const newDesc = origDesc.substring(0, lastIndex) + currentNo + origDesc.substring(lastIndex + origNo.length);
+              descCell.textContent = newDesc;
+            }
+          }
+        }
+
+        // 2. Update the Row's Subtotal and Grand Total
+        if (e.target.classList.contains('qty-input') || e.target.classList.contains('cost-input')) {
+          const row = e.target.closest('tr');
+          const qty = parseFloat(row.querySelector('.qty-input').value) || 0;
+          const cost = parseFloat(row.querySelector('.cost-input').value) || 0;
+          const subtotalDisplay = row.querySelector('.subtotal-display');
+          
+          if (subtotalDisplay) {
+            subtotalDisplay.textContent = (qty * cost).toFixed(2);
+          }
+
+          let newGrandTotal = 0;
+          table.querySelectorAll('.subtotal-display').forEach(subElement => {
+            newGrandTotal += parseFloat(subElement.textContent) || 0;
+          });
+          
+          const grandTotalDisplay = table.querySelector('.grand-total-display');
+          if (grandTotalDisplay) {
+            grandTotalDisplay.textContent = newGrandTotal.toFixed(2);
+          }
+        }
+      });
+    });
+
+    // --- LIVE SUBTOTAL & GRAND TOTAL UPDATE LOGIC ---
+    /*document.querySelectorAll('table').forEach(table => {
+      table.addEventListener('input', (e) => {
         if (e.target.classList.contains('qty-input') || e.target.classList.contains('cost-input')) {
           // 1. Update the Row's Subtotal
           const row = e.target.closest('tr');
@@ -315,7 +361,7 @@
           }
         }
       });
-    });
+    }); */
 
     // --- SHIFT + ARROW/CLICK FOR $1.00 INCREMENTS ---
     let isShiftHeld = false;
@@ -398,7 +444,7 @@
         const rows = document.querySelectorAll(`#tbody-${idx} tr`);
         
         // Build Payload
-        const linesPayload = [];
+        /*const linesPayload = [];
         rows.forEach(row => {
           // FIND THE INPUTS WITHIN THE ROW
           const noInput = row.querySelector('.no-input');
@@ -410,6 +456,25 @@
             "Type": row.dataset.type,
             "No": noInput ? noInput.value.trim() : row.dataset.no,
             "Description": row.dataset.desc,
+            "Quantity": parseFloat(qtyInput.value) || 0,
+            "Direct_Unit_Cost": parseFloat(costInput.value) || 0
+          });
+        });*/
+
+        // Build Payload
+        const linesPayload = [];
+        rows.forEach(row => {
+          // FIND THE INPUTS WITHIN THE ROW
+          const noInput = row.querySelector('.no-input');
+          const qtyInput = row.querySelector('.qty-input');
+          const costInput = row.querySelector('.cost-input');
+          const descCell = row.querySelector('.desc-display');
+
+          linesPayload.push({
+            "Document_Type": "Invoice",
+            "Type": row.dataset.type,
+            "No": noInput ? noInput.value.trim() : row.dataset.no,
+            "Description": descCell ? descCell.textContent.trim() : row.dataset.desc,
             "Quantity": parseFloat(qtyInput.value) || 0,
             "Direct_Unit_Cost": parseFloat(costInput.value) || 0
           });
