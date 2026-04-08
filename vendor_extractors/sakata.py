@@ -46,6 +46,17 @@ class PurityData(TypedDict):
 
 # ── OCR HELPERS ────────────────────────────────────────────────────────────────
 
+def _normalize_ocr_text(ocr_text: str) -> str:
+    """Pre-process Azure OCR output to fix common artifacts."""
+    text = ocr_text
+    # Rejoin split 4-digit years: "2/26/202\n6" → "2/26/2026"
+    text = re.sub(r"(\d{1,2}/\d{1,2}/\d{2})\n(\d)\b", r"\1\2", text)
+    text = re.sub(r"(\d{1,2}/\d{1,2}/\d{3})\n(\d)\b", r"\1\2", text)
+    # Handle date split with intervening tokens: "2/26/202\nUSA\n6" → "2/26/2026\nUSA"
+    text = re.sub(r"(\d{1,2}/\d{1,2}/\d{2})\n([A-Z]{2,3})\n(\d)\b", r"\1\3\n\2", text)
+    text = re.sub(r"(\d{1,2}/\d{1,2}/\d{3})\n([A-Z]{2,3})\n(\d)\b", r"\1\3\n\2", text)
+    return text
+
 def _extract_text_with_azure_ocr(pdf_content: bytes) -> str:
     if not AZURE_ENDPOINT or not AZURE_KEY:
         raise ValueError("Azure OCR credentials (AZURE_ENDPOINT / AZURE_KEY) are not set.")
@@ -88,47 +99,71 @@ def _parse_ocr_lot_line(chunk: str, vendor_lot_no: str) -> Dict:
         "SproutCount": None, "Inert": None
     }
 
-    # 1. Dates (Germ Date)
-    date_m = re.search(r"\b(\d{1,2}/\d{1,2}/\d{4})\b", chunk)
-    if date_m:
-        lot["GermDate"] = date_m.group(1)
+    lot_num_pattern = re.escape(vendor_lot_no)
+    m = re.search(lot_num_pattern + r"\s*\n(.*)", chunk, re.DOTALL)
+    if not m:
+        return lot
+    
+    data_region = m.group(1)
+    data_lines = []
+    for line in data_region.split("\n"):
+        line = line.strip()
+        if line and not line.startswith("Other Charges") and not re.match(r"^(Ordered|Shipped|Disc|Total|All invoiced|Gross|Total Miscellaneous|Cash discount|Prepaid|Invoice total)", line, re.IGNORECASE):
+            data_lines.append(line)
+        elif len(data_lines) > 0:
+            break
+    data_text = " ".join(data_lines)
+    tokens = data_text.split()
 
-    # 2. Germination (80-100)
-    # Look for a number near the lot header or date
-    germ_m = re.search(r"\b(8[0-9]|9[0-9]|100)\b", chunk)
-    if germ_m:
-         lot["CurrentGerm"] = int(germ_m.group(1))
+    germ_date = None
+    seed_count = None
+    purity = None
+    germ = None
+    qty = None
+    origin = None
+    seed_size_candidates = []
 
-    # 3. Seed Count (e.g. 122,245)
-    sc_m = re.search(r"\b(\d{1,3},\d{3})\b", chunk)
-    if sc_m:
-        lot["SeedCount"] = int(sc_m.group(1).replace(',', ''))
+    for token in tokens:
+        token_clean = token.rstrip(",")
+        if re.match(r"^\d{1,2}/\d{1,2}/\d{4}$", token_clean):
+            germ_date = token_clean
+        elif re.match(r"^\d{1,3},\d{3}$", token_clean):
+            seed_count = int(token_clean.replace(",", ""))
+        elif re.match(r"^9\d\.\d{2}$", token_clean):
+            purity = float(token_clean)
+        elif re.match(r"^(8[0-9]|9[0-9]|100)$", token_clean):
+            germ = int(token_clean)
+        elif re.match(r"^\d+\.\d{2}$", token_clean) and qty is None:
+            qty = float(token_clean)
+        elif re.match(r"^[A-Z]{2,3}$", token_clean):
+            if token_clean not in ["EA", "INV", "USD", "PO", "QTY", "KS", "M", "LB"]:
+                origin = convert_to_alpha2(token_clean)
+        elif token_clean not in ["%", "X"]:
+            seed_size_candidates.append(token_clean)
 
-    # 4. Purity (e.g. 99.99)
-    purity_m = re.search(r"\b(9\d\.\d{2})\b", chunk)
-    if purity_m:
-        lot["Purity"] = float(purity_m.group(1))
+    lot["GermDate"] = germ_date
+    lot["SeedCount"] = seed_count
+    lot["Purity"] = purity
+    lot["CurrentGerm"] = germ
+    lot["OriginCountry"] = origin or ""
 
-    # 5. Seed Size (e.g. 4.5)
-    # Look for a decimal number that isn't purity
-    size_m = re.search(r"\b([1-9]\.\d)\b(?!\s*%)", chunk)
-    if size_m:
-        val = float(size_m.group(1))
-        if val < 15: # Safety check
-            lot["SeedSize"] = size_m.group(1)
-
-    # 6. Origin
-    country_m = re.search(r"\b(USA|US|CAN|MEX|[A-Z]{2,3})\b", chunk, re.IGNORECASE)
-    if country_m:
-        val = country_m.group(1).upper()
-        if val not in ["EA", "INV", "USD", "PO", "QTY", "KS", "M"]:
-            lot["OriginCountry"] = convert_to_alpha2(val)
+    if seed_size_candidates:
+        for candidate in seed_size_candidates:
+            if re.match(r"^\d+/$", candidate):
+                continue
+            if re.match(r"^\d+\+$", candidate):
+                continue
+            lot["SeedSize"] = candidate
+            break
 
     return lot
 
 def _extract_invoice_from_ocr_text(ocr_text: str, fallback_po: str, token: str) -> List[Dict]:
     """Anchor-based extraction for OCR results where field ordering may be unstable."""
     items = []
+    
+    # Normalize OCR text first
+    ocr_text = _normalize_ocr_text(ocr_text)
     
     # Header PO
     m_po = re.search(r"(?:Purchase\s+order)\s*(\d{5})\b", ocr_text, re.IGNORECASE)
@@ -148,57 +183,134 @@ def _extract_invoice_from_ocr_text(ocr_text: str, fallback_po: str, token: str) 
         
         item_no = lines[start_idx]
         
-        # Description usually follows
-        desc = ""
-        if start_idx + 1 < len(lines):
-            desc = lines[start_idx + 1]
-            
+        # Multi-line description: collect until boundary
+        desc_lines = []
+        desc_end_idx = start_idx + 1
+        boundary_patterns = [
+            r"^Alternate item:", r"^Botanical name:", r"^Treatment name:",
+            r"^Comment:", r"^Line Item", r"^LotNo", r"^Other Charges"
+        ]
+        while desc_end_idx < end_idx:
+            line = lines[desc_end_idx]
+            if any(re.match(p, line) for p in boundary_patterns):
+                break
+            if re.match(r"^EA\b", line) or line == "EA":
+                break
+            desc_lines.append(line)
+            desc_end_idx += 1
+        
+        desc = " ".join(desc_lines).strip()
+        
         chunk_text = "\n".join(lines[start_idx:end_idx])
-        # Broad context in case layout reordered totals to end of doc
         full_context = "\n".join(lines[start_idx:])
         
-        # Financials (Shipped, Unit Price, Total Price)
+        # Lots (define pattern early for financials fallback)
+        lot_pattern = re.compile(r"\b(\d{6}-\d{3})\b")
+        
+        # Financials: two possible layouts
         shipped = None
         total_price = None
         
-        # Look for "Shipped" label then extract values
-        # Format often: "Ordered 5.00 Shipped Unit price 5.00 124.00 Total price 465.00"
-        ship_search = re.search(r"Shipped\s+Unit\s+price\s+([\d\.,]+)", chunk_text, re.IGNORECASE | re.DOTALL)
-        if not ship_search:
-            ship_search = re.search(r"Shipped\s+Unit\s+price\s+([\d\.,]+)", full_context, re.IGNORECASE | re.DOTALL)
+        # Layout B: EA followed by value lines (most common)
+        ea_idx = None
+        for i in range(start_idx, end_idx):
+            if lines[i].strip() == "EA":
+                ea_idx = i
+                break
         
-        if ship_search:
-            shipped = float(ship_search.group(1).replace(",", ""))
-
-        price_search = re.search(r"Total\s+price\s+.*?([\d,]+\.\d{2})", chunk_text, re.IGNORECASE | re.DOTALL)
-        if not price_search:
-            price_search = re.search(r"Total\s+price\s+.*?([\d,]+\.\d{2})", full_context, re.IGNORECASE | re.DOTALL)
+        if ea_idx is not None and ea_idx + 4 < end_idx:
+            vals = []
+            for i in range(ea_idx + 1, end_idx):
+                line = lines[i]
+                if re.match(r"^[\d,]+\.?\d*$", line.strip()):
+                    try:
+                        vals.append(float(line.strip().replace(",", "")))
+                    except ValueError:
+                        pass
+                elif vals:
+                    break
             
-        if price_search:
-            total_price = float(price_search.group(1).replace(",", ""))
+            if len(vals) >= 5:
+                shipped = vals[1]
+                total_price = vals[4]
+            elif len(vals) >= 2:
+                shipped = vals[0]
+                total_price = vals[-1]
+        
+        # Layout A: financials after lot data (Ordered/Shipped/Unit price/Total price labels)
+        if shipped is None or total_price is None:
+            lot_end = 0
+            for lm in lot_pattern.finditer(chunk_text):
+                lot_end = lm.end()
+            
+            if lot_end > 0:
+                after_lots = chunk_text[lot_end:]
+                
+                # Extract all financial section numbers in order
+                fin_section = re.search(r"Ordered\s*\n(.*)", after_lots, re.IGNORECASE | re.DOTALL)
+                if fin_section:
+                    fin_text = fin_section.group(1)
+                    fin_numbers = re.findall(r"([\d,]+\.\d{2})", fin_text)
+                    fin_clean = []
+                    for n in fin_numbers:
+                        try:
+                            fin_clean.append(float(n.replace(",", "")))
+                        except ValueError:
+                            pass
+                    
+                    if len(fin_clean) >= 4:
+                        if shipped is None:
+                            shipped = fin_clean[1]
+                        if total_price is None:
+                            total_price = fin_clean[-1]
+                
+                if shipped is None:
+                    ship_m = re.search(r"Shipped\s+Unit\s+price\s*\n([\d,]+\.?\d*)", after_lots, re.IGNORECASE)
+                    if ship_m:
+                        shipped = float(ship_m.group(1).replace(",", ""))
+                
+                if total_price is None:
+                    # Handle "Disc % Total price\n25\n465.00" pattern
+                    disc_total_m = re.search(r"Disc\s+%.*?\n(\d+)\s+(\d+\.?\d*)", after_lots, re.IGNORECASE | re.DOTALL)
+                    if disc_total_m:
+                        total_price = float(disc_total_m.group(2).replace(",", ""))
+                    else:
+                        total_m = re.search(r"Total\s+price\s*\n(\d+\.?\d*)", after_lots, re.IGNORECASE)
+                        if total_m:
+                            total_price = float(total_m.group(1).replace(",", ""))
 
-        # Package Qty from desc (e.g. 20M)
-        m_pkg = re.search(r"(\d+)\s*[Mm]\b", desc)
+        # Package description: find package qty line (e.g., "5M", "100M", "25 lb")
+        pkg_qty_line = ""
+        for i in range(start_idx, end_idx):
+            line = lines[i]
+            if re.match(r"^\d+\s*[Mm]$", line) or re.match(r"^\d+\s*[Ll][Bb]$", line):
+                pkg_qty_line = line
+                break
+        
+        enriched_desc = desc
+        if pkg_qty_line:
+            enriched_desc = desc + " " + pkg_qty_line
+        
+        # Package Qty from enriched desc
+        m_pkg = re.search(r"(\d+)\s*[Mm]\b", enriched_desc, re.IGNORECASE)
+        if not m_pkg:
+            m_pkg = re.search(r"(\d+)\s*[Ll][Bb]\b", enriched_desc, re.IGNORECASE)
         pkg_qty = int(m_pkg.group(1)) if m_pkg else None
 
         usd_actual_cost = None
-        if pkg_qty and shipped and total_price:
+        if pkg_qty and shipped and total_price and shipped != 0 and pkg_qty != 0:
             usd_actual_cost = "{:.4f}".format(total_price / (shipped * pkg_qty))
             
         original_qty = int(shipped * pkg_qty) if shipped and pkg_qty else None
 
-        # Lots (Search only within the item chunk)
+        # Lots
         lots_raw = []
-        # Precise Sakata lot format: 6 digits - 3 digits
-        lot_pattern = re.compile(r"\b(\d{6}-\d{3})\b")
         lot_matches = list(lot_pattern.finditer(chunk_text))
         
         for j, lm in enumerate(lot_matches):
             vendor_lot_no = lm.group(1)
             l_start = lm.start()
             l_end = lot_matches[j+1].start() if j + 1 < len(lot_matches) else len(chunk_text)
-            
-            # Context for lot line (add small buffer if next lot starts immediately)
             lot_chunk = chunk_text[l_start:min(l_end + 50, len(chunk_text))]
             lots_raw.append(_parse_ocr_lot_line(lot_chunk, vendor_lot_no))
 
@@ -217,7 +329,7 @@ def _extract_invoice_from_ocr_text(ocr_text: str, fallback_po: str, token: str) 
             "QtyShipped": shipped,
             "OriginalReceivedQty": original_qty, 
             "USD_Actual_Cost_$": usd_actual_cost,
-            "PackageDescription": find_best_package_description(desc),
+            "PackageDescription": find_best_package_description(enriched_desc),
             "TreatmentName": treatment_name,
             "PurchaseOrder": item_po,
             "TotalPrice": total_price,
