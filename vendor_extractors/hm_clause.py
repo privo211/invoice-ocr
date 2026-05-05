@@ -691,14 +691,31 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> Tuple[List[Di
     for page in doc:
         if "limitation of warranty and liability" in page.get_text("text").lower():
             continue
+            
         blocks = page.get_text("blocks")
         
-        if not blocks or not any(b[4].strip() for b in blocks):
+        # Calculate the total length of meaningful text on the page
+        total_char_count = sum(len(b[4].strip()) for b in blocks) if blocks else 0
+        
+        # Trigger OCR if the page is completely empty OR has less than 100 characters
+        if total_char_count < 100:
             ocr_triggered = True
             doc.close()
             ocr_lines = extract_text_with_azure_ocr(pdf_bytes)
             extraction_info['method'] = 'Azure OCR'
             return extract_items_from_ocr_lines(ocr_lines), extraction_info
+            
+    # for page in doc:
+    #     if "limitation of warranty and liability" in page.get_text("text").lower():
+    #         continue
+    #     blocks = page.get_text("blocks")
+        
+    #     if not blocks or not any(b[4].strip() for b in blocks):
+    #         ocr_triggered = True
+    #         doc.close()
+    #         ocr_lines = extract_text_with_azure_ocr(pdf_bytes)
+    #         extraction_info['method'] = 'Azure OCR'
+    #         return extract_items_from_ocr_lines(ocr_lines), extraction_info
             
         sorted_blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
         all_blocks.extend(sorted_blocks)
