@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Kamterter: Shipping Report Results</title>
+  <title>Kamterter: Extracted Shipping Report Data</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <style>
@@ -122,7 +122,7 @@
                 <dt class="col-sm-4">Customer PO</dt>
                 <dd class="col-sm-8"><div class="field-box">{{ rec.customer_po }}</div></dd>
 
-                <dt class="col-sm-4">Estimated Date From Treater</dt>
+                <dt class="col-sm-4">Est. Date From Treater</dt>
                 <dd class="col-sm-8"><div class="field-box">{{ rec.est_date_from_treater }}</div></dd>
               </dl>
             </div>
@@ -132,7 +132,7 @@
 
       <div class="text-center my-4">
         {% if session.get("user_token") %}
-          <button id="update-selected-btn" class="btn btn-success btn-lg">Update Selected in BC</button>
+          <button id="update-selected-btn" class="btn btn-success btn-lg" type="button">Update Assembly Order in BC</button>
         {% else %}
           <p class="text-warning">You must <a href="{{ url_for('sign_in') }}">sign in</a> before updating records.</p>
         {% endif %}
@@ -190,76 +190,80 @@
       return card.getAttribute('data-customer-po') || 'Unnamed Record';
     }
 
-    // Open modal and populate list with selectable cards (omit errored ones)
-    document.getElementById('update-selected-btn')?.addEventListener('click', () => {
-      const cards = document.querySelectorAll('.card[data-card-idx]');
-      if (cards.length === 0) return alert('No records found.');
+    // Ensure handlers bind after DOM is ready
+    window.addEventListener('DOMContentLoaded', () => {
+      // Open modal and populate list with selectable cards (omit errored ones)
+      document.getElementById('update-selected-btn')?.addEventListener('click', () => {
+        const cards = document.querySelectorAll('.card[data-card-idx]');
+        if (cards.length === 0) return alert('No records found.');
 
-      const list = document.getElementById('shipping-selection-list');
-      list.innerHTML = '';
+        const list = document.getElementById('shipping-selection-list');
+        list.innerHTML = '';
 
-      let selectableCount = 0;
-      cards.forEach(card => {
-        const hasErrors = card.getAttribute('data-has-errors') === '1';
-        if (hasErrors) return; // omit errored cards from selection
-        const idx = card.getAttribute('data-card-idx');
-        const name = getCardDisplayName(card);
-        const li = document.createElement('li');
-        li.innerHTML = `<label><input type="checkbox" class="shipping-item-checkbox" data-card-idx="${idx}" checked /> ${name}</label>`;
-        list.appendChild(li);
-        selectableCount += 1;
+        let selectableCount = 0;
+        cards.forEach(card => {
+          const hasErrors = card.getAttribute('data-has-errors') === '1';
+          if (hasErrors) return; // omit errored cards from selection
+          const idx = card.getAttribute('data-card-idx');
+          const name = getCardDisplayName(card);
+          const li = document.createElement('li');
+          li.innerHTML = `<label><input type="checkbox" class="shipping-item-checkbox" data-card-idx="${idx}" checked /> ${name}</label>`;
+          list.appendChild(li);
+          selectableCount += 1;
+        });
+
+        if (selectableCount === 0) {
+          alert('No eligible records to update.');
+          return;
+        }
+
+        const modalEl = document.getElementById('shipping-selection-modal');
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
       });
 
-      if (selectableCount === 0) {
-        alert('No eligible records to update.');
-        return;
-      }
+      // Select/Deselect All
+      document.getElementById('select-all-shipping')?.addEventListener('change', (e) => {
+        document.querySelectorAll('.shipping-item-checkbox').forEach(cb => cb.checked = e.target.checked);
+      });
 
-      new bootstrap.Modal(document.getElementById('shipping-selection-modal')).show();
-    });
+      // Confirm and POST updates
+      document.getElementById('confirm-shipping-update-btn')?.addEventListener('click', async () => {
+        const selected = document.querySelectorAll('.shipping-item-checkbox:checked');
+        if (selected.length === 0) { alert('No records selected.'); return; }
 
-    // Select/Deselect All
-    document.getElementById('select-all-shipping')?.addEventListener('change', (e) => {
-      document.querySelectorAll('.shipping-item-checkbox').forEach(cb => cb.checked = e.target.checked);
-    });
+        const modalEl = document.getElementById('shipping-selection-modal');
+        bootstrap.Modal.getOrCreateInstance(modalEl).hide();
 
-    // Confirm and POST updates
-    document.getElementById('confirm-shipping-update-btn')?.addEventListener('click', async () => {
-      const selected = document.querySelectorAll('.shipping-item-checkbox:checked');
-      if (selected.length === 0) { alert('No records selected.'); return; }
-
-      const modalEl = document.getElementById('shipping-selection-modal');
-      bootstrap.Modal.getInstance(modalEl).hide();
-
-      for (const cb of selected) {
-        const idx = cb.getAttribute('data-card-idx');
-        const card = document.querySelector(`.card[data-card-idx="${idx}"]`);
-        if (!card) continue;
-        const payload = {
-          customer_po: card.getAttribute('data-customer-po') || '',
-          est_date_from_treater: card.getAttribute('data-est-date') || ''
-        };
-        try {
-          const res = await fetch('/update-kamterter-shipping-report', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify(payload)
-          });
-          if (res.redirected || res.status === 401) {
-            alert('Your session has expired. Please sign in again.');
-            window.location.href = '/sign_in';
-            return;
+        for (const cb of selected) {
+          const idx = cb.getAttribute('data-card-idx');
+          const card = document.querySelector(`.card[data-card-idx="${idx}"]`);
+          if (!card) continue;
+          const payload = {
+            customer_po: card.getAttribute('data-customer-po') || '',
+            est_date_from_treater: card.getAttribute('data-est-date') || ''
+          };
+          try {
+            const res = await fetch('/update-kamterter-shipping-report', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin',
+              body: JSON.stringify(payload)
+            });
+            if (res.redirected || res.status === 401) {
+              alert('Your session has expired. Please sign in again.');
+              window.location.href = '/sign_in';
+              return;
+            }
+            if (!res.ok) {
+              const j = await res.json().catch(() => ({}));
+              alert(`❌ Error updating ${payload.customer_po}: ${j.error || j.message || res.status}`);
+            }
+          } catch (err) {
+            alert(`❌ Network error: ${err.message}`);
           }
-          if (!res.ok) {
-            const j = await res.json().catch(() => ({}));
-            alert(`❌ Error updating ${payload.customer_po}: ${j.error || j.message || res.status}`);
-          }
-        } catch (err) {
-          alert(`❌ Network error: ${err.message}`);
         }
-      }
-      alert('✅ Processing complete.');
+        alert('✅ Processing complete.');
+      });
     });
   </script>
 </body>
