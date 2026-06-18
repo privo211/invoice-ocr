@@ -136,33 +136,42 @@ def _parse_date_shipped(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _parse_customer_pos(text: str) -> list[str]:
+    """Return all unique Customer PO values in first-seen order.
+
+    Pattern shape: 3 digits, then two dash-separated alpha groups of length 2–3.
+    Example matches: 174-CAR-RA, 134-CAR-REA, 171-ON-SEF
+
+    - Normalizes unicode dashes to '-'
+    - Upper-cases letters and strips spaces around dashes
+    - De-dupes while preserving first occurrence order
+    - Intentionally ignores date-like tokens such as 04/28/2026 (won't match regex)
+    """
+    if not text:
+        return []
+
+    norm_text = _replace_unicode_dashes(text)
+
+    # Pre-normalize spacing around dashes so '159 - CAR - SA' matches too
+    # ponytail: simple collapse around '-' chars; avoids heavy tokenization
+    norm_text = re.sub(r"\s*-\s*", "-", norm_text)
+
+    # Find all candidates anywhere in the text (rows, columns, headers)
+    pat = re.compile(r"\b(\d{3})-([A-Za-z]{2,3})-([A-Za-z]{2,3})\b")
+    seen = set()
+    result: list[str] = []
+    for m in pat.finditer(norm_text):
+        po = f"{m.group(1)}-{m.group(2).upper()}-{m.group(3).upper()}"
+        if po not in seen:
+            seen.add(po)
+            result.append(po)
+    return result
+
+
 def _parse_customer_po(text: str) -> str | None:
-    # Strategy: find header line containing 'Cust. PO#' and take the next non-empty line as the value.
-    # ponytail: table-agnostic; upgrade to bbox-based extraction if this fails on variants.
-    lines = [ln.strip() for ln in text.splitlines()]
-    for i, ln in enumerate(lines):
-        if re.search(r"Cust\.?\s*PO#", ln, re.IGNORECASE):
-            # search next non-empty line(s)
-            for j in range(i + 1, min(i + 10, len(lines))):
-                val = lines[j].strip()
-                if not val:
-                    continue
-                # Avoid picking another header-y line
-                if re.search(r"^(Item|Description|Qty|Quantity|Ship|Subtotal|Total)\b", val, re.IGNORECASE):
-                    continue
-                # ponytail: skip known table header fragments seen after 'Cust. PO#' in shipping report
-                # e.g., 'SD CNT/LB# PKG' or lines containing PKG/LB# tokens
-                if re.search(r"(\bSD\b.*\bCNT\b)|\bLB#\b|\bPKG\b", val, re.IGNORECASE):
-                    continue
-                norm = _replace_unicode_dashes(val).upper().replace(" ", "")
-                # Require canonical PO shape like 123-ABC-DE; otherwise keep scanning
-                if re.fullmatch(r"\d{3}-[A-Z]{3}-[A-Z]{2}", norm):
-                    return norm
-            # If we didn't return from nearby lines, try a global search as fallback
-            m = re.search(r"\b(\d{3})\s*[-\u2013]\s*([A-Za-z]{3})\s*[-\u2013]\s*([A-Za-z]{2})\b", text)
-            if m:
-                return f"{m.group(1)}-{m.group(2).upper()}-{m.group(3).upper()}"
-    return None
+    """Compatibility wrapper: return the first valid PO if present."""
+    lst = _parse_customer_pos(text)
+    return lst[0] if lst else None
 
 
 def extract_kamterter_shipping_data_from_bytes(pdf_files):
@@ -181,43 +190,73 @@ def extract_kamterter_shipping_data_from_bytes(pdf_files):
     for filename, pdf_bytes in pdf_files:
         method, text, page_count = _extract_text_with_fallback(pdf_bytes)
 
-        errors: list[str] = []
+        base_errors: list[str] = []
         date_shipped_str = _parse_date_shipped(text) if text else None
-        customer_po = _parse_customer_po(text) if text else None
+        pos = _parse_customer_pos(text) if text else []
 
         est_iso = None
         if not date_shipped_str:
-            errors.append("Missing 'Date Shipped'")
-        if not customer_po:
-            errors.append("Missing 'Cust. PO#'")
+            base_errors.append("Missing 'Date Shipped'")
 
-        if date_shipped_str and customer_po:
+        if date_shipped_str:
             # Compute 5 business days from shipped date (inclusive) and return ISO
             m, d, y = map(int, date_shipped_str.split("/"))
             shipped_dt = date(year=y, month=m, day=d)
             est_dt = add_business_days_inclusive(shipped_dt, 5)
             est_iso = est_dt.isoformat()
 
-        # Assemble record
-        rec = {
-            "date_shipped": date_shipped_str,
-            "customer_po": customer_po,
-            "est_date_from_treater": est_iso,
-            "extraction_method": method,
-            "page_count": page_count,
-            "errors": errors,
-        }
-        results[filename] = rec
+        if pos:
+            # One record per PO
+            for po in pos:
+                rec = {
+                    "date_shipped": date_shipped_str,
+                    "customer_po": po,
+                    "est_date_from_treater": est_iso,
+                    "extraction_method": method,
+                    "page_count": page_count,
+                    "errors": list(base_errors),  # copy
+                }
+                key = f"{filename} — {po}"
+                results[key] = rec
 
-        # Optional logging
-        try:
-            log_processing_event(
-                vendor="kamterter_shipping",
-                filename=filename,
-                extraction_info={"method": ("Azure OCR" if method == "ocr" else "PyMuPDF"), "page_count": page_count},
-                po_number=customer_po,
-            )
-        except Exception:
-            pass
+                # Optional logging per PO
+                try:
+                    log_processing_event(
+                        vendor="kamterter_shipping",
+                        filename=filename,
+                        extraction_info={
+                            "method": ("Azure OCR" if method == "ocr" else "PyMuPDF"),
+                            "page_count": page_count,
+                        },
+                        po_number=po,
+                    )
+                except Exception:
+                    pass
+        else:
+            # Keep one error record as before when no valid PO found
+            errs = list(base_errors)
+            errs.append("Missing 'Cust. PO#'")
+            rec = {
+                "date_shipped": date_shipped_str,
+                "customer_po": None,
+                "est_date_from_treater": est_iso,
+                "extraction_method": method,
+                "page_count": page_count,
+                "errors": errs,
+            }
+            results[filename] = rec
+
+            try:
+                log_processing_event(
+                    vendor="kamterter_shipping",
+                    filename=filename,
+                    extraction_info={
+                        "method": ("Azure OCR" if method == "ocr" else "PyMuPDF"),
+                        "page_count": page_count,
+                    },
+                    po_number=None,
+                )
+            except Exception:
+                pass
 
     return results
