@@ -42,12 +42,47 @@
       text-decoration: none;
     }
     .btn-theme:hover, .btn-back:hover, .btn-auth:hover { opacity: 0.9; }
-    .card { background-color: var(--card-bg); color: var(--text-color); border: none; box-shadow: 0 0 8px rgba(0,0,0,0.1); margin-bottom: 1.25rem; border-radius: 8px; }
-    .table { color: var(--text-color); --bs-table-bg: transparent; }
-    .table th { background-color: var(--primary-color); color: white; border-bottom: none; }
-    .table td { color: var(--text-color); vertical-align: middle; }
-    body.dark-mode .table-hover tbody tr:hover { color: var(--text-color); background-color: rgba(255,255,255,0.075); }
-    .status-badge { display: none; }
+    .row-cols-md-2 .card {
+      position: relative;
+      padding-top: 2rem;
+      background-color: var(--card-bg);
+      border: none;
+      border-radius: 8px;
+      box-shadow: 0 0 8px rgba(0,0,0,0.1);
+    }
+    .item-header {
+      color: var(--primary-color);
+      font-weight: bold;
+      margin-bottom: 1rem;
+      line-height: 1.2;
+    }
+    dt { color: var(--text-color); padding-top: .5rem; font-weight: 600; }
+    dd { margin-bottom: .5rem; }
+    .card dl dd:last-child { margin-bottom: 0; }
+    .field-box {
+      padding: .5rem;
+      line-height: 1.3;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background-color: var(--background-color);
+      color: var(--text-color);
+    }
+    /* modal sizing & centering */
+    .modal-dialog { max-width: 60%; width: 45%; margin: 1.5rem auto; }
+    .modal-dialog-centered { display: flex; align-items: center; min-height: calc(100% - 1rem); }
+    .modal-dialog .modal-content { max-height: 90vh; overflow: hidden; }
+    .modal-dialog .modal-content ul { max-height: calc(80vh - 8rem); overflow-y: auto; }
+    .modal-content, .modal-content h4, .modal-content label { font-size: 1.1rem; }
+    .modal-content .form-check-label { font-size: 1rem; padding-left: .25rem; }
+    .modal-content { background-color: var(--card-bg) !important; color: var(--text-color); border-radius: 8px; box-shadow: 0 0 16px rgba(0,0,0,0.2); }
+    .modal-content h4 { color: var(--primary-color); font-size: 1.5rem; }
+    .lookup-ok { background: var(--primary-color); color: #fff; border: none; border-radius: 4px; padding: .4em 1em; font-weight: bold; }
+    .lookup-cancel { background: transparent; color: var(--text-color); border: 1px solid #ccc; border-radius: 4px; padding: .4em 1em; font-weight: bold; }
+    body.dark-mode .lookup-cancel { border: 1px solid #ccc; }
+    body.dark-mode .form-control, body.dark-mode .field-box { background-color: var(--background-color); color: var(--text-color); border: 1px solid #ccc; }
+    body.dark-mode input::placeholder { color: var(--text-color); opacity: 0.6; }
+    .select-all-container { display: flex; align-items: center; margin-bottom: 1rem; gap: 0.5rem; }
+    .select-all-container input { transform: scale(1.3); margin-right: 0.5rem; }
   </style>
 </head>
 <body>
@@ -70,67 +105,62 @@
 
   <div class="container">
     {% if items %}
-      {% for filename, rec in items.items() %}
-        <div class="card p-3" id="card-{{ loop.index }}">
-          <div class="d-flex justify-content-between align-items-center mb-2">
-            <h4 class="m-0">📄 {{ filename }}</h4>
-            <span id="header-status-{{ loop.index }}" class="badge bg-success fs-6 status-badge"></span>
-          </div>
+      <div class="row row-cols-1 row-cols-md-2 g-4">
+        {% for filename, rec in items.items() %}
+          {% set idx = loop.index0 %}
+          <div class="col">
+            <div class="card h-100 p-3"
+                 data-card-idx="{{ idx }}"
+                 data-customer-po="{{ rec.customer_po }}"
+                 data-est-date="{{ rec.est_date_from_treater }}"
+                 data-has-errors="{{ 1 if rec.errors and rec.errors|length > 0 else 0 }}">
+              <div class="item-header">📄 {{ filename }}</div>
+              <dl class="row">
+                <dt class="col-sm-4">Shipped Date</dt>
+                <dd class="col-sm-8"><div class="field-box">{{ rec.date_shipped }}</div></dd>
 
-          <div class="table-responsive">
-            <table class="table table-bordered table-hover">
-              <thead>
-                <tr>
-                  <th scope="col">Filename</th>
-                  <th scope="col">Shipped Date</th>
-                  <th scope="col">Customer PO</th>
-                  <th scope="col">Estimated Date</th>
-                  <th scope="col">Extraction Method</th>
-                  <th scope="col">Errors</th>
-                  <th scope="col" class="text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>{{ filename }}</td>
-                  <td>{{ rec.date_shipped }}</td>
-                  <td>{{ rec.customer_po }}</td>
-                  <td>{{ rec.est_date_from_treater }}</td>
-                  <td>{{ rec.extraction_method }}</td>
-                  <td>
-                    {% if rec.errors %}
-                      <ul class="mb-0">
-                        {% for e in rec.errors %}
-                          <li>{{ e }}</li>
-                        {% endfor %}
-                      </ul>
-                    {% else %}
-                      None
-                    {% endif %}
-                  </td>
-                  <td class="text-center">
-                    <button
-                      type="button"
-                      class="btn btn-success update-shipping-btn"
-                      data-index="{{ loop.index }}"
-                      data-customer-po="{{ rec.customer_po }}"
-                      data-est-date="{{ rec.est_date_from_treater }}"
-                      {% if rec.errors and rec.errors|length > 0 %}disabled{% endif %}
-                    >
-                      Update in BC
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+                <dt class="col-sm-4">Customer PO</dt>
+                <dd class="col-sm-8"><div class="field-box">{{ rec.customer_po }}</div></dd>
+
+                <dt class="col-sm-4">Estimated Date From Treater</dt>
+                <dd class="col-sm-8"><div class="field-box">{{ rec.est_date_from_treater }}</div></dd>
+              </dl>
+            </div>
           </div>
-        </div>
-      {% endfor %}
+        {% endfor %}
+      </div>
+
+      <div class="text-center my-4">
+        {% if session.get("user_token") %}
+          <button id="update-selected-btn" class="btn btn-success btn-lg">Update Selected in BC</button>
+        {% else %}
+          <p class="text-warning">You must <a href="{{ url_for('sign_in') }}">sign in</a> before updating records.</p>
+        {% endif %}
+      </div>
     {% else %}
       <p class="text-muted">No data found.</p>
     {% endif %}
   </div>
 
+  <!-- Selection Modal -->
+  <div class="modal fade" id="shipping-selection-modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
+      <div class="modal-content p-3">
+        <h4>Select Records to Update</h4>
+        <div class="select-all-container">
+          <input type="checkbox" id="select-all-shipping" checked/>
+          <label for="select-all-shipping">Select/Deselect All</label>
+        </div>
+        <ul class="list-unstyled mb-3" id="shipping-selection-list"></ul>
+        <div class="text-end">
+          <button type="button" class="lookup-ok" id="confirm-shipping-update-btn">Update Selected</button>
+          <button type="button" class="lookup-cancel" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <script>
     // Theme toggle (match existing pattern)
     const themeBtn = document.getElementById('theme-toggle');
@@ -154,56 +184,82 @@
       updateLogoTheme(isDark);
     });
 
-    // Shipping update POST
-    document.querySelectorAll('.update-shipping-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        // ponytail: simple confirm to avoid accidental posts
-        if (!confirm('Update this Kamterter shipping record in BC?')) return;
+    function getCardDisplayName(card) {
+      const header = card.querySelector('.item-header');
+      if (header) return header.textContent.trim();
+      return card.getAttribute('data-customer-po') || 'Unnamed Record';
+    }
 
-        const idx = btn.dataset.index;
-        const statusBadge = document.getElementById(`header-status-${idx}`);
+    // Open modal and populate list with selectable cards (omit errored ones)
+    document.getElementById('update-selected-btn')?.addEventListener('click', () => {
+      const cards = document.querySelectorAll('.card[data-card-idx]');
+      if (cards.length === 0) return alert('No records found.');
+
+      const list = document.getElementById('shipping-selection-list');
+      list.innerHTML = '';
+
+      let selectableCount = 0;
+      cards.forEach(card => {
+        const hasErrors = card.getAttribute('data-has-errors') === '1';
+        if (hasErrors) return; // omit errored cards from selection
+        const idx = card.getAttribute('data-card-idx');
+        const name = getCardDisplayName(card);
+        const li = document.createElement('li');
+        li.innerHTML = `<label><input type="checkbox" class="shipping-item-checkbox" data-card-idx="${idx}" checked /> ${name}</label>`;
+        list.appendChild(li);
+        selectableCount += 1;
+      });
+
+      if (selectableCount === 0) {
+        alert('No eligible records to update.');
+        return;
+      }
+
+      new bootstrap.Modal(document.getElementById('shipping-selection-modal')).show();
+    });
+
+    // Select/Deselect All
+    document.getElementById('select-all-shipping')?.addEventListener('change', (e) => {
+      document.querySelectorAll('.shipping-item-checkbox').forEach(cb => cb.checked = e.target.checked);
+    });
+
+    // Confirm and POST updates
+    document.getElementById('confirm-shipping-update-btn')?.addEventListener('click', async () => {
+      const selected = document.querySelectorAll('.shipping-item-checkbox:checked');
+      if (selected.length === 0) { alert('No records selected.'); return; }
+
+      const modalEl = document.getElementById('shipping-selection-modal');
+      bootstrap.Modal.getInstance(modalEl).hide();
+
+      for (const cb of selected) {
+        const idx = cb.getAttribute('data-card-idx');
+        const card = document.querySelector(`.card[data-card-idx="${idx}"]`);
+        if (!card) continue;
         const payload = {
-          customer_po: btn.dataset.customerPo || btn.getAttribute('data-customer-po'),
-          est_date_from_treater: btn.dataset.estDate || btn.getAttribute('data-est-date')
+          customer_po: card.getAttribute('data-customer-po') || '',
+          est_date_from_treater: card.getAttribute('data-est-date') || ''
         };
-
         try {
-          btn.disabled = true;
-          btn.textContent = 'Updating...';
-
           const res = await fetch('/update-kamterter-shipping-report', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
             body: JSON.stringify(payload)
           });
-
           if (res.redirected || res.status === 401) {
-            alert('Session expired. Please sign in again.');
-            window.location.href = '/sign-in';
+            alert('Your session has expired. Please sign in again.');
+            window.location.href = '/sign_in';
             return;
           }
-
-          const json = await res.json().catch(() => ({}));
-          if (res.ok) {
-            if (statusBadge) {
-              statusBadge.textContent = 'Updated';
-              statusBadge.style.display = 'inline-block';
-            }
-            btn.textContent = 'Updated';
-            btn.classList.remove('btn-success');
-            btn.classList.add('btn-secondary');
-            btn.disabled = true;
-          } else {
-            alert(`Error: ${json.message || 'Unknown error'}`);
-            btn.disabled = false;
-            btn.textContent = 'Try Again';
+          if (!res.ok) {
+            const j = await res.json().catch(() => ({}));
+            alert(`❌ Error updating ${payload.customer_po}: ${j.error || j.message || res.status}`);
           }
-        } catch (e) {
-          alert(`Network Error: ${e.message}`);
-          btn.disabled = false;
-          btn.textContent = 'Try Again';
+        } catch (err) {
+          alert(`❌ Network error: ${err.message}`);
         }
-      });
+      }
+      alert('✅ Processing complete.');
     });
   </script>
 </body>

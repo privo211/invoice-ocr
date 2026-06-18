@@ -1,7 +1,8 @@
 # Byte-compiled / caches
 __pycache__/
 *.py[cod]
-
+.claude
+.pytest_cache
 # Virtual environments
 venv/
 env/
@@ -12,18 +13,3 @@ uploads/
 # Local environment variables
 .env
 
-# Local AI/tooling state
-.sisyphus/
-.claude/
-.opencode/
-
-# Local AI instruction docs and test dirs
-CLAUDE.md
-AGENTS.md
-GEMINI.md
-tests/
-testing/
-
-# Test/OS caches and noise
-.pytest_cache/
-.DS_Store
