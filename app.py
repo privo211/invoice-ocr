@@ -18,6 +18,7 @@ from multiprocessing import Pool, cpu_count
 from vendor_extractors.sakata import load_package_descriptions, get_po_items
 from vendor_extractors.hm_clause import extract_hm_clause_data_from_bytes, find_best_hm_clause_package_description
 from vendor_extractors.kamterter import extract_kamterter_data_from_bytes
+from vendor_extractors.kamterter_shipping import extract_kamterter_shipping_data_from_bytes
 from vendor_extractors.seminis import extract_seminis_data_from_bytes, find_best_seminis_package_description
 from vendor_extractors.syngenta import extract_syngenta_data_from_bytes
 from vendor_extractors.nunhems import extract_nunhems_data_from_bytes, find_best_nunhems_package_description
@@ -65,6 +66,24 @@ def get_bc_env(vendor: str | None = None) -> str:
     if vendor and vendor.strip().lower() in ["seminis", "hm_clause", "sakata", "syngenta", "kamterter"]:
         return "Production"
     return BC_ENV_DEFAULT
+
+# --- Minimal helpers for OData/BC error handling ---
+def _odata_quote(value: str) -> str:
+    """Escape single quotes for OData string literals by doubling them."""
+    # ponytail: minimal escaping sufficient for OData string literal context
+    return str(value).replace("'", "''")
+
+def _bc_error_message(resp: requests.Response) -> str:
+    """Extract Business Central error message if present; fallback to text."""
+    try:
+        data = resp.json()
+        err = data.get("error") or {}
+        msg = err.get("message")
+        if isinstance(msg, str) and msg.strip():
+            return msg
+    except Exception:
+        pass
+    return resp.text
 
 def load_cache():
     """Load MSAL cache for this user from PostgreSQL."""
@@ -875,6 +894,11 @@ def index():
             grouped_results = extract_kamterter_data_from_bytes(pdf_files)
             return render_template("results_kamterter.html", items=grouped_results)
 
+        elif vendor == "kamterter_shipping":
+            # ponytail: simple branch just renders grouped results; no temp-save, no BC calls
+            grouped_results = extract_kamterter_shipping_data_from_bytes(pdf_files)
+            return render_template("results_kamterter_shipping.html", items=grouped_results)
+
         else:
             for path in pdf_paths:
                 try:
@@ -1114,6 +1138,131 @@ def create_purchase_invoice():
         "No": document_no,
         "lines_created": success_count
     }), 201
+
+# --- Kamterter Shipping: sandbox-only OData update route ---
+@app.route("/update-kamterter-shipping-report", methods=["POST"])
+@login_required
+@timed_func("update_kamterter_shipping_report")
+def update_kamterter_shipping_report():
+    """
+    POST JSON {customer_po, est_date_from_treater}
+    - Always targets SANDBOX-25C and Company('Stokes%20Seeds%20Limited')
+    - GET Assembly_Order_Excel filtered by TMG_CustomerPO
+    - Expect exactly one row; extract Document_Type, No, @odata.etag
+    - PATCH Est_Date_from_Treater using If-Match with etag
+    - On 412, refetch once and retry with new etag
+    """
+    data = request.get_json(force=True) or {}
+    customer_po = str(data.get("customer_po", "")).strip()
+    est_date_raw = str(data.get("est_date_from_treater", "")).strip()
+
+    if not customer_po or not est_date_raw:
+        return jsonify({"error": "Missing customer_po or est_date_from_treater"}), 400
+
+    # Validate date with stdlib date.fromisoformat
+    from datetime import date as _date
+    try:
+        est_date = _date.fromisoformat(est_date_raw).isoformat()
+    except Exception:
+        return jsonify({"error": "Invalid est_date_from_treater"}), 400
+
+    # Acquire/refetch token using existing MSAL silent pattern
+    token = session.get("user_token")
+    cache = load_cache()
+    msal_app = build_msal_app(cache)
+    accounts = msal_app.get_accounts()
+    if accounts:
+        result = msal_app.acquire_token_silent(scopes=SCOPE_BC, account=accounts[0])
+        if result and "access_token" in result:
+            token = result["access_token"]
+            session["user_token"] = token
+            save_cache(cache)
+
+    if not token:
+        return jsonify({"error": "Authentication token missing"}), 401
+
+    # Hard-coded SANDBOX-25C OData base. Do NOT use get_bc_env(), do NOT hit Production.
+    odata_base = (
+        f"https://api.businesscentral.dynamics.com/v2.0/"
+        f"{BC_TENANT}/SANDBOX-25C/ODataV4/"
+        f"Company('Stokes%20Seeds%20Limited')"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+
+    # GET exact assembly order by customer PO
+    filter_po = _odata_quote(customer_po)
+    list_url = f"{odata_base}/Assembly_Order_Excel?$filter=TMG_CustomerPO eq '{filter_po}'"
+
+    get_resp = requests.get(list_url, headers=headers)
+    if get_resp.status_code != 200:
+        return jsonify({
+            "error": "Failed to query Assembly_Order_Excel",
+            "customer_po": customer_po,
+            "details": _bc_error_message(get_resp)
+        }), get_resp.status_code
+
+    rows = (get_resp.json() or {}).get("value", [])
+    if len(rows) != 1:
+        # ponytail: simple guard; avoid PATCH on ambiguous or missing rows
+        return jsonify({
+            "error": "Expected exactly one match",
+            "count": len(rows),
+            "customer_po": customer_po
+        }), 400
+
+    row = rows[0]
+    document_type = row.get("Document_Type")
+    no = row.get("No")
+    etag = row.get("@odata.etag") or row.get("odata.etag") or row.get("etag")
+    if not (document_type and no and etag):
+        return jsonify({"error": "Missing keys in matched record"}), 500
+
+    def _do_patch(_etag: str) -> requests.Response:
+        patch_url = (
+            f"{odata_base}/Assembly_Order_Excel("
+            f"Document_Type='{_odata_quote(document_type)}',"
+            f"No='{_odata_quote(no)}')"
+        )
+        patch_headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "If-Match": _etag,
+        }
+        payload = {"Est_Date_from_Treater": est_date}
+        return requests.patch(patch_url, headers=patch_headers, json=payload)
+
+    patch_resp = _do_patch(etag)
+    if patch_resp.status_code == 412:
+        # Precondition Failed (stale etag) -> refetch once and retry with new etag
+        refetch = requests.get(list_url, headers=headers)
+        if refetch.status_code == 200:
+            r2 = (refetch.json() or {}).get("value", [])
+            if len(r2) == 1:
+                new_etag = r2[0].get("@odata.etag") or r2[0].get("odata.etag") or r2[0].get("etag")
+                if new_etag:
+                    patch_resp = _do_patch(new_etag)
+
+    if patch_resp.status_code not in (200, 204):
+        return jsonify({
+            "error": "Failed to update Est_Date_from_Treater",
+            "customer_po": customer_po,
+            "document_type": document_type,
+            "no": no,
+            "details": _bc_error_message(patch_resp)
+        }), patch_resp.status_code
+
+    return jsonify({
+        "success": True,
+        "customer_po": customer_po,
+        "document_type": document_type,
+        "no": no,
+        "est_date_from_treater": est_date,
+    })
     
 # Lot creation endpoint
 @app.route("/create-lot", methods=["POST"])

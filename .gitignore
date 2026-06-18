@@ -12,3 +12,18 @@ uploads/
 # Local environment variables
 .env
 
+# Local AI/tooling state
+.sisyphus/
+.claude/
+.opencode/
+
+# Local AI instruction docs and test dirs
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+tests/
+testing/
+
+# Test/OS caches and noise
+.pytest_cache/
+.DS_Store
