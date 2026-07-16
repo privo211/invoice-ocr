@@ -3,9 +3,13 @@ __pycache__/
 *.py[cod]
 .claude
 .pytest_cache
+.sisyphus
+CLAUDE.MD
 # Virtual environments
 venv/
 env/
+/testing
+/tests
 
 # Flask uploads folder (temporary files)
 uploads/

@@ -22,6 +22,30 @@ def parse_currency(value_str):
         return 0.0
 
 
+def _extract_freight_amount(block: str) -> float:
+    """Extract a detailed ``Freight: ...`` charge without matching summaries."""
+    amount_pattern = r"\$\s*[\d,.]+"
+    horizontal_space = r"[^\S\r\n]*"
+
+    patterns = (
+        # PyMuPDF commonly places the right-aligned amount before its label.
+        rf"(?im)^{horizontal_space}({amount_pattern}){horizontal_space}\r?\n"
+        rf"{horizontal_space}Freight{horizontal_space}:[^$\r\n]*$",
+        # Label and amount extracted on the same line.
+        rf"(?im)^{horizontal_space}Freight{horizontal_space}:[^$\r\n]*"
+        rf"({amount_pattern})[^\r\n]*$",
+        # Label extracted first, with the amount on the following line.
+        rf"(?im)^{horizontal_space}Freight{horizontal_space}:[^\r\n]*\r?\n"
+        rf"{horizontal_space}({amount_pattern}){horizontal_space}$",
+    )
+
+    for pattern in patterns:
+        if match := re.search(pattern, block):
+            return parse_currency(match.group(1))
+
+    return 0.0
+
+
 def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dict[str, list[dict]]:
     grouped_results = {}
 
@@ -92,13 +116,11 @@ def extract_kamterter_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
                     subtotal = parse_currency(prices[-1])
                     print(f"   Subtotal (Fallback): {subtotal}")
 
-            # --- FREIGHT LOGIC (UPDATED) ---
-            freight = 0.0
-            
-            # 1. Reverse Match (Price matches "\n" Freight) - This matches your PDF format
-            if m_frt_rev := re.search(r"(\$\s*[\d,.]+)\s*\n\s*Freight:\s*FedEx Priority Freight", block):
-                freight = parse_currency(m_frt_rev.group(1))
-                print(f"   Freight: FedEx Priority Freight Found (Reverse): {freight}")
+            # Require the detailed "Freight:" label so the summary's bare
+            # "Freight" line is not counted as another lot-level charge.
+            freight = _extract_freight_amount(block)
+            if freight > 0:
+                print(f"   Freight Found: {freight}")
 
             adjusted_subtotal = subtotal
             if freight > 0 and subtotal > freight:
