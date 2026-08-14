@@ -18,6 +18,7 @@ from multiprocessing import Pool, cpu_count
 from vendor_extractors.sakata import load_package_descriptions, get_po_items
 from vendor_extractors.hm_clause import extract_hm_clause_data_from_bytes, find_best_hm_clause_package_description
 from vendor_extractors.kamterter import extract_kamterter_data_from_bytes
+from vendor_extractors.kamterter_us import extract_kamterter_us_data_from_bytes
 from vendor_extractors.kamterter_shipping import extract_kamterter_shipping_data_from_bytes
 from vendor_extractors.seminis import extract_seminis_data_from_bytes, find_best_seminis_package_description
 from vendor_extractors.syngenta import extract_syngenta_data_from_bytes
@@ -55,11 +56,37 @@ load_dotenv()
 BC_TENANT = os.environ["AZURE_TENANT_ID"]
 BC_COMPANY = os.environ["BC_COMPANY"]
 BC_ENV_DEFAULT = os.environ.get("BC_ENV", "SANDBOX-25C")
+BC_US_ENV = os.environ.get("BC_US_ENV", "Sandbox-Holland-260216")
+BC_US_COMPANY = os.environ.get("BC_US_COMPANY", "Stokes Seeds US")
 CLIENT_ID = os.environ["AZURE_CLIENT_ID"]
 CLIENT_SECRET = os.environ["AZURE_CLIENT_SECRET"]
 AUTHORITY = f"https://login.microsoftonline.com/{BC_TENANT}"
 REDIRECT_PATH = "/auth/callback"
 SCOPE_BC = ["https://api.businesscentral.dynamics.com/.default"]
+
+KAMTERTER_BC_TARGETS = {
+    "kamterter": {
+        "environment": "Production",
+        "company": urllib.parse.unquote(BC_COMPANY),
+        "label": "Canada LIVE",
+    },
+    "kamterter_us": {
+        "environment": BC_US_ENV,
+        "company": urllib.parse.unquote(BC_US_COMPANY),
+        "label": "US LIVE" if BC_US_ENV.casefold() == "production-holland" else "US SANDBOX",
+    },
+}
+KAMTERTER_EXTRACTORS = {
+    "kamterter": extract_kamterter_data_from_bytes,
+    "kamterter_us": extract_kamterter_us_data_from_bytes,
+}
+
+
+def get_kamterter_bc_target(target_key: str | None) -> dict[str, str] | None:
+    """Resolve an allowlisted Kamterter destination without trusting browser-supplied URLs."""
+    if not target_key:
+        return None
+    return KAMTERTER_BC_TARGETS.get(target_key.strip().lower())
 
 def get_bc_env(vendor: str | None = None) -> str:
     """Return 'Production' if vendor in ["seminis", "hm_clause", "sakata", "syngenta", "kamterter"], else use default BC_ENV."""
@@ -666,8 +693,8 @@ def index():
                 pdf_bytes = f.read()
                 pdf_files.append((safe_filename, pdf_bytes))
                 
-                # Save a temporary copy for the attachment process later ONLY for Kamterter
-                if vendor == "kamterter":
+                # Save a temporary copy for the attachment process for either Kamterter target.
+                if vendor in KAMTERTER_EXTRACTORS:
                     temp_path = os.path.join(app.config["UPLOAD_FOLDER"], safe_filename)
                     with open(temp_path, "wb") as temp_file:
                         temp_file.write(pdf_bytes)
@@ -890,9 +917,15 @@ def index():
                 pkg_descs=pkg_descs
             )
             
-        elif vendor == "kamterter":
-            grouped_results = extract_kamterter_data_from_bytes(pdf_files)
-            return render_template("results_kamterter.html", items=grouped_results)
+        elif vendor in KAMTERTER_EXTRACTORS:
+            grouped_results = KAMTERTER_EXTRACTORS[vendor](pdf_files)
+            target = get_kamterter_bc_target(vendor)
+            return render_template(
+                "results_kamterter.html",
+                items=grouped_results,
+                bc_target=vendor,
+                bc_destination_label=target["label"],
+            )
 
         elif vendor == "kamterter_shipping":
             # ponytail: simple branch just renders grouped results; no temp-save, no BC calls
@@ -908,7 +941,12 @@ def index():
             return "Unsupported vendor selected", 400
 
     stats = db_logger.get_log_stats()
-    return render_template("index.html", user_name=session.get("user_name"), stats=stats)
+    return render_template(
+        "index.html",
+        user_name=session.get("user_name"),
+        stats=stats,
+        kamterter_us_label=KAMTERTER_BC_TARGETS["kamterter_us"]["label"],
+    )
 
 
 # --- Purchase Invoice Creation Route (Kamterter | OData V4) ---
@@ -918,6 +956,13 @@ def index():
 def create_purchase_invoice():
     data = request.get_json(force=True)
     app.logger.info(f"Received data for invoice creation: {data}")
+    target_key = str(data.get("bc_target") or "").strip().lower()
+    bc_target = get_kamterter_bc_target(target_key)
+    if not bc_target:
+        return jsonify({"message": "Invalid or missing Business Central target"}), 400
+
+    bc_env = bc_target["environment"]
+    bc_company = bc_target["company"]
     token = session.get("user_token")
 
     # 1. Refresh Token
@@ -943,19 +988,7 @@ def create_purchase_invoice():
         pass
 
     purchase_lines = data.get("PurchaseLines", [])
-    
-    bc_env = get_bc_env("kamterter")
 
-    # 3. Base URL Setup
-    # odata_base = (
-    #     f"https://api.businesscentral.dynamics.com/v2.0/"
-    #     f"{BC_TENANT}/{bc_env}/ODataV4/"
-    #     f"Company('{BC_COMPANY}')"
-    # )
-    
-    # headers_url = f"{odata_base}/PurchaseHeaders"
-    # lines_url = f"{odata_base}/PurchaseLines" 
-    
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
@@ -965,16 +998,24 @@ def create_purchase_invoice():
     # 3. NATIVE API ROUTE SETUP
     # ==========================================
     # Get the Company ID (GUID) required for native APIs
-    company_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{bc_env}/api/v2.0/companies?$filter=name eq '{BC_COMPANY}'"
-    comp_resp = requests.get(company_url, headers=headers)
+    company_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{bc_env}/api/v2.0/companies"
+    company_filter = f"name eq '{_odata_quote(bc_company)}'"
+    comp_resp = requests.get(
+        company_url,
+        headers=headers,
+        params={"$filter": company_filter},
+    )
     
     if comp_resp.status_code != 200:
         app.logger.error(f"❌ Failed to fetch Company ID: {comp_resp.text}")
         return jsonify({"message": "Failed to fetch Company ID", "details": comp_resp.text}), 500
 
-    company_id = comp_resp.json().get("value", [{}])[0].get("id")
+    companies = comp_resp.json().get("value") or []
+    company_id = companies[0].get("id") if companies else None
     if not company_id:
-        return jsonify({"message": f"Company '{BC_COMPANY}' not found"}), 404
+        return jsonify({
+            "message": f"Company '{bc_company}' not found in '{bc_env}'"
+        }), 404
 
     # Build the Native API Base URL using Publisher/Group/Version from AL code
     api_base = (
@@ -1087,13 +1128,7 @@ def create_purchase_invoice():
             try:
                 app.logger.info(f"=== ATTACHING PDF: {filename} ===")
                 
-                # # A. Get the Company ID (Standard APIs require the GUID, not the name)
-                # company_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{bc_env}/api/v2.0/companies?$filter=name eq '{BC_COMPANY}'"
-                # comp_resp = requests.get(company_url, headers=headers)
-                # company_id = comp_resp.json().get("value", [{}])[0].get("id")
-
-                # if company_id:
-                    # B. Create the Attachment Metadata (Placeholder)
+                # Create the Attachment Metadata (Placeholder)
                 attach_url = f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{bc_env}/api/v2.0/companies({company_id})/documentAttachments"
                 attach_payload = {
                     "parentId": system_id,
