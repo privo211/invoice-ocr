@@ -1,0 +1,33 @@
+<dt class="col-sm-4">Customer PO</dt>
+<dd class="col-sm-8">
+  <input
+    type="text"
+    class="form-control form-control-sm field-box"
+    data-field="CustomerPO"
+    inputmode="numeric"
+    maxlength="5"
+    pattern="\d{5}"
+    value="{{ lot_record.PurchaseOrder | customer_po }}"
+  />
+</dd>
+
+<dt class="col-sm-4">G&amp;P Certification Outstanding</dt>
+<dd class="col-sm-8">
+  <div class="form-check form-switch mb-0">
+    <input class="form-check-input" type="checkbox" role="switch" data-field="GPCertificationOutstanding" />
+  </div>
+</dd>
+
+<dt class="col-sm-4">Underweight Exemption</dt>
+<dd class="col-sm-8">
+  <div class="form-check form-switch mb-0">
+    <input class="form-check-input" type="checkbox" role="switch" data-field="UnderWeightExemption" />
+  </div>
+</dd>
+
+<dt class="col-sm-4">Germ Sample Required</dt>
+<dd class="col-sm-8">
+  <div class="form-check form-switch mb-0">
+    <input class="form-check-input" type="checkbox" role="switch" data-field="GermSampleRequired" />
+  </div>
+</dd>
