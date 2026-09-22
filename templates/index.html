@@ -28,13 +28,11 @@
       font-family: 'Roboto', sans-serif;
       background-color: var(--background-color);
       color: var(--text-color);
-      /* FIXED: Added these lines to allow vertical centering of the card */
       min-height: 100vh;
       display: flex;
       flex-direction: column;
     }
     
-    /* NEW: Wrapper to center the card vertically on the screen */
     .app-container {
       flex: 1;
       display: flex;
@@ -47,11 +45,9 @@
       background-color: var(--card-bg);
       border-radius: 8px;
       box-shadow: 0 0 12px rgba(0,0,0,0.15);
-      /* FIXED: Removed auto margins because flexbox handles centering now */
       margin: 0; 
       padding: 2.5rem;
       width: 100%;
-      /* FIXED: Set height and flex properties to space elements out */
       min-height: 75vh;
       max-width: 60vw;
       display: flex;
@@ -79,7 +75,6 @@
       background-color: var(--card-bg);
       color: var(--text-color);
       
-      /* FIXED: Make dropzone grow to fill empty space */
       display: flex;
       flex-direction: column;
       justify-content: center;
@@ -109,7 +104,6 @@
     #theme-toggle { flex-shrink: 0; height: 40px; background: var(--primary-color); color: white; border: none; padding: 0 1rem; border-radius: 4px; font-size: 1rem; cursor: pointer; font-weight: 500; display: flex; align-items: center; justify-content: center; }
     @media (max-width: 600px) { .header { flex-direction: column; flex-wrap: wrap; align-items: stretch; text-align: center; gap: 0.6rem; } .header h2 { font-size: 1.2rem; white-space: normal; text-overflow: clip; } #theme-toggle { width: 100%; margin-top: 0.2rem; } .header img { margin: 0 auto; } }
     
-    /* FIXED: Form becomes a flex container to handle spacing */
     form { 
       width: 100%; 
       display: flex;
@@ -121,7 +115,6 @@
     label { display: block; margin-top: 0; /* Margin handled by gap now */ font-weight: 500; color: var(--primary-color); font-size: 1.05rem; }
     select, input[type="submit"] { width: 100%; padding: 0.8rem; margin-top: 0.5rem; border-radius: 4px; border: 1px solid #ccc; background-color: var(--background-color); color: var(--text-color); font-size: 1rem; font-weight: 500; }
     
-    /* FIXED: Push submit button to the bottom */
     input[type="submit"] { 
       background-color: var(--primary-color); 
       color: white; 

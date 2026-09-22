@@ -404,7 +404,7 @@ def _extract_seminis_analysis_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[s
             continue
         
         norm = re.sub(r"\s{2,}", " ", text.replace("\n", " ").replace("\r", " "))
-        if not (m_lot := re.search(r"Lot Number[:\s]+(\d{9})", norm)):
+        if not (m_lot := re.search(r"Lot Number[:\s]+(\d{9,10})(?:/\d{2,4})?", norm)):
             continue
         lot = m_lot.group(1)
 
@@ -465,7 +465,6 @@ def _extract_seminis_packing_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[st
 def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packing_map: dict, pkg_desc_list: list[str]) -> List[Dict]:
     """Processes the extracted lines from a single Seminis invoice."""
     text_content = "\n".join(lines)
-    print(lines)
     text_content_upper = text_content.upper()
     vendor_invoice_no = po_number = None
     
@@ -491,12 +490,24 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
         
         for j in range(trt_idx + 1, len(lines)):
             line = lines[j]
+            batch_search_line = line
             # if not package and (m := re.search(r"\d+\s+MK\s+\w+", line)): package = m.group().strip()
             # Updated to match MK or LB (e.g., "50 LB BAG")
             if not package and (m := re.search(r"\d+\s+(?:MK|LB)\s+\w+", line, re.IGNORECASE)): 
                 package = m.group().strip()
-            if not vendor_lot and (m := re.search(r"\b\d{9}(?:/\d{2})?\b", line)): vendor_lot = m.group()
-            if not vendor_batch and (m := re.search(r"\b(\d{10})\b", line)):
+            if not vendor_lot and (m := re.search(r"\b(\d{9,10})(?:/(\d{2,4}))?\b", line)):
+                lot_base, lot_suffix = m.groups()
+                # Seminis sometimes wraps the last two suffix digits onto the
+                # next PDF line (for example, 4513632829/03 + 10).
+                if lot_suffix and len(lot_suffix) == 2 and j + 1 < len(lines):
+                    wrapped_suffix = lines[j + 1].strip()
+                    if re.fullmatch(r"\d{2}", wrapped_suffix):
+                        lot_suffix += wrapped_suffix
+                vendor_lot = lot_base + (f"/{lot_suffix}" if lot_suffix else "")
+                # Remove the lot from this line before looking for the batch;
+                # some invoices put both ten-digit values on the same line.
+                batch_search_line = f"{line[:m.start()]} {line[m.end():]}"
+            if not vendor_batch and (m := re.search(r"\b(\d{10})\b", batch_search_line)):
                 vendor_batch = m.group(1)
                 if j + 1 < len(lines):
                     next_line = lines[j+1].strip()

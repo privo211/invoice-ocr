@@ -377,6 +377,10 @@
                     </div>
                   </dd>
 
+                  {% with lot_record=item %}
+                    {% include "_lot_setup_fields.html" %}
+                  {% endwith %}
+
                   <dt class="col-sm-4">USD Actual Cost $</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="USD_Actual_Cost_$" contenteditable="true">
@@ -624,7 +628,7 @@
         });
       });
 
-      document.querySelectorAll('.lookup-ok').forEach(ok => {
+      document.querySelectorAll('.lookup-ok[data-modal-id]').forEach(ok => {
         ok.addEventListener('click', () => {
           const modalId = ok.dataset.modalId;
           const modalEl = document.getElementById(`lookup-modal-${modalId}`);
@@ -640,6 +644,7 @@
     function getFieldValue(cardEl, fieldName) {
       const el = cardEl.querySelector(`[data-field="${fieldName}"]`);
       if (!el) return '';
+      if (el.matches('input[type="checkbox"]')) return el.checked;
       return el.tagName === 'INPUT' || el.tagName === 'SELECT' ? el.value.trim() : el.textContent.trim();
     }
 
@@ -679,7 +684,14 @@
       const selectedCheckboxes = document.querySelectorAll('.lot-item-checkbox:checked');
       if (selectedCheckboxes.length === 0) return alert("Please select at least one lot.");
 
-      bootstrap.Modal.getInstance(document.getElementById('lot-selection-modal')).hide();
+      const modalEl = document.getElementById('lot-selection-modal');
+      const lotSelectionModal = bootstrap.Modal.getInstance(modalEl);
+      if (lotSelectionModal && modalEl.classList.contains('show')) {
+        await new Promise(resolve => {
+          modalEl.addEventListener('hidden.bs.modal', resolve, { once: true });
+          lotSelectionModal.hide();
+        });
+      }
 
       // Array to hold the results for the final summary
       let creationResults = []; 
@@ -705,6 +717,10 @@
           OriginCountry: getFieldValue(card, 'OriginCountry'),
           CurrentGerm: getFieldValue(card, 'Germ'),
           CurrentGermDate: getFieldValue(card, 'GermDate'),
+          CustomerPO: getFieldValue(card, 'CustomerPO'),
+          GPCertificationOutstanding: getFieldValue(card, 'GPCertificationOutstanding'),
+          UnderWeightExemption: getFieldValue(card, 'UnderWeightExemption'),
+          GermSampleRequired: getFieldValue(card, 'GermSampleRequired'),
           SeedSize: getFieldValue(card, 'SeedSize'),
           SeedCount: getFieldValue(card, 'SeedCount').replace(/,/g, ''),
           USD_Actual_Cost_$: getFieldValue(card, 'USD_Actual_Cost_$').replace(/,/g, ''),
@@ -763,10 +779,11 @@
               dl.prepend(dt);
             }
           } else {
-              card.style.border = '2px solid red';
+              const partial = json.status === 'partial' && json.Lot_No;
+              card.style.border = partial ? '2px solid #fd7e14' : '2px solid red';
               const errorMessage = json.message || 'An unknown error occurred.';
-              creationResults.push({ vendorLot: data.VendorLotNo, bcLot: 'N/A', status: 'Failed', error: errorMessage });
-              alert(`❌ Error for Vendor Lot ${data.VendorLotNo}:\n${errorMessage}`);
+              creationResults.push({ vendorLot: data.VendorLotNo, bcLot: json.Lot_No || 'N/A', status: 'Failed', error: errorMessage });
+              alert(`${partial ? '⚠️' : '❌'} Error for Vendor Lot ${data.VendorLotNo}:\n${errorMessage}`);
           }
         } catch (err) {
           card.style.border = '2px solid red';

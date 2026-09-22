@@ -94,6 +94,43 @@ def get_bc_env(vendor: str | None = None) -> str:
         return "Production"
     return BC_ENV_DEFAULT
 
+def normalize_customer_po(value) -> str:
+    """Return the one five-digit PO number in value, without a PO prefix."""
+    text = str(value or "").strip()
+    matches = re.findall(r"(?<!\d)(\d{5})(?!\d)", text)
+    return matches[0] if len(matches) == 1 else ""
+
+def normalize_lot_date(value) -> str | None:
+    """Normalize supported invoice/UI date formats for Business Central."""
+    text = str(value or "").strip()
+    if not text or text.lower() == "none":
+        return None
+
+    for date_format in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, date_format).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+def parse_optional_boolean(value) -> bool | None:
+    """Parse a browser boolean while preserving an omitted field as None."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off", ""}:
+        return False
+    raise ValueError(f"Invalid boolean value: {value}")
+
+app.jinja_env.filters["customer_po"] = normalize_customer_po
+
 # --- Minimal helpers for OData/BC error handling ---
 def _odata_quote(value: str) -> str:
     """Escape single quotes for OData string literals by doubling them."""
@@ -195,6 +232,13 @@ def timed_post(url, **kwargs):
     elapsed = time.perf_counter() - start
     app.logger.info(f"[TIMING] POST {url} took {elapsed:.2f}s")
     resp.raise_for_status()
+    return resp
+
+def timed_patch(url, **kwargs):
+    start = time.perf_counter()
+    resp = requests.patch(url, **kwargs)
+    elapsed = time.perf_counter() - start
+    app.logger.info(f"[TIMING] PATCH {url} took {elapsed:.2f}s")
     return resp
 
 # Token validation
@@ -1335,7 +1379,7 @@ def create_lot():
         val_str = str(val).strip()
         return "" if val_str.lower() == "none" else val_str
 
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     vendor = normalize_text(data.get("vendor"))
     print(f"Received data for lot creation: {data}")
     def parse_decimal(val):
@@ -1378,18 +1422,35 @@ def create_lot():
     raw_date            = normalize_text(data.get("CurrentGermDate"))
     raw_grower_date     = normalize_text(data.get("GrowerGermDate"))
 
-    pkg_desc_val   = normalize_text(data.get("PackageDescription"))
-    
-    def normalize_date(raw):
-        try:
-            if re.match(r"\d{2}/\d{2}/\d{2}$", raw):  # e.g., 04/22/25
-                raw = re.sub(r"/(\d{2})$", lambda m: f"/20{m.group(1)}", raw)
-            return datetime.strptime(raw, "%m/%d/%Y").date().isoformat()
-        except Exception:
-            return None
+    raw_customer_po = normalize_text(data.get("CustomerPO"))
+    customer_po = normalize_customer_po(raw_customer_po)
+    if raw_customer_po and not customer_po:
+        return jsonify({
+            "status": "error",
+            "message": "Customer PO must contain exactly one five-digit PO number."
+        }), 400
 
-    germ_date_iso = normalize_date(raw_date)
-    grower_germ_date_iso = normalize_date(raw_grower_date)
+    try:
+        gp_certification_outstanding = parse_optional_boolean(data.get("GPCertificationOutstanding"))
+        underweight_exemption = parse_optional_boolean(data.get("UnderWeightExemption"))
+        germ_sample_required = parse_optional_boolean(data.get("GermSampleRequired"))
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+    pkg_desc_val   = normalize_text(data.get("PackageDescription"))
+
+    germ_date_iso = normalize_lot_date(raw_date)
+    grower_germ_date_iso = normalize_lot_date(raw_grower_date)
+    if raw_date and not germ_date_iso:
+        return jsonify({
+            "status": "error",
+            "message": "Current Germ Date must be MM/DD/YYYY, MM/DD/YY, or YYYY-MM-DD."
+        }), 400
+    if raw_grower_date and not grower_germ_date_iso:
+        return jsonify({
+            "status": "error",
+            "message": "Certificate Germ Date must be MM/DD/YYYY, MM/DD/YY, or YYYY-MM-DD."
+        }), 400
 
     treated = "Yes" if td1 and td1.lower() != "untreated" else "No"
     if raw_sprout:
@@ -1456,7 +1517,83 @@ def create_lot():
         app.logger.info("===============================================")
         # --------------------------
         
-        generated_lot_no = lot_data.get("Lot_No")
+        generated_lot_no = normalize_text(lot_data.get("Lot_No"))
+        created_item_no = normalize_text(lot_data.get("Item_No")) or item_no
+        variant_code = normalize_text(lot_data.get("Variant_Code"))
+
+        if not generated_lot_no:
+            app.logger.error(
+                "Business Central reported a successful lot creation without returning Lot_No"
+            )
+            return jsonify({
+                "status": "error",
+                "message": (
+                    "Business Central reported success but did not return the new lot number. "
+                    "Check Business Central before retrying to avoid creating a duplicate lot."
+                ),
+            }), 502
+
+        # Lot_Info_Card does not expose the four requested setup fields. Update
+        # them through the full lot-card service, which is also used here to
+        # reapply both germ dates through the same validations as the BC page.
+        followup_payload = {
+            "Germ_Date": germ_date_iso,
+            "TMG_GrowerGermDate": grower_germ_date_iso,
+            "Customer_PO": customer_po or None,
+            "G_x0026_P_Certification_Outstanding": gp_certification_outstanding,
+            "Under_Weight_Exemption": underweight_exemption,
+            "Germ_Sample_Required": germ_sample_required,
+        }
+        followup_payload = {
+            key: value for key, value in followup_payload.items() if value is not None
+        }
+
+        if followup_payload:
+            lot_details_url = (
+                f"https://api.businesscentral.dynamics.com/v2.0/"
+                f"{BC_TENANT}/{get_bc_env(vendor)}/ODataV4/"
+                f"Company('{BC_COMPANY}')/Lot_No_Information_Card_Excel("
+                f"Item_No='{_odata_quote(created_item_no)}',"
+                f"Variant_Code='{_odata_quote(variant_code)}',"
+                f"Lot_No='{_odata_quote(generated_lot_no)}')"
+            )
+            try:
+                followup_resp = timed_patch(
+                    lot_details_url,
+                    json=followup_payload,
+                    headers={**headers, "If-Match": "*"},
+                )
+            except requests.exceptions.RequestException as exc:
+                app.logger.error(
+                    "Lot %s was created, but its lot-card update could not be confirmed: %s",
+                    generated_lot_no,
+                    exc,
+                )
+                return jsonify({
+                    "status": "partial",
+                    "Lot_No": generated_lot_no,
+                    "message": (
+                        f"Lot {generated_lot_no} was created, but the germ dates and "
+                        "lot setup fields could not be confirmed because the follow-up "
+                        "request failed. Check this lot in Business Central before retrying."
+                    ),
+                }), 502
+            if followup_resp.status_code not in (200, 204):
+                details = _bc_error_message(followup_resp)
+                app.logger.error(
+                    "Lot %s was created, but its lot-card fields could not be updated: %s",
+                    generated_lot_no,
+                    details,
+                )
+                return jsonify({
+                    "status": "partial",
+                    "Lot_No": generated_lot_no,
+                    "message": (
+                        f"Lot {generated_lot_no} was created, but the germ dates and "
+                        f"lot setup fields could not be updated: {details}"
+                    ),
+                }), 502
+
         return jsonify({"status": "success", "Lot_No": generated_lot_no})
         #return jsonify({"status": "success"})
     except requests.exceptions.HTTPError as e:
