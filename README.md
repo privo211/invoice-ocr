@@ -306,3 +306,8 @@ DocFlow was conceived, architected, implemented, deployed, and supported by **[P
 <sub>Built to turn messy supplier documents into controlled, reviewable ERP actions.</sub>
 
 </div>
+
+
+## Companion demo: integration evaluations
+
+[`integration-evals/`](integration-evals/) is a standalone portfolio demo of a typed external API adapter, safe retry boundaries, and a small, description-driven tool-selection evaluation. It uses a public mock API and offline tests; it does not import or connect to the production DocFlow system.
