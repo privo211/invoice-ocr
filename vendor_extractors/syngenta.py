@@ -1030,6 +1030,9 @@ def extract_syngenta_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_des
                 
                 if len(stripped_text) < 50:
                     needs_ocr = True
+                elif re.search(r"\bPACKING\s+LIST\b", page_text, re.IGNORECASE):
+                    # The shared tracking pass reads searchable packing lists directly.
+                    needs_ocr = False
                 elif ("REPORT OF ANALYSIS" not in page_text.upper() 
                     or "PURITY ANALYSIS" not in page_text.upper()):
                     

@@ -326,6 +326,102 @@ def test_inbound_tracking_input_is_blank_even_if_extracted_data_contains_a_value
     assert "DO-NOT-PREFILL" not in html
 
 
+def _render_tracking_field(app_module, lot_record):
+    environment = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"))
+    environment.filters["customer_po"] = app_module.normalize_customer_po
+    html = environment.get_template("_lot_setup_fields.html").render(lot_record=lot_record)
+
+    class InputParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.tracking_inputs = []
+
+        def handle_starttag(self, tag, attrs):
+            attributes = dict(attrs)
+            if tag == "input" and attributes.get("data-field") == "InboundTrackingNo":
+                self.tracking_inputs.append(attributes)
+
+    parser = InputParser()
+    parser.feed(html)
+    assert len(parser.tracking_inputs) == 1
+    return html, parser.tracking_inputs[0]
+
+
+def test_enabled_tracking_prefills_editable_input_and_shows_document_sources(app_module):
+    html, tracking = _render_tracking_field(app_module, {
+        "TrackingPrefillEnabled": True,
+        "InboundTrackingNo": "1Z9282590357491960",
+        "InboundTrackingSources": [
+            {"filename": "Seminis Shipment.pdf", "page": 1, "carrier": "UPS"},
+            {"filename": "Shipment Copy.pdf", "page": 2, "carrier": ""},
+        ],
+    })
+
+    assert tracking["value"] == "1Z9282590357491960"
+    assert tracking["type"] == "text"
+    assert tracking["maxlength"] == "100"
+    assert "readonly" not in tracking
+    assert "disabled" not in tracking
+    assert "Source: Seminis Shipment.pdf, page 1 (UPS)" in html
+    assert "Source: Shipment Copy.pdf, page 2" in html
+    assert "Please verify before creating the lot." in html
+
+
+def test_tracking_prefill_escapes_input_and_source_metadata(app_module):
+    tracking_number = '\" autofocus onfocus=\"alert(1)'
+    html, tracking = _render_tracking_field(app_module, {
+        "TrackingPrefillEnabled": True,
+        "InboundTrackingNo": tracking_number,
+        "InboundTrackingSources": [{
+            "filename": '<script>alert("filename")</script>.pdf',
+            "page": '<img src=x onerror="alert(1)">',
+            "carrier": '<b>UPS & FedEx</b>',
+        }],
+    })
+
+    assert tracking["value"] == tracking_number
+    assert "autofocus" not in tracking
+    assert "onfocus" not in tracking
+    assert "<script>" not in html
+    assert "<img" not in html
+    assert "<b>UPS" not in html
+    assert "&lt;script&gt;" in html
+    assert "&lt;img" in html
+    assert "&lt;b&gt;UPS &amp; FedEx&lt;/b&gt;" in html
+
+
+def test_tracking_warning_is_escaped_and_ambiguous_input_stays_blank(app_module):
+    html, tracking = _render_tracking_field(app_module, {
+        "TrackingPrefillEnabled": True,
+        "InboundTrackingNo": "",
+        "InboundTrackingSources": [{"filename": "Unused source.pdf", "page": 1, "carrier": ""}],
+        "InboundTrackingWarning": 'Multiple tracking numbers found. Please enter the correct number. <script>alert(1)</script>',
+    })
+
+    assert tracking["value"] == ""
+    assert "Multiple tracking numbers found. Please enter the correct number." in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "<script>" not in html
+    assert "Unused source.pdf" not in html
+    assert "Please verify before creating the lot." not in html
+
+
+@pytest.mark.parametrize("prefill_flag", [False, None, "true", 1])
+def test_tracking_prefill_requires_explicit_enabled_flag(app_module, prefill_flag):
+    html, tracking = _render_tracking_field(app_module, {
+        "TrackingPrefillEnabled": prefill_flag,
+        "InboundTrackingNo": "DO-NOT-PREFILL",
+        "InboundTrackingSources": [{"filename": "Hidden source.pdf", "page": 1, "carrier": "UPS"}],
+        "InboundTrackingWarning": "Hidden warning",
+    })
+
+    assert tracking["value"] == ""
+    assert "DO-NOT-PREFILL" not in html
+    assert "Hidden source.pdf" not in html
+    assert "Hidden warning" not in html
+    assert "Please verify before creating the lot." not in html
+
+
 @pytest.mark.parametrize("vendor", ["sakata", "hm_clause", "seminis", "nunhems", "syngenta"])
 def test_manual_tracking_is_saved_on_the_created_lot_card(app_module, monkeypatch, vendor):
     calls = {"post": [], "patch": []}

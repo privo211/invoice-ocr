@@ -23,6 +23,7 @@ from vendor_extractors.kamterter_shipping import extract_kamterter_shipping_data
 from vendor_extractors.seminis import extract_seminis_data_from_bytes, find_best_seminis_package_description
 from vendor_extractors.syngenta import extract_syngenta_data_from_bytes
 from vendor_extractors.nunhems import extract_nunhems_data_from_bytes, find_best_nunhems_package_description
+from vendor_extractors.tracking import prefill_tracking_numbers, merge_tracking_metadata
 import time
 import logging
 import psycopg2
@@ -448,6 +449,8 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
 
             if agg_key in unique_items_map:
                 existing_item = unique_items_map[agg_key]
+                if vendor in {"seminis", "syngenta", "nunhems"}:
+                    merge_tracking_metadata(existing_item, item)
                 desc_key = next((key for key in desc_keys if key in existing_item), None)
 
                 # --- FIX: Smarter Description Merging ---
@@ -844,6 +847,7 @@ def index():
 
             # 2. Call the new in-memory extractor directly
             grouped_results = extract_seminis_data_from_bytes(pdf_files, pkg_descs)
+            prefill_tracking_numbers(grouped_results, pdf_files, vendor)
             
             # Aggregate duplicate lots
             final_grouped_results = aggregate_duplicate_lots(grouped_results, vendor = "seminis")
@@ -884,6 +888,7 @@ def index():
             treatments2 = load_treatments("Lot_Treatments_Card_2_Excel", user_token)
 
             grouped_results = extract_nunhems_data_from_bytes(pdf_files, pkg_descs)
+            prefill_tracking_numbers(grouped_results, pdf_files, vendor)
             
             # Aggregate duplicate lots
             final_grouped_results = aggregate_duplicate_lots(grouped_results, vendor = "nunhems")
@@ -924,6 +929,7 @@ def index():
 
             # 2. Extract Data using the new Syngenta module
             grouped_results = extract_syngenta_data_from_bytes(pdf_files, pkg_descs)
+            prefill_tracking_numbers(grouped_results, pdf_files, vendor)
             
             # 3. Aggregate duplicates (combines split lots if any)
             final_grouped_results = aggregate_duplicate_lots(grouped_results, vendor="syngenta")
