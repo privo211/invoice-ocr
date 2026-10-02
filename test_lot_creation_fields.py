@@ -1,4 +1,5 @@
 import importlib
+from html.parser import HTMLParser
 from pathlib import Path
 import sys
 import types
@@ -300,6 +301,95 @@ def test_lot_setup_partial_prefills_po_and_renders_three_boolean_switches(app_mo
     assert "Lot Setup:" not in html
 
 
+def test_inbound_tracking_input_is_blank_even_if_extracted_data_contains_a_value(app_module):
+    environment = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"))
+    environment.filters["customer_po"] = app_module.normalize_customer_po
+    html = environment.get_template("_lot_setup_fields.html").render(
+        lot_record={"PurchaseOrder": "PO-91256", "InboundTrackingNo": "DO-NOT-PREFILL"}
+    )
+
+    class InputParser(HTMLParser):
+        tracking_inputs = []
+
+        def handle_starttag(self, tag, attrs):
+            attributes = dict(attrs)
+            if tag == "input" and attributes.get("data-field") == "InboundTrackingNo":
+                self.tracking_inputs.append(attributes)
+
+    parser = InputParser()
+    parser.feed(html)
+    assert len(parser.tracking_inputs) == 1
+    tracking = parser.tracking_inputs[0]
+    assert tracking["value"] == ""
+    assert tracking["type"] == "text"
+    assert tracking["maxlength"] == "100"
+    assert "DO-NOT-PREFILL" not in html
+
+
+@pytest.mark.parametrize("vendor", ["sakata", "hm_clause", "seminis", "nunhems", "syngenta"])
+def test_manual_tracking_is_saved_on_the_created_lot_card(app_module, monkeypatch, vendor):
+    calls = {"post": [], "patch": []}
+
+    def fake_post(url, **kwargs):
+        calls["post"].append((url, kwargs))
+        return _Response(201, {
+            "Item_No": "1750286-MS",
+            "Variant_Code": "PACK",
+            "Lot_No": "37-0030-50MS",
+        })
+
+    def fake_patch(url, **kwargs):
+        calls["patch"].append((url, kwargs))
+        return _Response(204)
+
+    monkeypatch.setattr(app_module.requests, "post", fake_post)
+    monkeypatch.setattr(app_module.requests, "patch", fake_patch)
+    client = _authenticated_client(app_module, monkeypatch)
+    response = client.post("/create-lot", json={
+        "vendor": vendor,
+        "BCItemNo": "1750286-MS",
+        "VendorLotNo": "4513632829/0310",
+        "InboundTrackingNo": "  001z-AbC123  ",
+    })
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "success", "Lot_No": "37-0030-50MS"}
+    assert len(calls["post"]) == 1
+    assert "Inbound_Tracking_No" not in calls["post"][0][1]["json"]
+    assert len(calls["patch"]) == 1
+    patch_url, patch_request = calls["patch"][0]
+    assert "Lot_No='37-0030-50MS'" in patch_url
+    assert "Variant_Code='PACK'" in patch_url
+    assert patch_request["json"] == {"Inbound_Tracking_No": "001z-AbC123"}
+
+
+@pytest.mark.parametrize("tracking", [None, "", "   ", "0" * 100])
+def test_tracking_is_optional_and_accepts_the_full_field_length(app_module, monkeypatch, tracking):
+    patch_calls = []
+    monkeypatch.setattr(
+        app_module.requests,
+        "post",
+        lambda *args, **kwargs: _Response(201, {"Lot_No": "37-0030-50MS"}),
+    )
+    monkeypatch.setattr(
+        app_module.requests,
+        "patch",
+        lambda url, **kwargs: patch_calls.append(kwargs["json"]) or _Response(204),
+    )
+    client = _authenticated_client(app_module, monkeypatch)
+    response = client.post("/create-lot", json={
+        "BCItemNo": "1750286-MS",
+        "VendorLotNo": "4513632829/0310",
+        "InboundTrackingNo": tracking,
+    })
+
+    assert response.status_code == 200
+    if tracking and tracking.strip():
+        assert patch_calls == [{"Inbound_Tracking_No": tracking}]
+    else:
+        assert patch_calls == []
+
+
 @pytest.mark.parametrize(
     ("invalid_field", "invalid_value", "message_fragment"),
     [
@@ -308,6 +398,7 @@ def test_lot_setup_partial_prefills_po_and_renders_three_boolean_switches(app_mo
         ("CurrentGermDate", "2026/07/09", "Current Germ Date must be"),
         ("GrowerGermDate", "July 16, 2026", "Certificate Germ Date must be"),
         ("GermSampleRequired", "sometimes", "Invalid boolean value"),
+        ("InboundTrackingNo", "X" * 101, "100 characters or fewer"),
     ],
 )
 def test_invalid_setup_fields_are_rejected_before_lot_creation(
@@ -362,6 +453,7 @@ def test_every_lot_creation_page_submits_the_setup_fields(template_name):
     assert "GPCertificationOutstanding: " in source
     assert "UnderWeightExemption: " in source
     assert "GermSampleRequired: " in source
+    assert "InboundTrackingNo: " in source
     assert "el.matches('input[type=\"checkbox\"]')" in source
     assert "querySelectorAll('.lookup-ok[data-modal-id]')" in source
     assert "querySelectorAll('.lookup-ok')" not in source

@@ -1405,6 +1405,12 @@ def create_lot():
     item_no        = normalize_text(data.get("BCItemNo"))
     vendor_lot     = normalize_text(data.get("VendorLotNo"))
     vendor_batch   = normalize_text(data.get("VendorBatchLot"))
+    inbound_tracking_no = normalize_text(data.get("InboundTrackingNo"))
+    if len(inbound_tracking_no) > 100:
+        return jsonify({
+            "status": "error",
+            "message": "Inbound Tracking # must be 100 characters or fewer."
+        }), 400
     country        = normalize_text(data.get("OriginCountry"))
     td1            = normalize_text(data.get("TreatmentsDescription"))
     td2_text       = normalize_text(data.get("TreatmentsDescription2"))
@@ -1533,7 +1539,7 @@ def create_lot():
                 ),
             }), 502
 
-        # Lot_Info_Card does not expose the four requested setup fields. Update
+        # Lot_Info_Card does not expose the manual lot setup fields. Update
         # them through the full lot-card service, which is also used here to
         # reapply both germ dates through the same validations as the BC page.
         followup_payload = {
@@ -1543,6 +1549,7 @@ def create_lot():
             "G_x0026_P_Certification_Outstanding": gp_certification_outstanding,
             "Under_Weight_Exemption": underweight_exemption,
             "Germ_Sample_Required": germ_sample_required,
+            "Inbound_Tracking_No": inbound_tracking_no or None,
         }
         followup_payload = {
             key: value for key, value in followup_payload.items() if value is not None
