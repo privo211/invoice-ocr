@@ -23,14 +23,6 @@
     maxlength="100"
     value="{{ tracking_number | e }}"
   />
-  {% if tracking_number %}
-    <div class="text-muted text-start text-break mt-1" style="font-size: .8rem;">
-      {% for source in lot_record.InboundTrackingSources | default([], true) %}
-        <div>Source: {{ source.filename | e }}, page {{ source.page | e }}{% if source.carrier %} ({{ source.carrier | e }}){% endif %}</div>
-      {% endfor %}
-      <div>Please verify before creating the lot.</div>
-    </div>
-  {% endif %}
   {% if tracking_prefill_enabled and lot_record.InboundTrackingWarning %}
     <div class="text-muted text-start text-break mt-1" style="font-size: .8rem;">{{ lot_record.InboundTrackingWarning | e }}</div>
   {% endif %}

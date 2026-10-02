@@ -119,8 +119,8 @@ def test_uploaded_shipment_pdf_prefills_supported_vendor_review_page(
     assert tracking_inputs[0]["maxlength"] == "100"
     assert "readonly" not in tracking_inputs[0]
     assert "disabled" not in tracking_inputs[0]
-    assert f"Source: {shipment_filename}, page 1" in html
-    assert "Please verify before creating the lot." in html
+    assert "Source:" not in html
+    assert "Please verify before creating the lot." not in html
 
 
 def test_sakata_upload_keeps_tracking_manual(offline_upload_app, monkeypatch):

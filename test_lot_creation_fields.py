@@ -347,7 +347,7 @@ def _render_tracking_field(app_module, lot_record):
     return html, parser.tracking_inputs[0]
 
 
-def test_enabled_tracking_prefills_editable_input_and_shows_document_sources(app_module):
+def test_enabled_tracking_prefills_editable_input_without_review_notices(app_module):
     html, tracking = _render_tracking_field(app_module, {
         "TrackingPrefillEnabled": True,
         "InboundTrackingNo": "1Z9282590357491960",
@@ -362,12 +362,13 @@ def test_enabled_tracking_prefills_editable_input_and_shows_document_sources(app
     assert tracking["maxlength"] == "100"
     assert "readonly" not in tracking
     assert "disabled" not in tracking
-    assert "Source: Seminis Shipment.pdf, page 1 (UPS)" in html
-    assert "Source: Shipment Copy.pdf, page 2" in html
-    assert "Please verify before creating the lot." in html
+    assert "Source:" not in html
+    assert "Seminis Shipment.pdf" not in html
+    assert "Shipment Copy.pdf" not in html
+    assert "Please verify before creating the lot." not in html
 
 
-def test_tracking_prefill_escapes_input_and_source_metadata(app_module):
+def test_tracking_prefill_escapes_input_and_does_not_render_source_metadata(app_module):
     tracking_number = '\" autofocus onfocus=\"alert(1)'
     html, tracking = _render_tracking_field(app_module, {
         "TrackingPrefillEnabled": True,
@@ -385,9 +386,9 @@ def test_tracking_prefill_escapes_input_and_source_metadata(app_module):
     assert "<script>" not in html
     assert "<img" not in html
     assert "<b>UPS" not in html
-    assert "&lt;script&gt;" in html
-    assert "&lt;img" in html
-    assert "&lt;b&gt;UPS &amp; FedEx&lt;/b&gt;" in html
+    assert "&lt;script&gt;" not in html
+    assert "&lt;img" not in html
+    assert "&lt;b&gt;UPS &amp; FedEx&lt;/b&gt;" not in html
 
 
 def test_tracking_warning_is_escaped_and_ambiguous_input_stays_blank(app_module):

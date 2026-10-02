@@ -63,7 +63,7 @@ DocFlow handles that variability as an engineering problem rather than a single 
 
 The review surface deliberately exposes ERP item/resource mappings, quantities, costs, and calculated totals before submission. Low-confidence or tied matches remain unresolved for a user instead of being auto-posted.
 
-For **Seminis, Syngenta, and Nunhems**, include shipment confirmations or packing lists with the usual invoice documents to suggest the **Inbound Tracking #** on matching lot rows. The review screen shows the source filename and page, and the value remains editable. Tracking must be explicitly labeled and match a lot or batch, with any available PO/invoice references agreeing. Conflicting tracking numbers, unreadable shipment pages, and documents containing multiple orders or invoices stay manual. **Sakata tracking remains manual**, since it arrives by email.
+For **Seminis, Syngenta, and Nunhems**, include shipment confirmations or packing lists with the usual invoice documents to suggest the **Inbound Tracking #** on matching lot rows. The suggested value remains editable. Tracking must be explicitly labeled and match a lot or batch, with any available PO/invoice references agreeing. Conflicting tracking numbers, unreadable shipment pages, and documents containing multiple orders or invoices stay manual. **Sakata tracking remains manual**, since it arrives by email.
 
 ## Architecture
 
