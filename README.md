@@ -45,7 +45,7 @@ DocFlow handles that variability as an engineering problem rather than a single 
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/privo211/portfolio-website/b0a1bd9b4f0308244ee5a071e0617165478b9d8f/public/projects/docflow-1.png"
+    src="docs/screenshots/docflow-upload.png"
     alt="DocFlow upload screen with vendor selection and drag-and-drop PDF intake"
     width="920"
   >
@@ -55,7 +55,7 @@ DocFlow handles that variability as an engineering problem rather than a single 
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/privo211/portfolio-website/b0a1bd9b4f0308244ee5a071e0617165478b9d8f/public/projects/docflow-2.jpg"
+    src="docs/screenshots/docflow-review.png"
     alt="DocFlow human review screen showing editable invoice lines before Business Central creation"
     width="1100"
   >
