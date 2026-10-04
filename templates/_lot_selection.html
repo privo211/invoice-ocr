@@ -1,0 +1,25 @@
+<div class="modal fade site-lot-selection" id="lot-selection-modal" tabindex="-1" aria-labelledby="lot-selection-title">
+  <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
+    <div class="modal-content">
+      <div class="site-feedback-header">
+        <span class="site-feedback-symbol" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m3 6 2 2 3-4m4 2h9M3 14l2 2 3-4m4 2h9M12 21h9"/>
+          </svg>
+        </span>
+        <h2 id="lot-selection-title">Select Lots to Create</h2>
+      </div>
+      <div class="site-lot-selection-body">
+        <div class="select-all-container">
+          <input type="checkbox" id="select-all-lots" checked/>
+          <label for="select-all-lots">Select/Deselect All</label>
+        </div>
+        <ul class="list-unstyled" id="lot-selection-list"></ul>
+      </div>
+      <div class="site-feedback-actions">
+        <button type="button" class="site-primary-button" id="confirm-lot-creation-btn">Create Selected Lots</button>
+        <button type="button" class="lookup-cancel site-secondary-button" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,19 @@
+<dialog id="lot-feedback-dialog" class="site-feedback-dialog" aria-labelledby="lot-feedback-title" aria-describedby="lot-feedback-message" data-outcome="info">
+  <div class="site-feedback-header">
+    <span class="site-feedback-symbol" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <path class="site-feedback-check" d="m8 12 2.5 2.5 5.5-5.5"/>
+        <path class="site-feedback-cross" d="m9 9 6 6m0-6-6 6"/>
+        <path class="site-feedback-alert" d="M12 8v5m0 3h.01"/>
+        <path class="site-feedback-info" d="M12 11v5m0-8h.01"/>
+      </svg>
+    </span>
+    <h2 id="lot-feedback-title">Lot creation</h2>
+  </div>
+  <div id="lot-feedback-message" class="site-feedback-message"></div>
+  <div class="site-feedback-actions">
+    <button id="lot-feedback-close" class="site-primary-button" type="button" autofocus>OK</button>
+  </div>
+</dialog>
+<script src="{{ url_for('static', filename='lot-feedback.js') }}"></script>

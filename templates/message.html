@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Signed Out · Invoice Processor</title>
+  <title>{{ title }} · Invoice Processor</title>
   <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
   {% include '_site_head.html' %}
 </head>
 <body class="stokes-app">
-  {% set site_page = 'logout' %}
+  {% set site_page = 'message' %}
   {% include '_site_header.html' %}
   <main class="site-workspace">
     <section class="site-surface site-message" data-site-enter aria-labelledby="page-title">
-      <h1 id="page-title" class="site-page-title">You have been logged out.</h1>
-      <p>You can close this window or sign in again.</p>
-      <a href="{{ url_for('sign_in') }}" class="site-primary-button">Sign In Again</a>
+      <h1 id="page-title" class="site-page-title">{{ title }}</h1>
+      <p>{{ message }}</p>
+      <a class="site-primary-button" href="{{ url_for(action_endpoint) }}">{{ action_label }}</a>
     </section>
   </main>
 </body>

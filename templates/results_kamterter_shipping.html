@@ -2,27 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Kamterter: Extracted Shipping Report Data</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <style>
-    :root {
-      --primary-color: #0099d8;
-      --background-color: #f4f4f4;
-      --text-color: #000000;
-      --card-bg: #ffffff;
-    }
-    body.dark-mode {
-      --background-color: #1e1e1e;
-      --text-color: #f0f0f0;
-      --card-bg: #2a2a2a;
-    }
-    body {
-      font-family: Segoe UI, sans-serif;
-      background-color: var(--background-color);
-      color: var(--text-color);
-      padding: 2em;
-    }
     .header {
       display: flex;
       justify-content: space-between;
@@ -84,24 +68,14 @@
     .select-all-container { display: flex; align-items: center; margin-bottom: 1rem; gap: 0.5rem; }
     .select-all-container input { transform: scale(1.3); margin-right: 0.5rem; }
   </style>
+  {% include '_site_head.html' %}
 </head>
-<body>
-  <div class="header container-fluid">
-    <div class="d-flex align-items-center">
-      <img id="stokes-logo" src="{{ url_for('static', filename='stokes_logo_rect.png') }}" alt="Stokes Logo" style="max-height: 50px; margin-right: 1rem;">
-      <h2 class="m-0">Kamterter: Extracted Shipping Report Data</h2>
-    </div>
-    <div class="auth-section">
-      <button id="theme-toggle" class="btn-theme me-2" type="button">Dark Mode</button>
-      <a href="/" class="btn-back me-2">Go Back</a>
-      {% if session.get("user_name") %}
-        <span style="color: var(--text-color); margin-right: 0.5rem;">Hi, {{ session.user_name }}</span>
-        <a href="{{ url_for('logout') }}" class="btn-auth">Sign Out</a>
-      {% else %}
-        <a href="{{ url_for('sign_in') }}" class="btn-auth">Sign In</a>
-      {% endif %}
-    </div>
-  </div>
+<body class="stokes-app site-results">
+  {% set site_page = 'results' %}
+  {% include '_site_header.html' %}
+  <main class="site-workspace site-workspace-wide">
+    <section class="site-surface" aria-labelledby="page-title">
+      <h1 id="page-title" class="site-page-title" data-site-enter>Kamterter: Extracted Shipping Report Data</h1>
 
   <div class="container">
     {% if items %}
@@ -159,30 +133,12 @@
       </div>
     </div>
   </div>
+    </section>
+  </main>
+
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    // Theme toggle (match existing pattern)
-    const themeBtn = document.getElementById('theme-toggle');
-    const logo = document.getElementById('stokes-logo');
-    function updateLogoTheme(isDark) {
-      if (logo) {
-        logo.src = isDark
-          ? "{{ url_for('static', filename='stokes_logo_rect_white.png') }}"
-          : "{{ url_for('static', filename='stokes_logo_rect.png') }}";
-      }
-    }
-    if (localStorage.getItem('theme') === 'dark-mode') {
-      document.body.classList.add('dark-mode');
-      themeBtn.textContent = 'Light Mode';
-      updateLogoTheme(true);
-    }
-    themeBtn.addEventListener('click', () => {
-      const isDark = document.body.classList.toggle('dark-mode');
-      themeBtn.textContent = isDark ? 'Light Mode' : 'Dark Mode';
-      localStorage.setItem('theme', isDark ? 'dark-mode' : '');
-      updateLogoTheme(isDark);
-    });
 
     function getCardDisplayName(card) {
       const header = card.querySelector('.item-header');

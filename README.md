@@ -251,6 +251,45 @@ flask --app app run --host 0.0.0.0 --port 5001
 
 Open [http://localhost:5001](http://localhost:5001).
 
+### Preview the UI with sample data
+
+The Blue Canvas interface uses Georgia page titles, a static texture, shared light
+and dark themes, and short entrance and hover transitions that respect reduced
+motion. Short hints appear on hover or keyboard focus for upload controls, lookups,
+and lot setup fields; Escape dismisses them. The header and workspaces adapt to
+desktop monitors, with a wider upload form and a two-column results grid. A single
+lot stays in the left column; tablet and phone layouts stack the cards while
+retaining the same controls and flow.
+To review all pages without production
+credentials or integrations:
+
+```bash
+python3 scripts/preview_ui.py
+```
+
+Open [the home page](http://127.0.0.1:8766/) or
+[the vendor preview directory](http://127.0.0.1:8766/_preview).
+This local server renders the actual application templates with synthetic data;
+it does not run extraction, authentication, database access, or Business Central
+writes. The production application still runs through `app.py`.
+The preview directory also links simulated lot-creation outcomes. The existing
+success, error, and summary messages share the refined lot-selection dialog style,
+with green or red header gradients and an OK button, preserving their wording and
+acknowledgement flow. The create-lots action retains its green color, with the same
+gradient treatment and hover motion as the upload page's Extract Data button.
+
+Run the offline UI and workflow checks with:
+
+```bash
+python3 -m pytest -q test_lot_creation_fields.py test_seminis_lot_parsing.py test_tracking_extraction.py test_tracking_workflow.py test_ui_messages.py
+```
+
+The Blue Canvas release is a single UI commit on top of the production baseline
+tagged `ui-before-blue-canvas-2026-10-03`. To roll back, revert that UI commit and
+push the revert, then pull and restart the service using the existing deployment
+process. No dependency or database migration is required. The refreshed theme
+stores its preference separately, preserving the previous UI's saved preference.
+
 <details>
 <summary><strong>Required Business Central surfaces</strong></summary>
 

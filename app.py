@@ -657,7 +657,9 @@ def auth_callback():
     
     code = request.args.get("code")
     if not code:
-        return "Authentication failed: No code received", 400
+        return render_template("message.html", title="Sign-in unsuccessful",
+                               message="Authentication failed: No code received",
+                               action_endpoint="sign_in", action_label="Try Signing In Again"), 400
     
     cache = load_cache()
     msal_app = build_msal_app(cache)
@@ -669,7 +671,9 @@ def auth_callback():
     )
     if "access_token" not in result:
         app.logger.error(f"Auth error: {result.get('error_description')}")
-        return "Authentication failed", 400
+        return render_template("message.html", title="Sign-in unsuccessful",
+                               message="Authentication failed",
+                               action_endpoint="sign_in", action_label="Try Signing In Again"), 400
     
     session.permanent = True
     session["user_token"] = result["access_token"]
@@ -716,7 +720,8 @@ def logs():
 def fix_stats():
     """Manual trigger to fix statistics synchronization issues."""
     message = db_logger.recalculate_stats()
-    return f"<h1>Stats Maintenance</h1><p>{message}</p><p><a href='/logs'>Back to Logs</a></p>"
+    return render_template("message.html", title="Stats Maintenance", message=message,
+                           action_endpoint="logs", action_label="Back to Logs")
 
 # Main route
 @app.route("/", methods=["GET", "POST"])
@@ -747,7 +752,9 @@ def index():
                         temp_file.write(pdf_bytes)
 
         if not pdf_files:
-            return "No valid PDF files uploaded", 400
+            return render_template("message.html", title="Unable to process PDFs",
+                                   message="No valid PDF files uploaded",
+                                   action_endpoint="index", action_label="Back to Invoice Processor"), 400
 
         if vendor == "sakata":
             # Load shared data from Business Central

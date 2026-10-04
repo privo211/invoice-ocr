@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Seminis: Extracted Invoice Data (LIVE)</title>
   <link
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
@@ -9,23 +10,6 @@
   />
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <style>
-    :root {
-      --primary-color: #0099d8;
-      --background-color: #f4f4f4;
-      --text-color: #000000;
-      --card-bg: #ffffff;
-    }
-    body.dark-mode {
-       --background-color: #1e1e1e;
-      --text-color: #f0f0f0;
-      --card-bg: #2a2a2a;
-    }
-    body {
-      font-family: Segoe UI, sans-serif;
-      background-color: var(--background-color);
-      color: var(--text-color);
-      padding: 2em;
-    }
     .text-muted {
       font-size: 1.25rem;
       text-align: center;
@@ -66,8 +50,8 @@
       opacity: 0.9;
     }
     .row-cols-md-2 .card {
-      position: relative;      
-      padding-top: 2rem; 
+      position: relative;
+      padding-top: 2rem;
       background-color: var(--card-bg);
       border: none;
       border-radius: 8px;
@@ -230,25 +214,15 @@
     }
 
   </style>
+  {% include '_site_head.html' %}
 </head>
-<body>
+<body class="stokes-app site-results">
 
-  <div class="header container-fluid">
-    <div class="d-flex align-items-center">
-      <img id="stokes-logo" src="{{ url_for('static', filename='stokes_logo_rect.png') }}" alt="Stokes Logo" style="max-height: 50px; margin-right: 1rem;">
-      <h2 class="m-0">Seminis: Extracted Invoice Data (LIVE)</h2>
-    </div>
-    <div class="auth-section">
-      <button id="theme-toggle" class="btn-theme me-2">Dark Mode</button>
-      <a href="/" class="btn-back me-2">Go Back</a>
-      {% if session.get("user_name") %}
-        <span style="color: var(--text-color); margin-right: 0.5rem;">Hi, {{ session.user_name }}</span>
-        <a href="{{ url_for('logout') }}" class="btn-auth">Sign Out</a>
-      {% else %}
-        <a href="{{ url_for('sign_in') }}" class="btn-auth">Sign In</a>
-      {% endif %}
-    </div>
-  </div>
+  {% set site_page = 'results' %}
+  {% include '_site_header.html' %}
+  <main class="site-workspace site-workspace-wide">
+    <section class="site-surface" aria-labelledby="page-title">
+      <h1 id="page-title" class="site-page-title" data-site-enter>Seminis: Extracted Invoice Data (LIVE)</h1>
 
   <div class="container">
     {% if items %}
@@ -282,7 +256,7 @@
                       <option value="Other">Other</option>
                     </select>
                     <select id="bc-input-{{ item_idx }}" class="field-box form-select mt-1" style="{% if item.BCItemNo == 'Other' or item.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}">
-                      
+
                       <option value="" {% if not item.BCItemNo or item.BCItemNo == 'Other' %}selected{% endif %}>— Choose an Item No. —</option>
                        </select>
                   </dd>-->
@@ -290,7 +264,7 @@
                   <dt class="col-sm-4">Select BC Item No.</dt>
                   <dd class="col-sm-8">
                     <select class="field-box form-select bc-item-select" data-item-idx="{{ item_idx }}" data-field="BCItemNo">
-                      
+
                       <option value="" style="color: red; font-weight: bold;" {% if not item.SuggestedBCItemNo %}selected{% endif %}>
                         - Manually select an Item No. from the list -
                       </option>
@@ -300,7 +274,7 @@
                           {{ opt.No }} — {{ opt.Description }}
                         </option>
                       {% endfor %}
-                      
+
                       <option value="Other">Other</option>
                     </select>
 
@@ -367,12 +341,12 @@
                       {{ item.VendorLot or '' }}
                     </div>
                   </dd>
-                  
+
                   <dt class="col-sm-4">Vendor Batch No.</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="VendorBatchNo" contenteditable="true">{{ item.VendorBatch or '' }}</div>
                   </dd>
-                  
+
                   <dt class="col-sm-4">Country of Origin</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="OriginCountry" contenteditable="true">{{ item.OriginCountry or '' }}</div>
@@ -417,7 +391,7 @@
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="Germ" contenteditable="true">{{ item.PackingGerm or '' }}</div>
                   </dd>
-                  
+
                   <dt class="col-sm-4">Current Germ Date</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="GermDate" contenteditable="true">{{ item.PackingGermDate or '' }}</div>
@@ -431,7 +405,7 @@
                   </dd>
 
                   <div class="analysis-header mt-2">Seed Analysis Report Data:</div>
-                  
+
                   <dt class="col-sm-4">Certificate Germ</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="GrowerGerm" contenteditable="true">
@@ -450,7 +424,7 @@
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="Purity" contenteditable="true">{{ item.Purity or '' }}</div>
                   </dd>
-                
+
                   <dt class="col-sm-4">Inert</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="Inert" contenteditable="true">{{ item.InertMatter or '' }}</div>
@@ -466,9 +440,7 @@
       {% endfor %}
       <div class="text-center my-4">
         {% if session.get("user_token") %}
-          <button id="create-lots-btn" class="btn btn-success btn-lg">
-            Create Lots in Business Central
-          </button>
+          {% include '_lot_create_button.html' %}
         {% else %}
           <p class="text-warning">You must <a href="{{ url_for('sign_in') }}">sign in</a> before creating lots.</p>
         {% endif %}
@@ -500,25 +472,11 @@
   </div>
   {% endfor %}
 
-  <div class="modal fade" id="lot-selection-modal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
-      <div class="modal-content p-3">
-        <h4>Select Lots to Create</h4>
-        
-        <div class="select-all-container">
-            <input type="checkbox" id="select-all-lots" checked/>
-            <label for="select-all-lots">Select/Deselect All</label>
-        </div>
+  {% include '_lot_selection.html' %}
+    </section>
+  </main>
+  {% include '_lot_feedback.html' %}
 
-        <ul class="list-unstyled mb-3" id="lot-selection-list"></ul>
-
-        <div class="text-end">
-          <button type="button" class="lookup-ok" id="confirm-lot-creation-btn">Create Selected Lots</button>
-          <button type="button" class="lookup-cancel" data-bs-dismiss="modal">Cancel</button>
-        </div>
-      </div>
-    </div>
-  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <script>
@@ -567,10 +525,10 @@
     function getNumericFieldValue(cardEl, fieldName) {
       const el = cardEl.querySelector(`[data-field="${fieldName}"]`);
       if (!el) return 0; // Default to 0 for fields like upcharge/discount if not present
-      
+
       const text = el.textContent.trim().replace(/,/g, '');
       if (text === '') return 0;
-      
+
       const val = parseFloat(text);
       return isNaN(val) ? 0 : val;
     }
@@ -599,27 +557,6 @@
     }
 
     window.addEventListener('DOMContentLoaded', () => {
-      // --- THEME ---
-      const themeBtn = document.getElementById('theme-toggle');
-      const logo = document.getElementById('stokes-logo');
-      
-      const applyTheme = (isDark) => {
-        document.body.classList.toggle('dark-mode', isDark);
-        themeBtn.textContent = isDark ? 'Light Mode' : 'Dark Mode';
-        if (logo) {
-          logo.src = isDark 
-          ? "{{ url_for('static', filename='stokes_logo_rect_white.png') }}" 
-          : "{{ url_for('static', filename='stokes_logo_rect.png') }}";
-        }
-      };
-
-      const savedThemeIsDark = localStorage.getItem('theme') === 'dark-mode';
-      applyTheme(savedThemeIsDark);
-      themeBtn.addEventListener('click', () => {
-        const isDark = document.body.classList.toggle('dark-mode');
-        localStorage.setItem('theme', isDark ? 'dark-mode' : '');
-        applyTheme(isDark);
-      });
 
       // --- AUTOCALCULATE USD ACTUAL COST ---
       // Listen for changes on all fields that affect the cost calculation
@@ -651,7 +588,7 @@
           try {
             const res = await fetch(`/bc-options?po=${encodeURIComponent(po)}`);
             if (!res.ok) throw new Error(await res.text());
-            
+
             const opts = await res.json();
             select.innerHTML = '';
 
@@ -667,7 +604,7 @@
               optEl.textContent = `${o.No} — ${o.Description}`;
               select.append(optEl);
             });
-            
+
             const otherEl = document.createElement('option');
             otherEl.value = 'Other';
             otherEl.textContent = 'Other';
@@ -708,7 +645,7 @@
 
         // Initialize
         toggleManualBcInput(sel);
-        updateColor(); 
+        updateColor();
       });
 
       // For treatment lookup modals
@@ -740,78 +677,9 @@
       return el.tagName === 'INPUT' || el.tagName === 'SELECT' ? el.value.trim() : el.textContent.trim();
     }
 
-    /*document.getElementById('create-lots-btn')?.addEventListener('click', async () => {
-      const cards = document.querySelectorAll('.card');
-      if (cards.length === 0) return alert("No items found to create.");
-      
-      for (const card of cards) {
-        // Prompt user to confirm creation for each lot
-        const name = card.querySelector('.item-header')?.textContent.trim();
-        if (!confirm(`Create this lot?\n\n${name}`)) continue;
-
-        let bcItemNo = getFieldValue(card, 'BCItemNo');
-
-        if (bcItemNo === 'Other') {
-          const itemIdx = card.dataset.itemIdx;
-          const manualInput = document.getElementById(`bc-input-${itemIdx}`);
-          bcItemNo = manualInput.value.trim();
-        }
-
-        const data = {
-          BCItemNo:               bcItemNo,
-          TreatmentsDescription:  getFieldValue(card, 'TreatmentsDescription'),
-          TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
-          VendorLotNo:            getFieldValue(card, 'VendorLotNo'),
-          VendorBatchLot:         getFieldValue(card, 'VendorBatchNo'),
-          OriginCountry:          getFieldValue(card, 'OriginCountry'),
-          CurrentGerm:            getFieldValue(card, 'Germ'),
-          CurrentGermDate:        getFieldValue(card, 'GermDate'),
-          SeedCount:              getFieldValue(card, 'SeedCount'),
-          USD_Actual_Cost_$:      getFieldValue(card, 'USD_Actual_Cost_$'),
-          GrowerGerm:             getFieldValue(card, 'GrowerGerm'),
-          GrowerGermDate:         getFieldValue(card, 'GrowerGermDate'),
-          Purity:                 getFieldValue(card, 'Purity'),
-          Inert:                  getFieldValue(card, 'Inert'),
-          PackageDescription:     getFieldValue(card, 'PackageDescription'),
-          TotalQuantity:          getFieldValue(card, 'TotalQuantity'),
-          TotalPrice:             getFieldValue(card, 'TotalPrice')
-        };
-        
-        if (!data.BCItemNo || !data.VendorLotNo) {
-            alert(`Skipping item. Missing BC Item No. or Vendor Lot No. for card:\n${card.querySelector('.item-header').textContent.trim()}`);
-            continue;
-        }
-
-        try {
-          const res = await fetch('/create-lot', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify(data)
-          });
-
-          if (res.redirected || res.status === 401) {
-            alert('Your session has expired. Please sign in again.');
-            window.location.href = '/sign_in';
-            return;
-          }
-
-          const json = await res.json();
-          if (res.ok && json.status === 'success') {
-            card.style.border = '2px solid green';
-            alert(`✅ Successfully created Lot for Vendor Lot: ${data.VendorLotNo}`);
-          } else {
-            card.style.border = '2px solid red';
-            alert(`❌ Error creating Lot for Vendor Lot ${data.VendorLotNo}:\n${json.message}`);
-          }
-        } catch (err) {
-          card.style.border = '2px solid red';
-          alert(`❌ Network error for Vendor Lot ${data.VendorLotNo}:\n${err.message}`);
-        }
-      }
-    });*/
     document.getElementById('create-lots-btn')?.addEventListener('click', () => {
       const cards = document.querySelectorAll('.card');
-      if (cards.length === 0) return alert("No items found to create.");
+      if (cards.length === 0) return StokesLots.show("No items found to create.");
 
       const listElement = document.getElementById('lot-selection-list');
       listElement.innerHTML = ''; // Clear previous items
@@ -830,7 +698,7 @@
         `;
         listElement.appendChild(listItem);
       });
-      
+
       // Show the modal
       const lotSelectionModal = new bootstrap.Modal(document.getElementById('lot-selection-modal'));
       lotSelectionModal.show();
@@ -845,130 +713,136 @@
 
     // Add a new event listener for the final confirmation button inside the modal
     document.getElementById('confirm-lot-creation-btn').addEventListener('click', async () => {
+      if (StokesLots.busy) return;
       const selectedCheckboxes = document.querySelectorAll('#lot-selection-list .lot-item-checkbox:checked');
       if (selectedCheckboxes.length === 0) {
-          alert("No lots were selected. Please select at least one lot to create.");
+          await StokesLots.show("No lots were selected. Please select at least one lot to create.");
           return;
       }
-      
+
       // Hide the modal before processing starts
-      const modalEl = document.getElementById('lot-selection-modal');
-      const lotSelectionModal = bootstrap.Modal.getInstance(modalEl);
-      if (lotSelectionModal && modalEl.classList.contains('show')) {
-        await new Promise(resolve => {
-          modalEl.addEventListener('hidden.bs.modal', resolve, { once: true });
-          lotSelectionModal.hide();
-        });
-      }
-
-      // Array to hold the results for the final summary
-      let creationResults = [];
-
-      for (const checkbox of selectedCheckboxes) {
-        const itemIdx = checkbox.dataset.itemIdx;
-        const card = document.querySelector(`.card[data-item-idx="${itemIdx}"]`);
-        
-        let bcItemNo = getFieldValue(card, 'BCItemNo');
-        if (bcItemNo === 'Other') {
-          const manualInput = document.getElementById(`bc-input-${itemIdx}`);
-          bcItemNo = manualInput.value.trim();
+      StokesLots.begin();
+      try {
+        const modalEl = document.getElementById('lot-selection-modal');
+        const lotSelectionModal = bootstrap.Modal.getInstance(modalEl);
+        if (lotSelectionModal && modalEl.classList.contains('show')) {
+          await new Promise(resolve => {
+            modalEl.addEventListener('hidden.bs.modal', resolve, { once: true });
+            lotSelectionModal.hide();
+          });
         }
 
-        const data = {
-            vendor:                 'seminis',
-            BCItemNo:               bcItemNo,
-            KTT:                    getFieldValue(card, 'KTT'),
-            TreatmentsDescription:  getFieldValue(card, 'TreatmentsDescription'),
-            TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
-            VendorLotNo:            getFieldValue(card, 'VendorLotNo'),
-            VendorBatchLot:         getFieldValue(card, 'VendorBatchNo'),
-            OriginCountry:          getFieldValue(card, 'OriginCountry'),
-            CurrentGerm:            getFieldValue(card, 'Germ'),
-            CurrentGermDate:        getFieldValue(card, 'GermDate'),
-            CustomerPO:             getFieldValue(card, 'CustomerPO'),
-            GPCertificationOutstanding: getFieldValue(card, 'GPCertificationOutstanding'),
-            UnderWeightExemption:   getFieldValue(card, 'UnderWeightExemption'),
-            GermSampleRequired:     getFieldValue(card, 'GermSampleRequired'),
-            InboundTrackingNo: getFieldValue(card, 'InboundTrackingNo'),
-            SeedCount:              getFieldValue(card, 'SeedCount').replace(/,/g, ''),
-            USD_Actual_Cost_$:      getFieldValue(card, 'USD_Actual_Cost_$'),
-            GrowerGerm:             getFieldValue(card, 'GrowerGerm'),
-            GrowerGermDate:         getFieldValue(card, 'GrowerGermDate'),
-            Purity:                 getFieldValue(card, 'Purity'),
-            Inert:                  getFieldValue(card, 'Inert'),
-            PackageDescription:     getFieldValue(card, 'PackageDescription'),
-            TotalQuantity:          getFieldValue(card, 'TotalQuantity').replace(/,/g, ''),
-            TotalPrice:             getFieldValue(card, 'TotalPrice').replace(/,/g, ''),
-        };
-        
-        if (!data.BCItemNo || !data.VendorLotNo) {
-            alert(`Skipping item. Missing BC Item No. or Vendor Lot No. for card:\n${card.querySelector('.item-header').textContent.trim()}`);
-            continue;
-        }
+        // Array to hold the results for the final summary
+        let creationResults = [];
 
-        try {
-            const res = await fetch('/create-lot', {
-                method: 'POST',
-                headers: {'Content-Type':'application/json'},
-                body: JSON.stringify(data)
-            });
+        for (const checkbox of selectedCheckboxes) {
+          const itemIdx = checkbox.dataset.itemIdx;
+          const card = document.querySelector(`.card[data-item-idx="${itemIdx}"]`);
 
-            if (res.redirected || res.status === 401) {
-                alert('Your session has expired. Please sign in again.');
-                window.location.href = '/sign_in';
-                return;
-            }
-
-            const json = await res.json();
-            if (res.ok && json.status === 'success' && json.Lot_No) {
-            card.style.border = '2px solid green';
-            const newLotNo = json.Lot_No;
-            creationResults.push({ vendorLot: data.VendorLotNo, bcLot: newLotNo, status: 'Success' });
-
-            // Find the definition list (<dl>) inside the card
-            const dl = card.querySelector('dl');
-            if (dl && !card.querySelector('.bc-lot-display')) { // Check to prevent adding duplicates
-              // Create new elements to display the BC Lot No.
-              const dt = document.createElement('dt');
-              dt.className = 'col-sm-4 bc-lot-display'; // Add a class for the check above
-              dt.textContent = 'BC Lot No.';
-              dt.style.color = '#198754'; // Bootstrap success green
-
-              const dd = document.createElement('dd');
-              dd.className = 'col-sm-8';
-              dd.textContent = newLotNo;
-              dd.style.fontWeight = 'bold';
-              dd.style.color = '#198754';
-
-              dl.prepend(dd);
-              dl.prepend(dt);
-            }
-          } else {
-              const partial = json.status === 'partial' && json.Lot_No;
-              card.style.border = partial ? '2px solid #fd7e14' : '2px solid red';
-              const errorMessage = json.message || 'An unknown error occurred.';
-              creationResults.push({ vendorLot: data.VendorLotNo, bcLot: json.Lot_No || 'N/A', status: 'Failed', error: errorMessage });
-              alert(`${partial ? '⚠️' : '❌'} Error for Vendor Lot ${data.VendorLotNo}:\n${errorMessage}`);
+          let bcItemNo = getFieldValue(card, 'BCItemNo');
+          if (bcItemNo === 'Other') {
+            const manualInput = document.getElementById(`bc-input-${itemIdx}`);
+            bcItemNo = manualInput.value.trim();
           }
-        } catch (err) {
-            card.style.border = '2px solid red';
-            alert(`❌ Network error for Vendor Lot ${data.VendorLotNo}:\n${err.message}`);
-        }
-      }
-      // Final detailed summary alert
-      const successCount = creationResults.filter(r => r.status === 'Success').length;
-      const failedCount = creationResults.length - successCount;
-      let summaryMessage = `✅ Processing complete.\n\nSuccess: ${successCount} | Failed: ${failedCount}\n\n`;
 
-      summaryMessage += creationResults.map(r => {
-        let line = `- Vendor Lot [${r.vendorLot}] -> BC Lot [${r.bcLot}]`;
-        if (r.status === 'Failed') {
-          line += ` (FAILED: ${r.error.substring(0, 100)}...)`;
+          const data = {
+              vendor:                 'seminis',
+              BCItemNo:               bcItemNo,
+              KTT:                    getFieldValue(card, 'KTT'),
+              TreatmentsDescription:  getFieldValue(card, 'TreatmentsDescription'),
+              TreatmentsDescription2: getFieldValue(card, 'TreatmentsDescription2'),
+              VendorLotNo:            getFieldValue(card, 'VendorLotNo'),
+              VendorBatchLot:         getFieldValue(card, 'VendorBatchNo'),
+              OriginCountry:          getFieldValue(card, 'OriginCountry'),
+              CurrentGerm:            getFieldValue(card, 'Germ'),
+              CurrentGermDate:        getFieldValue(card, 'GermDate'),
+              CustomerPO:             getFieldValue(card, 'CustomerPO'),
+              GPCertificationOutstanding: getFieldValue(card, 'GPCertificationOutstanding'),
+              UnderWeightExemption:   getFieldValue(card, 'UnderWeightExemption'),
+              GermSampleRequired:     getFieldValue(card, 'GermSampleRequired'),
+              InboundTrackingNo: getFieldValue(card, 'InboundTrackingNo'),
+              SeedCount:              getFieldValue(card, 'SeedCount').replace(/,/g, ''),
+              USD_Actual_Cost_$:      getFieldValue(card, 'USD_Actual_Cost_$'),
+              GrowerGerm:             getFieldValue(card, 'GrowerGerm'),
+              GrowerGermDate:         getFieldValue(card, 'GrowerGermDate'),
+              Purity:                 getFieldValue(card, 'Purity'),
+              Inert:                  getFieldValue(card, 'Inert'),
+              PackageDescription:     getFieldValue(card, 'PackageDescription'),
+              TotalQuantity:          getFieldValue(card, 'TotalQuantity').replace(/,/g, ''),
+              TotalPrice:             getFieldValue(card, 'TotalPrice').replace(/,/g, ''),
+          };
+
+          if (!data.BCItemNo || !data.VendorLotNo) {
+              await StokesLots.show(`Skipping item. Missing BC Item No. or Vendor Lot No. for card:\n${card.querySelector('.item-header').textContent.trim()}`);
+              continue;
+          }
+
+          try {
+              const res = await fetch('/create-lot', {
+                  method: 'POST',
+                  headers: {'Content-Type':'application/json'},
+                  body: JSON.stringify(data)
+              });
+
+              if (res.redirected || res.status === 401) {
+                  await StokesLots.show('Your session has expired. Please sign in again.');
+                  window.location.href = '/sign_in';
+                  return;
+              }
+
+              const json = await res.json();
+              if (res.ok && json.status === 'success' && json.Lot_No) {
+              card.style.border = '2px solid green';
+              const newLotNo = json.Lot_No;
+              creationResults.push({ vendorLot: data.VendorLotNo, bcLot: newLotNo, status: 'Success' });
+
+              // Find the definition list (<dl>) inside the card
+              const dl = card.querySelector('dl');
+              if (dl && !card.querySelector('.bc-lot-display')) { // Check to prevent adding duplicates
+                // Create new elements to display the BC Lot No.
+                const dt = document.createElement('dt');
+                dt.className = 'col-sm-4 bc-lot-display'; // Add a class for the check above
+                dt.textContent = 'BC Lot No.';
+                dt.style.color = '#198754'; // Bootstrap success green
+
+                const dd = document.createElement('dd');
+                dd.className = 'col-sm-8';
+                dd.textContent = newLotNo;
+                dd.style.fontWeight = 'bold';
+                dd.style.color = '#198754';
+
+                dl.prepend(dd);
+                dl.prepend(dt);
+              }
+            } else {
+                const partial = json.status === 'partial' && json.Lot_No;
+                card.style.border = partial ? '2px solid #fd7e14' : '2px solid red';
+                const errorMessage = json.message || 'An unknown error occurred.';
+                creationResults.push({ vendorLot: data.VendorLotNo, bcLot: json.Lot_No || 'N/A', status: 'Failed', error: errorMessage });
+                await StokesLots.show(`${partial ? '⚠️' : '❌'} Error for Vendor Lot ${data.VendorLotNo}:\n${errorMessage}`);
+            }
+          } catch (err) {
+              card.style.border = '2px solid red';
+              await StokesLots.show(`❌ Network error for Vendor Lot ${data.VendorLotNo}:\n${err.message}`);
+          }
         }
-        return line;
-      }).join('\n');
-      
-      alert(summaryMessage);
+        // Final detailed summary
+        const successCount = creationResults.filter(r => r.status === 'Success').length;
+        const failedCount = creationResults.length - successCount;
+        let summaryMessage = `✅ Processing complete.\n\nSuccess: ${successCount} | Failed: ${failedCount}\n\n`;
+
+        summaryMessage += creationResults.map(r => {
+          let line = `- Vendor Lot [${r.vendorLot}] -> BC Lot [${r.bcLot}]`;
+          if (r.status === 'Failed') {
+            line += ` (FAILED: ${r.error.substring(0, 100)}...)`;
+          }
+          return line;
+        }).join('\n');
+
+        await StokesLots.show(summaryMessage);
+      } finally {
+        StokesLots.end();
+      }
     });
   </script>
 </body>

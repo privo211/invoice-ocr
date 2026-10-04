@@ -1,0 +1,23 @@
+{# Icons based on Lucide (ISC); see static/icons-LICENSE.txt. #}
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-brand" href="{{ url_for('index') }}" aria-label="Stokes Seeds home">
+      <img id="stokes-logo" src="{{ url_for('static', filename='stokes_logo_rect_white.png') }}" width="172" height="61" alt="Stokes Seeds">
+    </a>
+    <nav class="site-nav" aria-label="Account and navigation">
+      {% if session.get('user_name') %}<span class="site-user">Hello, {{ session.user_name }}!</span>{% endif %}
+      {% if site_page != 'home' %}<a class="site-header-button" href="{{ url_for('index') }}">Home</a>{% endif %}
+      {% if session.get('user_token') and site_page not in ['logs', 'results'] %}<a class="site-header-button" href="{{ url_for('logs') }}">Logs</a>{% endif %}
+      <button id="theme-toggle" class="site-header-button" type="button" aria-label="Switch to dark mode">
+        <svg class="site-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6.25 6.25 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg>
+        <svg class="site-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+        <span class="site-theme-text">Dark Mode</span>
+      </button>
+      {% if session.get('user_token') %}
+        <a class="site-header-button site-auth-button" href="{{ url_for('logout') }}">Sign Out</a>
+      {% elif site_page != 'logout' %}
+        <a class="site-header-button site-auth-button" href="{{ url_for('sign_in') }}">Sign In</a>
+      {% endif %}
+    </nav>
+  </div>
+</header>
