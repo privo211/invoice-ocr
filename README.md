@@ -281,7 +281,7 @@ gradient treatment and hover motion as the upload page's Extract Data button.
 Run the offline UI and workflow checks with:
 
 ```bash
-python3 -m pytest -q test_lot_creation_fields.py test_seminis_lot_parsing.py test_tracking_extraction.py test_tracking_workflow.py test_ui_messages.py
+python3 -m pytest -q test_lot_creation_fields.py test_seminis_lot_parsing.py test_seminis_analysis.py test_tracking_extraction.py test_tracking_workflow.py test_ui_messages.py
 ```
 
 The Blue Canvas release is a single UI commit on top of the production baseline

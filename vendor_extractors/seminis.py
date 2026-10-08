@@ -275,6 +275,7 @@ import requests
 import time
 from difflib import get_close_matches
 from collections import defaultdict
+from datetime import datetime
 from db_logger import log_processing_event
 
 # --- Configuration for Azure OCR (if needed) ---
@@ -282,8 +283,8 @@ AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
 AZURE_KEY = os.getenv("AZURE_KEY")
 
 # --- OCR and Text Extraction Logic (Modified for In-Memory) ---
-def extract_text_with_azure_ocr(pdf_content: bytes) -> Tuple[List[str], int]:
-    """Sends PDF content to Azure OCR and returns lines and page count."""
+def extract_text_with_azure_ocr(pdf_content: bytes) -> Dict:
+    """Keep OCR line positions so certificate columns retain their values."""
     headers = {
         "Ocp-Apim-Subscription-Key": AZURE_KEY,
         "Content-Type": "application/pdf"
@@ -313,7 +314,10 @@ def extract_text_with_azure_ocr(pdf_content: bytes) -> Tuple[List[str], int]:
                     txt = line.get("content", "").strip()
                     if txt:
                         lines.append(txt)
-            return lines, page_count
+            return {
+                'lines': lines, 'method': 'Azure OCR', 'page_count': page_count,
+                'pages': pages,
+            }
         if result.get("status") == "failed":
             raise RuntimeError("OCR analysis failed")
     raise TimeoutError("OCR timed out")
@@ -368,68 +372,163 @@ def extract_text_with_fallback(source: Union[str, bytes]) -> Dict:
     except Exception:
         # If PyMuPDF fails, go straight to OCR
         pdf_bytes = source if isinstance(source, bytes) else open(source, "rb").read()
-        lines, page_count = extract_text_with_azure_ocr(pdf_bytes)
-        return {'lines': lines, 'method': 'Azure OCR', 'page_count': page_count}
+        return extract_text_with_azure_ocr(pdf_bytes)
 
     page_count = doc.page_count
-    is_scanned = not any(page.get_text().strip() for page in doc)
+    page_texts = [page.get_text() for page in doc]
+    is_scanned = not any(text.strip() for text in page_texts)
+    for page, page_text in zip(doc, page_texts):
+        if 'notice to purchaser' in page_text.lower():
+            continue
+        # Approved certificates can contain only a selectable customs stamp;
+        # the report itself is scanned or drawn as outlines. Stamp text alone
+        # must not suppress OCR of the lot, purity, and germination results.
+        stamp_only = (re.search(r'Seed\s+Shipment\s+Release\s+From\s+Customs', page_text, re.I)
+                      and not _is_seminis_analysis_report([page_text]))
+        graphical_scan = not page_text.strip() and (page.get_images() or page.get_drawings())
+        if stamp_only or graphical_scan:
+            is_scanned = True
+            break
     
     if not is_scanned:
         lines = []
-        for page in doc:
-            page_text = page.get_text()
+        pages = []
+        for page, page_text in zip(doc, page_texts):
             if "notice to purchaser" in page_text.lower():
                 continue
             lines.extend([ln.strip() for ln in page_text.splitlines() if ln.strip()])
+            layout_lines = []
+            for block in page.get_text('dict').get('blocks', []):
+                for line in block.get('lines', []):
+                    content = ''.join(span['text'] for span in line['spans']).strip()
+                    x0, y0, x1, y1 = line['bbox']
+                    if content:
+                        layout_lines.append({
+                            'content': content,
+                            'polygon': [x0, y0, x1, y0, x1, y1, x0, y1],
+                        })
+            pages.append({'lines': layout_lines})
         doc.close()
-        return {'lines': lines, 'method': 'PyMuPDF', 'page_count': page_count}
+        return {'lines': lines, 'method': 'PyMuPDF', 'page_count': page_count, 'pages': pages}
     
     # If scanned, fall back to OCR
     doc.close()
     pdf_bytes = source if isinstance(source, bytes) else open(source, "rb").read()
-    lines, page_count_ocr = extract_text_with_azure_ocr(pdf_bytes)
-    return {'lines': lines, 'method': 'Azure OCR', 'page_count': page_count_ocr}
+    return extract_text_with_azure_ocr(pdf_bytes)
 
 # --- Data Extraction Logic (Modified for In-Memory) ---
-def _extract_seminis_analysis_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, Dict]:
+def _is_seminis_analysis_report(lines: List[str]) -> bool:
+    """Use certificate field labels, independent of title spacing or OCR case."""
+    text = ' '.join(lines)
+    return all(re.search(pattern, text, re.IGNORECASE) for pattern in (
+        r'\bLot\s+Number\b', r'\bPure\s+Seed\b', r'\bGermination\b',
+    ))
+
+
+def _analysis_value(extraction_info, text, label_pattern, value_pattern, align_with=None):
+    """Read inline fields, or the value in the column beneath an OCR heading."""
+    if match := re.search(
+        rf'{label_pattern}\s*:?\s*({value_pattern})(?![\d./])', text, re.IGNORECASE
+    ):
+        return match.group(1)
+
+    for page in extraction_info.get('pages', []):
+        positioned = []
+        for line in page.get('lines', []):
+            polygon = line.get('polygon', [])
+            if len(polygon) < 8:
+                continue
+            xs, ys = polygon[::2], polygon[1::2]
+            positioned.append((line.get('content', '').strip(), min(xs), min(ys), max(xs), max(ys)))
+
+        anchors = [line for line in positioned if align_with and re.fullmatch(align_with, line[0], re.I)]
+        for label, x0, y0, x1, y1 in positioned:
+            if not re.fullmatch(label_pattern + r'\s*:?\s*', label, re.I):
+                continue
+            height = y1 - y0
+            if height <= 0:
+                continue
+            # Date Tested also occurs in the moisture table. Only use the
+            # heading on the germination row when reading a column value.
+            if align_with and not any(abs(anchor[2] - y0) <= height for anchor in anchors):
+                continue
+            candidates = []
+            for value, vx0, vy0, vx1, vy1 in positioned:
+                if not re.fullmatch(value_pattern + r'\s*%?', value):
+                    continue
+                same_row = abs((vy0 + vy1) / 2 - (y0 + y1) / 2) <= height / 2
+                to_right = 0 <= vx0 - x1 <= height * 3
+                below = y1 <= (vy0 + vy1) / 2 <= y1 + height * 3
+                in_column = x0 <= (vx0 + vx1) / 2 <= x1
+                if same_row and to_right:
+                    candidates.append((0, vx0 - x1, value))
+                elif below and in_column:
+                    candidates.append((1, vy0 - y1, value))
+            if candidates:
+                return min(candidates)[2].rstrip('%').strip()
+    return None
+
+
+def _extract_seminis_analysis_data(pdf_files: List[Tuple[str, bytes]], extraction_infos=None) -> Dict[str, Dict]:
     """Extracts data from Seminis analysis reports."""
     analysis = {}
-    for filename, pdf_bytes in pdf_files:
-        extraction_info = extract_text_with_fallback(pdf_bytes)
+    if extraction_infos is None:
+        extraction_infos = [extract_text_with_fallback(pdf_bytes) for _, pdf_bytes in pdf_files]
+    for extraction_info in extraction_infos:
         lines = extraction_info['lines']
         if not lines: continue
         
         text = "\n".join(lines)
-        if "REPORT" not in text.upper() or "ANALYSIS" not in text.upper():
+        if not _is_seminis_analysis_report(lines):
             continue
         
         norm = re.sub(r"\s{2,}", " ", text.replace("\n", " ").replace("\r", " "))
-        if not (m_lot := re.search(r"Lot Number[:\s]+(\d{9,10})(?:/\d{2,4})?", norm)):
+        if not (m_lot := re.search(r"\bLot\s+Number\s*:?\s*(\d{9,10})(?:/\d{2,4})?\b", norm, re.I)):
             continue
         lot = m_lot.group(1)
 
-        pure_match = re.search(r"Pure Seed\s*%\s*([\d.]+)", norm)
-        inert_match = re.search(r"Inert Matter\s*%\s*([\d.]+)", norm)
-        germ_match = re.search(r"Germination\s*%\s*([\d.]+)", norm)
-        date_match = re.search(r"Date Tested\s*([\d/]{8,10})", norm)
+        percent = r'\d{1,3}(?:\.\d+)?'
+        pure_value = _analysis_value(extraction_info, norm, r'Pure\s+Seed\s*%', percent)
+        inert_value = _analysis_value(extraction_info, norm, r'Inert\s+Matter\s*%', percent)
+        germ_value = _analysis_value(extraction_info, norm, r'Germination\s*%', percent)
+        germ_start = next((i for i, line in enumerate(lines) if re.fullmatch(r'GERMINATION', line, re.I)), None)
+        germ_text = norm
+        if germ_start is not None:
+            germ_end = next((i for i in range(germ_start + 1, len(lines))
+                             if re.fullmatch(r'MOISTURE\s+CONTENT', lines[i], re.I)), len(lines))
+            germ_text = ' '.join(lines[germ_start:germ_end])
+        date_value = _analysis_value(
+            extraction_info, germ_text,
+            r'Date\s+Tested', r'\d{1,2}/\d{1,2}/\d{4}', align_with=r'Germination\s*%',
+        )
 
-        pure = float(pure_match.group(1)) if pure_match else None
-        inert = float(inert_match.group(1)) if inert_match else None
+        def percentage(value):
+            number = float(value) if value is not None else None
+            return number if number is not None and 0 <= number <= 100 else None
+
+        pure, inert, germ = map(percentage, (pure_value, inert_value, germ_value))
+        germ_date = None
+        if date_value:
+            try:
+                germ_date = datetime.strptime(date_value, '%m/%d/%Y').strftime('%m/%d/%Y')
+            except ValueError:
+                pass
 
         if pure == 100.0: pure, inert = 99.99, 0.01
 
         analysis[lot] = {
             "PureSeed": pure, "InertMatter": inert,
-            "Germ": int(float(germ_match.group(1))) if germ_match else None,
-            "GermDate": date_match.group(1) if date_match else None
+            "Germ": int(germ) if germ is not None else None,
+            "GermDate": germ_date,
         }
     return analysis
 
-def _extract_seminis_packing_data(pdf_files: List[Tuple[str, bytes]]) -> Dict[str, Dict]:
+def _extract_seminis_packing_data(pdf_files: List[Tuple[str, bytes]], extraction_infos=None) -> Dict[str, Dict]:
     """Extracts data from Seminis packing slips from a list of file bytes."""
     packing_data = {}
-    for filename, pdf_bytes in pdf_files:
-        extraction_info = extract_text_with_fallback(pdf_bytes)
+    if extraction_infos is None:
+        extraction_infos = [extract_text_with_fallback(pdf_bytes) for _, pdf_bytes in pdf_files]
+    for extraction_info in extraction_infos:
         lines = extraction_info['lines']
         if not lines: continue
         
@@ -613,12 +712,12 @@ def extract_seminis_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_desc
     if not pdf_files:
         return {}
 
-    analysis_map = _extract_seminis_analysis_data(pdf_files)
-    packing_map = _extract_seminis_packing_data(pdf_files)
+    extraction_infos = [extract_text_with_fallback(pdf_bytes) for _, pdf_bytes in pdf_files]
+    analysis_map = _extract_seminis_analysis_data(pdf_files, extraction_infos)
+    packing_map = _extract_seminis_packing_data(pdf_files, extraction_infos)
 
     grouped_results = {}
-    for filename, pdf_bytes in pdf_files:
-        extraction_info = extract_text_with_fallback(pdf_bytes)
+    for (filename, _), extraction_info in zip(pdf_files, extraction_infos):
         lines = extraction_info['lines']
         
         po_number = None
@@ -628,7 +727,8 @@ def extract_seminis_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_desc
             text_content = "\n".join(lines)
             if m := re.search(r"PO #\s*:\s*(\S+)", text_content):
                 po_number = f"PO-{m.group(1)}"
-            is_invoice = "INVOICE" in text_content.upper() and "PACKING" not in text_content.upper() and "REPORT" not in text_content.upper()
+            is_invoice = ("INVOICE" in text_content.upper() and "PACKING" not in text_content.upper()
+                          and "REPORT" not in text_content.upper() and not _is_seminis_analysis_report(lines))
 
         # LOG THE EXTRACTION EVENT
         log_processing_event(
