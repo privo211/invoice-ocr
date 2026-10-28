@@ -587,7 +587,8 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
 
         package = vendor_lot = origin_country = vendor_batch = total_price = total_quantity = None
         
-        for j in range(trt_idx + 1, len(lines)):
+        item_end = trt_indices[idx + 1] - 1 if idx + 1 < len(trt_indices) else len(lines)
+        for j in range(trt_idx + 1, item_end):
             line = lines[j]
             batch_search_line = line
             # if not package and (m := re.search(r"\d+\s+MK\s+\w+", line)): package = m.group().strip()
@@ -620,36 +621,24 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
                 if filtered_cc: 
                     origin_country = filtered_cc[0]
                 
-            # if line == "Total Item":
-            #     # Try to take the next line with comma first
-            #     for k in range(j + 1, min(j + 4, len(lines))):
-            #         if (m := re.search(r"[\d,]+\.\d{2}", lines[k+1])) and "," in m.group():
-            #             total_price = float(m.group().replace(",", ""))
-            #             break
-            #     else:
-            #         # Fallback: take the first numeric value if no comma found
-            #         for k in range(j + 1, min(j + 4, len(lines))):
-            #             if (m := re.search(r"[\d,]+\.\d{2}", lines[k])):
-            #                 total_price = float(m.group().replace(",", ""))
-            #                 break
-            #     break
-            
-            if line.strip() == "Total Item":
-                # Scan the next 5 lines for numbers
-                for k in range(j + 1, min(j + 6, len(lines))):
-                    if m := re.search(r"[\d,]+\.\d{2}", lines[k]):
-                        candidate = float(m.group().replace(",", ""))
-                        if candidate > 50:  # ignore ratios like 0.67
-                            total_price = candidate
-                            break
+            if m_total := re.fullmatch(
+                r"Total\s+Item(?:\s+([+\-\d,.\s]+))?", line.strip(), re.IGNORECASE
+            ):
+                # Total Item columns are net unit price, then net amount.
+                summary_lines = [m_total.group(1) or ""] + lines[j + 1:min(j + 3, item_end)]
+                prices = []
+                for summary_line in summary_lines:
+                    values = summary_line.split()
+                    if any(
+                        not re.fullmatch(r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}", value)
+                        for value in values
+                    ):
+                        break
+                    prices.extend(values)
+                    if len(prices) >= 2:
+                        total_price = float(prices[1].replace(",", ""))
+                        break
                 break
-
-            # if line == "Total Item":
-            #     for k in range(j + 1, min(j + 4, len(lines))):
-            #         if (m := re.search(r"[\d,]+\.\d{2}", lines[k])):
-            #             total_price = float(m.group().replace(",", ""))
-            #             break
-            #     break
 
         final_vendor_item_desc = f"{vendor_item_description} {package}".strip()
         package_description = ""
@@ -673,10 +662,11 @@ def _process_single_seminis_invoice(lines: List[str], analysis_map: dict, packin
         if vendor_batch and (packing_data := packing_map.get(vendor_batch)):
             item.update(packing_data)
 
-        tp = item.get("TotalPrice") or 0.0
+        tp = item.get("TotalPrice")
         qty = item.get("TotalQuantity")
-        # item["USD_Actual_Cost_$"] = round((tp / qty), 4) if qty and qty > 0 else None
-        item["USD_Actual_Cost_$"] = "{:.4f}".format(tp / qty) if qty and qty > 0 else None
+        item["USD_Actual_Cost_$"] = (
+            "{:.4f}".format(tp / qty) if tp is not None and qty and qty > 0 else None
+        )
         items.append(item)
     return items
 
