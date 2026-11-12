@@ -273,14 +273,22 @@ import re
 from typing import List, Dict, Tuple, Union
 import requests
 import time
+import logging
 from difflib import get_close_matches
 from collections import defaultdict
 from datetime import datetime
 from db_logger import log_processing_event
+from vendor_extractors.certificate_ocr import (
+    CUSTOMS_RELEASE_STAMP,
+    certificate_fields_missing,
+    fill_missing_certificate_fields,
+)
 
 # --- Configuration for Azure OCR (if needed) ---
 AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
 AZURE_KEY = os.getenv("AZURE_KEY")
+logger = logging.getLogger("invoice-ocr")
+_CERTIFICATE_FIELDS = ("PureSeed", "InertMatter", "Germ", "GermDate")
 
 # --- OCR and Text Extraction Logic (Modified for In-Memory) ---
 def extract_text_with_azure_ocr(pdf_content: bytes) -> Dict:
@@ -366,55 +374,54 @@ def extract_text_with_azure_ocr(pdf_content: bytes) -> Dict:
 
 def extract_text_with_fallback(source: Union[str, bytes]) -> Dict:
     """Extracts text and returns a dictionary with metadata for logging."""
-    doc = None
     try:
         doc = fitz.open(stream=source, filetype="pdf") if isinstance(source, bytes) else fitz.open(source)
     except Exception:
         # If PyMuPDF fails, go straight to OCR
-        pdf_bytes = source if isinstance(source, bytes) else open(source, "rb").read()
-        return extract_text_with_azure_ocr(pdf_bytes)
+        doc = None
 
-    page_count = doc.page_count
-    page_texts = [page.get_text() for page in doc]
-    is_scanned = not any(text.strip() for text in page_texts)
-    for page, page_text in zip(doc, page_texts):
-        if 'notice to purchaser' in page_text.lower():
-            continue
-        # Approved certificates can contain only a selectable customs stamp;
-        # the report itself is scanned or drawn as outlines. Stamp text alone
-        # must not suppress OCR of the lot, purity, and germination results.
-        stamp_only = (re.search(r'Seed\s+Shipment\s+Release\s+From\s+Customs', page_text, re.I)
-                      and not _is_seminis_analysis_report([page_text]))
-        graphical_scan = not page_text.strip() and (page.get_images() or page.get_drawings())
-        if stamp_only or graphical_scan:
-            is_scanned = True
-            break
-    
-    if not is_scanned:
-        lines = []
-        pages = []
-        for page, page_text in zip(doc, page_texts):
-            if "notice to purchaser" in page_text.lower():
-                continue
-            lines.extend([ln.strip() for ln in page_text.splitlines() if ln.strip()])
-            layout_lines = []
-            for block in page.get_text('dict').get('blocks', []):
-                for line in block.get('lines', []):
-                    content = ''.join(span['text'] for span in line['spans']).strip()
-                    x0, y0, x1, y1 = line['bbox']
-                    if content:
-                        layout_lines.append({
-                            'content': content,
-                            'polygon': [x0, y0, x1, y0, x1, y1, x0, y1],
-                        })
-            pages.append({'lines': layout_lines})
-        doc.close()
-        return {'lines': lines, 'method': 'PyMuPDF', 'page_count': page_count, 'pages': pages}
-    
-    # If scanned, fall back to OCR
-    doc.close()
-    pdf_bytes = source if isinstance(source, bytes) else open(source, "rb").read()
-    return extract_text_with_azure_ocr(pdf_bytes)
+    native = {"lines": [], "pages": [], "method": "PyMuPDF", "page_count": 0}
+    has_text = False
+    graphical_scan = False
+    if doc is not None:
+        with doc:
+            native["page_count"] = doc.page_count
+            for page in doc:
+                page_text = page.get_text()
+                has_text = has_text or bool(page_text.strip())
+                if "notice to purchaser" in page_text.lower():
+                    continue
+                if not page_text.strip() and (page.get_images() or page.get_drawings()):
+                    graphical_scan = True
+                native["lines"].extend(line.strip() for line in page_text.splitlines() if line.strip())
+                layout_lines = []
+                for block in page.get_text('dict').get('blocks', []):
+                    for line in block.get('lines', []):
+                        content = ''.join(span['text'] for span in line['spans']).strip()
+                        x0, y0, x1, y1 = line['bbox']
+                        if content:
+                            layout_lines.append({
+                                'content': content,
+                                'polygon': [x0, y0, x1, y0, x1, y1, x0, y1],
+                            })
+                native["pages"].append({"lines": layout_lines})
+
+    if has_text and not graphical_scan:
+        return native
+
+    try:
+        if isinstance(source, bytes):
+            pdf_bytes = source
+        else:
+            with open(source, "rb") as pdf:
+                pdf_bytes = pdf.read()
+        ocr = extract_text_with_azure_ocr(pdf_bytes)
+        ocr["searchable"] = native
+        return ocr
+    except Exception as exc:
+        logger.warning("Seminis OCR failed: %s", exc)
+        native["method"] = "Azure OCR (failed)"
+        return native
 
 # --- Data Extraction Logic (Modified for In-Memory) ---
 def _is_seminis_analysis_report(lines: List[str]) -> bool:
@@ -469,59 +476,123 @@ def _analysis_value(extraction_info, text, label_pattern, value_pattern, align_w
     return None
 
 
-def _extract_seminis_analysis_data(pdf_files: List[Tuple[str, bytes]], extraction_infos=None) -> Dict[str, Dict]:
-    """Extracts data from Seminis analysis reports."""
-    analysis = {}
-    if extraction_infos is None:
-        extraction_infos = [extract_text_with_fallback(pdf_bytes) for _, pdf_bytes in pdf_files]
-    for extraction_info in extraction_infos:
-        lines = extraction_info['lines']
-        if not lines: continue
-        
-        text = "\n".join(lines)
-        if not _is_seminis_analysis_report(lines):
-            continue
-        
-        norm = re.sub(r"\s{2,}", " ", text.replace("\n", " ").replace("\r", " "))
-        if not (m_lot := re.search(r"\bLot\s+Number\s*:?\s*(\d{9,10})(?:/\d{2,4})?\b", norm, re.I)):
-            continue
-        lot = m_lot.group(1)
+def _is_seminis_invoice(lines: List[str]) -> bool:
+    text = " ".join(lines).upper()
+    return (
+        "INVOICE" in text and "PACKING" not in text and "REPORT" not in text
+        and not _is_seminis_analysis_report(lines)
+    )
 
-        percent = r'\d{1,3}(?:\.\d+)?'
-        pure_value = _analysis_value(extraction_info, norm, r'Pure\s+Seed\s*%', percent)
-        inert_value = _analysis_value(extraction_info, norm, r'Inert\s+Matter\s*%', percent)
-        germ_value = _analysis_value(extraction_info, norm, r'Germination\s*%', percent)
-        germ_start = next((i for i, line in enumerate(lines) if re.fullmatch(r'GERMINATION', line, re.I)), None)
-        germ_text = norm
-        if germ_start is not None:
-            germ_end = next((i for i in range(germ_start + 1, len(lines))
-                             if re.fullmatch(r'MOISTURE\s+CONTENT', lines[i], re.I)), len(lines))
-            germ_text = ' '.join(lines[germ_start:germ_end])
+
+def _is_seminis_packing_list(lines: List[str]) -> bool:
+    text = " ".join(lines).upper()
+    return "PACKING" in text and "LIST" in text
+
+
+def _is_seminis_certificate_candidate(lines: List[str]) -> bool:
+    text = " ".join(lines)
+    return bool(
+        _is_seminis_analysis_report(lines)
+        or re.search(r"\bReport\s+of\s+(?:Seed\s+)?Analysis\b", text, re.I)
+        or (CUSTOMS_RELEASE_STAMP.search(text) and not (
+            _is_seminis_invoice(lines) or _is_seminis_packing_list(lines)
+        ))
+    )
+
+
+def _parse_seminis_analysis(extraction_info: dict) -> dict:
+    lines = extraction_info["lines"]
+    if not _is_seminis_certificate_candidate(lines):
+        return {}
+
+    norm = " ".join(" ".join(lines).split())
+    if not (m_lot := re.search(r"\bLot\s+Number\s*:?\s*(\d{9,10})(?:/\d{2,4})?\b", norm, re.I)):
+        return {}
+    lot = m_lot.group(1)
+
+    percent = r'\d{1,3}(?:\.\d+)?'
+    pure_value = _analysis_value(extraction_info, norm, r'Pure\s+Seed\s*%', percent)
+    inert_value = _analysis_value(extraction_info, norm, r'Inert\s+Matter\s*%', rf'(?:{percent}|-?TR-?(?![A-Za-z]))')
+    germ_value = _analysis_value(extraction_info, norm, r'Germination\s*%', percent)
+    germ_start = next((i for i, line in enumerate(lines) if re.fullmatch(r'GERMINATION', line, re.I)), None)
+    germ_text = norm
+    if germ_start is not None:
+        germ_end = next((i for i in range(germ_start + 1, len(lines))
+                         if re.fullmatch(r'MOISTURE\s+CONTENT', lines[i], re.I)), len(lines))
+        germ_text = ' '.join(lines[germ_start:germ_end])
+    date_value = None
+    if germ_start is not None or re.search(r'\bGermination\s*%', norm, re.I):
         date_value = _analysis_value(
             extraction_info, germ_text,
             r'Date\s+Tested', r'\d{1,2}/\d{1,2}/\d{4}', align_with=r'Germination\s*%',
         )
 
-        def percentage(value):
-            number = float(value) if value is not None else None
-            return number if number is not None and 0 <= number <= 100 else None
+    def percentage(value):
+        number = float(value) if value is not None else None
+        return number if number is not None and 0 <= number <= 100 else None
 
-        pure, inert, germ = map(percentage, (pure_value, inert_value, germ_value))
-        germ_date = None
-        if date_value:
+    pure, germ = map(percentage, (pure_value, germ_value))
+    inert = (
+        "TR" if inert_value and inert_value.upper().strip("-") == "TR"
+        else percentage(inert_value)
+    )
+    germ_date = None
+    if date_value:
+        try:
+            germ_date = datetime.strptime(date_value, '%m/%d/%Y').strftime('%m/%d/%Y')
+        except ValueError:
+            pass
+
+    return {lot: {
+        "PureSeed": pure, "InertMatter": None if inert == "TR" and pure != 100 else inert,
+        "Germ": int(germ) if germ is not None else None, "GermDate": germ_date,
+    }}
+
+
+def _extract_seminis_analysis_data(pdf_files: List[Tuple[str, bytes]], extraction_infos=None) -> Dict[str, Dict]:
+    """Read searchable certificate values, then use OCR for missing values."""
+    if extraction_infos is None:
+        extraction_infos = [extract_text_with_fallback(pdf_bytes) for _, pdf_bytes in pdf_files]
+
+    analysis = {}
+    for (filename, pdf_bytes), extraction_info in zip(pdf_files, extraction_infos):
+        report = _parse_seminis_analysis(extraction_info.get("searchable", extraction_info))
+        ocr_report = _parse_seminis_analysis(extraction_info) if "searchable" in extraction_info else {}
+        lines = extraction_info["lines"]
+        possible_certificate = _is_seminis_certificate_candidate(lines) or (
+            bool(lines) and not (_is_seminis_invoice(lines) or _is_seminis_packing_list(lines))
+        )
+        if (
+            extraction_info.get("method") == "PyMuPDF"
+            and possible_certificate
+            and (not report or any(
+                certificate_fields_missing(fields, _CERTIFICATE_FIELDS)
+                for fields in report.values()
+            ))
+        ):
             try:
-                germ_date = datetime.strptime(date_value, '%m/%d/%Y').strftime('%m/%d/%Y')
-            except ValueError:
-                pass
+                ocr_report = _parse_seminis_analysis(extract_text_with_azure_ocr(pdf_bytes))
+                extraction_info["method"] = "PyMuPDF + Azure OCR"
+            except Exception as exc:
+                logger.warning("Certificate OCR failed for %s: %s", filename, exc)
 
-        if pure == 100.0: pure, inert = 99.99, 0.01
+        if report:
+            for lot, fields in report.items():
+                fill_missing_certificate_fields(fields, ocr_report.get(lot, {}))
+        else:
+            report = ocr_report
 
-        analysis[lot] = {
-            "PureSeed": pure, "InertMatter": inert,
-            "Germ": int(germ) if germ is not None else None,
-            "GermDate": germ_date,
-        }
+        for lot, fields in report.items():
+            # Preserve the existing conversion for reported 100% purity and trace amounts.
+            if fields["PureSeed"] == 100:
+                fields["PureSeed"] = 99.99
+                if fields["InertMatter"] is not None:
+                    fields["InertMatter"] = 0.01
+            analysis.setdefault(lot, dict.fromkeys(_CERTIFICATE_FIELDS)).update({
+                field: value for field, value in fields.items() if value is not None
+            })
     return analysis
+
 
 def _extract_seminis_packing_data(pdf_files: List[Tuple[str, bytes]], extraction_infos=None) -> Dict[str, Dict]:
     """Extracts data from Seminis packing slips from a list of file bytes."""
@@ -532,8 +603,7 @@ def _extract_seminis_packing_data(pdf_files: List[Tuple[str, bytes]], extraction
         lines = extraction_info['lines']
         if not lines: continue
         
-        text = "\n".join(lines)
-        if "PACKING" not in text.upper() or "LIST" not in text.upper():
+        if not _is_seminis_packing_list(lines):
             continue
         
         for i, line in enumerate(lines):
@@ -717,8 +787,7 @@ def extract_seminis_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_desc
             text_content = "\n".join(lines)
             if m := re.search(r"PO #\s*:\s*(\S+)", text_content):
                 po_number = f"PO-{m.group(1)}"
-            is_invoice = ("INVOICE" in text_content.upper() and "PACKING" not in text_content.upper()
-                          and "REPORT" not in text_content.upper() and not _is_seminis_analysis_report(lines))
+            is_invoice = _is_seminis_invoice(lines)
 
         # LOG THE EXTRACTION EVENT
         log_processing_event(

@@ -3,6 +3,7 @@ import re
 import fitz  # PyMuPDF
 from typing import List, Dict, TypedDict, Union, Tuple
 import requests
+from datetime import datetime
 from difflib import get_close_matches
 import time
 import pycountry
@@ -10,6 +11,11 @@ import logging
 from functools import wraps
 from dotenv import load_dotenv
 from db_logger import log_processing_event
+from vendor_extractors.certificate_ocr import (
+    CUSTOMS_RELEASE_STAMP,
+    certificate_fields_missing,
+    fill_missing_certificate_fields,
+)
 
 load_dotenv()
 BC_TENANT  = os.getenv("AZURE_TENANT_ID")
@@ -43,6 +49,12 @@ class PurityData(TypedDict):
     Inert: Union[float, str, None]
     GrowerGerm: Union[int, float, None]
     GrowerGermDate: Union[str, None]
+
+_SEED_ANALYSIS_HEADING = re.compile(r"\b(?:Report\s+of\s+Seed\s+Analysis|Purity\s+Analysis)\b", re.I)
+_PACKING_HEADING = re.compile(r"\b(?:Packing\s+List|Pro\s+forma\s+packing\s+slip)\b", re.I)
+_INVOICE_HEADING = re.compile(r"\b(?:INV[-\s]*\d+|Invoice\s+number)\b", re.I)
+_GERM_DATE = r"\d{1,2}/\d{1,2}/\d{4}"
+_CERTIFICATE_FIELDS = ("GrowerGerm", "GrowerGermDate", "Purity", "Inert")
 
 # ── OCR HELPERS ────────────────────────────────────────────────────────────────
 
@@ -84,12 +96,33 @@ def _extract_text_with_azure_ocr(pdf_content: bytes) -> str:
                 for ln in page["lines"]
                 if ln.get("content", "").strip()
             ]
-            full_text = "\n".join(lines)
-            print(f"DEBUG: Azure OCR Extracted Text:\n{full_text}")
-            return full_text
+            return "\n".join(lines)
         if result.get("status") == "failed":
             raise RuntimeError("Azure OCR analysis failed.")
     raise TimeoutError("Azure OCR timed out.")
+
+def _read_sakata_ocr(filename: str, pdf_bytes: bytes, ocr_cache: dict[bytes, str]) -> str:
+    if pdf_bytes not in ocr_cache:
+        logger.info("Attempting Azure OCR for %s.", filename)
+        try:
+            ocr_cache[pdf_bytes] = _extract_text_with_azure_ocr(pdf_bytes)
+        except Exception as exc:
+            logger.warning("Azure OCR failed for %s: %s", filename, exc)
+            ocr_cache[pdf_bytes] = ""
+    return ocr_cache[pdf_bytes]
+
+def _is_sakata_invoice(text: str) -> bool:
+    return bool(
+        _INVOICE_HEADING.search(text)
+        and not _SEED_ANALYSIS_HEADING.search(text)
+        and not _PACKING_HEADING.search(text)
+    )
+
+def _format_germ_date(date: str) -> str | None:
+    try:
+        return datetime.strptime(date, "%m/%d/%Y").strftime("%m/%d/%Y")
+    except ValueError:
+        return None
 
 def _parse_ocr_lot_line(chunk: str, vendor_lot_no: str) -> Dict:
     lot = {
@@ -578,72 +611,77 @@ def parse_lot_block(raw_text: str) -> Dict:
     except Exception as e:
         return {"error": str(e), "raw": raw_text}
 
+def _parse_seed_analysis_report(text: str) -> tuple[str, PurityData] | None:
+    if not _SEED_ANALYSIS_HEADING.search(text):
+        return None
+
+    lot_match = re.search(r"\bLot\s+Number\s*:?\s*(\d{6}\s*[-–]\s*\d{3})\b", text, re.I)
+    if not lot_match:
+        return None
+    lot_no = re.sub(r"\s+", "", lot_match.group(1)).replace("–", "-")
+
+    date_match = re.search(rf"\bDate\s+Test\s+Completed\s*:?\s*({_GERM_DATE})\b", text, re.I)
+    germ_date = _format_germ_date(date_match.group(1)) if date_match else None
+
+    pure, inert, normal = None, None, None
+    percent = r"\d{1,3}(?:\.\d+)?"
+    column = rf"(?:{percent}|X|-TR-|-+)"
+    # The first five cells are Pure Seed, Inert Matter, Other Crop, Weed Seed, and Normal Seedling.
+    remaining_columns = rf"\s+({column})\s+{column}\s+{column}\s+({column})(?!\S)"
+    nums_match = re.search(rf"(?<!\S)(\d{{1,3}}\.\d+){remaining_columns}", text, re.I)
+    if not nums_match:
+        nums_match = re.search(rf"\bDays\s+Tested\s+({column}){remaining_columns}", text, re.I)
+    if nums_match:
+        pure, inert, normal = (
+            float(value) if re.fullmatch(percent, value) and float(value) <= 100 else None
+            for value in nums_match.groups()
+        )
+        if normal is not None and normal.is_integer():
+            normal = int(normal)
+
+    return lot_no, {
+        "Purity": pure,
+        "Inert": inert,
+        "GrowerGerm": normal,
+        "GrowerGermDate": germ_date,
+    }
+
 @timed_func("extract_seed_analysis_reports_from_bytes")
-def extract_seed_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]]) -> Dict[str, PurityData]:
-    """Page-by-page OCR fallback for Seed Analysis Reports."""
+def extract_seed_analysis_reports_from_bytes(
+    pdf_files: list[tuple[str, bytes]], ocr_cache: dict[bytes, str] | None = None
+) -> Dict[str, PurityData]:
+    """Recover missing seed analysis values from the PDF's rendered content."""
+    if ocr_cache is None:
+        ocr_cache = {}
     report_map: Dict[str, PurityData] = {}
     for fname, bts in pdf_files:
         try:
-            full_text_parts = []
             with fitz.open(stream=bts, filetype="pdf") as doc:
-                for i, page in enumerate(doc):
-                    pg_text = page.get_text()
-                    # individual page sanity check
-                    if len(pg_text.strip()) < 100:
-                        logger.info(f"'{fname}' p{i+1} appears scanned. Attempting OCR.")
-                        temp_doc = fitz.open()
-                        temp_doc.insert_pdf(doc, from_page=i, to_page=i)
-                        pg_bts = temp_doc.tobytes()
-                        temp_doc.close()
-                        try:
-                            ocr_pg_text = _extract_text_with_azure_ocr(pg_bts)
-                            full_text_parts.append(ocr_pg_text)
-                        except Exception as e:
-                            logger.warning(f"OCR failed for {fname} p{i+1}: {e}")
-                    else:
-                        full_text_parts.append(pg_text)
-            
-            text = "\n".join(full_text_parts)
-            print(f"DEBUG: Combined Report Text ({fname}):\n{text}")
-            
-            # Skip if it's not a Seed Analysis Report (e.g. Health Report)
-            if "Report of Seed Analysis" not in text and "Purity Analysis" not in text:
-                continue
-
-            lot_match = re.search(r"Lot Number:[\s\n]*([\d-]+)", text, re.IGNORECASE)
-            if not lot_match: continue
-            lot_no = lot_match.group(1).strip()
-
-            date_match = re.search(r"Date Issued:[\s\n]*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
-            date_issued = date_match.group(1) if date_match else None
-
-            pure, inert, normal = None, None, None
-            
-            # Search for numerical values in standard report layout
-            nums_match = re.search(r"\b(\d{2}\.\d{2})\s+(\d{1,2}\.\d{2})\s+(?:\d{1,2}\.\d{2})\s+(?:\d{1,2}\.\d{2})\s+(\d{1,3})\b", text)
-            
-            if nums_match:
-                pure = float(nums_match.group(1))
-                inert = float(nums_match.group(2))
-                normal = int(nums_match.group(3))
+                text = "\n".join(page.get_text() for page in doc)
+            native_report = _parse_seed_analysis_report(text)
+            if native_report is None:
+                # Unclassified PDFs can have a searchable stamp or header over a scanned report.
+                needs_ocr = CUSTOMS_RELEASE_STAMP.search(text) or not (
+                    _is_sakata_invoice(text) or _PACKING_HEADING.search(text)
+                )
             else:
-                # Fallback to token-based search
-                header_end_match = re.search(r"Days[\s\n]*Tested", text, re.IGNORECASE)
-                if header_end_match:
-                    subtext = text[header_end_match.end():]
-                    tokens = re.findall(r"\b(?:\d+(?:\.\d+)?|X|TR|-TR-)\b", subtext)
-                    if len(tokens) >= 5:
-                        p_val, i_val, n_val = tokens[0], tokens[1], tokens[4]
-                        if p_val.replace('.', '', 1).isdigit(): pure = float(p_val)
-                        if i_val.replace('.', '', 1).isdigit(): inert = float(i_val)
-                        if n_val.isdigit(): normal = int(n_val)
+                _, native_fields = native_report
+                needs_ocr = certificate_fields_missing(native_fields, _CERTIFICATE_FIELDS)
 
-            report_map[lot_no] = {
-                "Purity": pure,
-                "Inert": inert,
-                "GrowerGerm": normal,
-                "GrowerGermDate": date_issued
-            }
+            ocr_report = None
+            if needs_ocr:
+                ocr_report = _parse_seed_analysis_report(
+                    _normalize_ocr_text(_read_sakata_ocr(fname, bts, ocr_cache))
+                )
+
+            report = native_report or ocr_report
+            if report is None:
+                continue
+            lot_no, fields = report
+            if native_report and ocr_report and ocr_report[0] == lot_no:
+                fill_missing_certificate_fields(fields, ocr_report[1])
+            existing = report_map.setdefault(lot_no, fields)
+            existing.update({field: value for field, value in fields.items() if value is not None})
         except Exception as e:
             logger.warning(f"Could not process {fname} for seed analysis. Error: {e}")
             
@@ -751,7 +789,7 @@ def extract_sakata_data_from_bytes(pdf_files: list[tuple[str, bytes]], token: st
     if not pdf_files: return {}
 
     # Extract global PO fallback
-    first_filename, first_bytes = pdf_files[0]
+    _, first_bytes = pdf_files[0]
     fallback_po = ""
     try:
         with fitz.open(stream=first_bytes, filetype="pdf") as doc0:
@@ -765,49 +803,42 @@ def extract_sakata_data_from_bytes(pdf_files: list[tuple[str, bytes]], token: st
     
     logger.info(f"Using fallback PO: {fallback_po}")
     
-    # 1. Build report map
-    report_map = extract_seed_analysis_reports_from_bytes(pdf_files)
+    ocr_cache: dict[bytes, str] = {}
+    report_map = extract_seed_analysis_reports_from_bytes(pdf_files, ocr_cache)
     grouped_results = {}
 
     for filename, pdf_bytes in pdf_files:
-        is_invoice = True
         extraction_method = "PyMuPDF"
-        full_doc_text = ""
 
         try:
             with fitz.open(stream=pdf_bytes, filetype="pdf") as temp_doc:
-                full_doc_text = "".join(page.get_text() for page in temp_doc)
-                text_len = len(full_doc_text.strip())
-
-                if text_len < 200:
-                    logger.info(f"'{filename}': low searchable text ({text_len} chars). Attempting Azure OCR.")
-                    try:
-                        ocr_text = _extract_text_with_azure_ocr(pdf_bytes)
-                        full_doc_text = ocr_text
-                        extraction_method = "Azure OCR"
-                    except Exception as ocr_err:
-                        logger.warning(f"Azure OCR failed for {filename}: {ocr_err}")
-                        is_invoice = False
-
-                _NON_INVOICE_PHRASES = ["Report of Seed Analysis", "Purity Analysis", "Packing List", "Pro forma packing slip"]
-                if is_invoice:
-                    if any(phrase in full_doc_text for phrase in _NON_INVOICE_PHRASES):
-                        is_invoice = False
-                        logger.info(f"Skipping supporting document: {filename}")
-                    elif "INV-" not in full_doc_text and "Invoice number" not in full_doc_text:
-                        # Final check for invoice signature
-                        is_invoice = False
+                page_count = temp_doc.page_count
+                full_doc_text = "\n".join(page.get_text() for page in temp_doc)
         except Exception as e:
             logger.warning(f"Error reading {filename}: {e}")
             continue
 
-        if not is_invoice: continue
+        if _SEED_ANALYSIS_HEADING.search(full_doc_text) or _PACKING_HEADING.search(full_doc_text):
+            continue
+        if len(full_doc_text.strip()) < 200:
+            full_doc_text = _read_sakata_ocr(filename, pdf_bytes, ocr_cache)
+            extraction_method = "Azure OCR"
+        elif not _is_sakata_invoice(full_doc_text):
+            full_doc_text = ocr_cache.get(pdf_bytes, "")
+            extraction_method = "Azure OCR"
+
+        if not _is_sakata_invoice(full_doc_text):
+            continue
+        if extraction_method == "Azure OCR":
+            raw_items = _extract_invoice_from_ocr_text(full_doc_text, fallback_po, token)
+        else:
+            raw_items = extract_invoice_from_pdf(source=pdf_bytes, fallback_po=fallback_po, token=token)
+            for item in raw_items:
+                item["Lots"] = [parse_lot_block(block) for block in item["Lots"]]
 
         logger.info(f"Processing as invoice: {filename} (method: {extraction_method})")
 
-        page_count = 0
         try:
-            with fitz.open(stream=pdf_bytes, filetype="pdf") as d: page_count = d.page_count
             log_processing_event(
                 vendor='Sakata', filename=filename,
                 extraction_info={'method': extraction_method, 'page_count': page_count},
@@ -815,36 +846,23 @@ def extract_sakata_data_from_bytes(pdf_files: list[tuple[str, bytes]], token: st
             )
         except Exception: pass
 
-        m_inv = re.search(r"INV[-\s]*0*([0-9]+)", full_doc_text, re.IGNORECASE)
+        m_inv = re.search(r"INV[-\s]*0*([0-9]+)", full_doc_text, re.I) or re.search(
+            r"INV[-\s]*0*([0-9]+)", ocr_cache.get(pdf_bytes, ""), re.I
+        )
         invoice_id = m_inv.group(1) if m_inv else ""
 
-        if extraction_method == "Azure OCR":
-            raw_items = _extract_invoice_from_ocr_text(full_doc_text, fallback_po, token)
-        else:
-            raw_items = extract_invoice_from_pdf(source=pdf_bytes, fallback_po=fallback_po, token=token)
-
         for itm in raw_items:
-            parsed_lots = []
-            for lot_data in itm.get("Lots", []):
-                
-                if extraction_method != "Azure OCR":
-                    lot = parse_lot_block(lot_data)
-                else:
-                    lot = lot_data
-                
+            for lot in itm["Lots"]:
                 lot["USD_Actual_Cost_$"] = itm.get("USD_Actual_Cost_$")
                 lot["PackageDescription"] = itm.get("PackageDescription")
                 lot["OriginalReceivedQty"] = itm.get("OriginalReceivedQty")
                 
                 vendor_lot_no = lot.get("VendorLotNo")
-                if vendor_lot_no in report_map:
-                    lot.update(report_map[vendor_lot_no])
+                report = report_map.get(vendor_lot_no, {})
+                lot.update({field: value for field, value in report.items() if value is not None})
                 
                 lot["PurchaseOrder"] = itm.get("PurchaseOrder") or fallback_po
                 lot["InvoiceNumber"] = invoice_id
-                parsed_lots.append(lot)
-            
-            itm["Lots"] = parsed_lots
         
         if raw_items: grouped_results[filename] = raw_items
 

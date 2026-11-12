@@ -316,7 +316,7 @@
 
                   <dt class="col-sm-4">Current Germ</dt>
                   <dd class="col-sm-8">
-                    <div class="field-box" data-field="Germ" contenteditable="true">{{ item.CurrentGerm or '' }}</div>
+                    <div class="field-box" data-field="Germ" contenteditable="true">{{ item.CurrentGerm if item.CurrentGerm is not none else '' }}</div>
                   </dd>
 
                   <dt class="col-sm-4">Current Germ Date</dt>
@@ -366,7 +366,7 @@
                   <dt class="col-sm-4">Certificate Germ</dt>
                   <dd class="col-sm-8">
                     <div class="field-box" data-field="GrowerGerm" contenteditable="true">
-                      {{ item.GrowerGerm or '' }}
+                      {{ item.GrowerGerm if item.GrowerGerm is not none else '' }}
                     </div>
                   </dd>
 
@@ -379,12 +379,12 @@
 
                   <dt class="col-sm-4">Purity</dt>
                   <dd class="col-sm-8">
-                    <div class="field-box" data-field="Purity" contenteditable="true">{{ item.Purity or '' }}</div>
+                    <div class="field-box" data-field="Purity" contenteditable="true">{{ item.Purity if item.Purity is not none else '' }}</div>
                   </dd>
 
                   <dt class="col-sm-4">Inert</dt>
                   <dd class="col-sm-8">
-                    <div class="field-box" data-field="Inert" contenteditable="true">{{ item.Inert or '' }}</div>
+                    <div class="field-box" data-field="Inert" contenteditable="true">{{ item.Inert if item.Inert is not none else '' }}</div>
                   </dd>
                 </dl>
               </div>

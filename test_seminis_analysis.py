@@ -128,6 +128,24 @@ def test_native_certificate_with_customs_stamp_does_not_require_ocr():
     assert seminis.extract_text_with_fallback(pdf)['method'] == 'PyMuPDF'
 
 
+@pytest.mark.parametrize("ocr_inert", ["0.1", ""])
+def test_partial_searchable_certificate_retries_missing_inert(monkeypatch, ocr_inert):
+    pdf = _text_pdf([
+        'Report of Seed Analysis', 'Lot Number: 105466356',
+        'Pure Seed % 99.7', 'Germination % 97', 'Date Tested 09/18/2026',
+        'Seed Shipment Release From Customs',
+    ])
+    calls = _mock_azure(monkeypatch, [_report(inert=ocr_inert)])
+
+    fields = seminis._extract_seminis_analysis_data([('partial.pdf', pdf)])['105466356']
+
+    assert len(calls) == 1
+    assert fields == {
+        'PureSeed': 99.7, 'InertMatter': 0.1 if ocr_inert else None,
+        'Germ': 97, 'GermDate': '09/18/2026',
+    }
+
+
 def test_unstamped_scan_requires_ocr(monkeypatch):
     calls = _mock_azure(monkeypatch, [_report()])
     assert seminis.extract_text_with_fallback(_scan_pdf(stamped=False))['method'] == 'Azure OCR'

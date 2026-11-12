@@ -7,13 +7,20 @@ import requests
 from difflib import get_close_matches
 import time
 from collections import defaultdict
+from functools import cache
 import datetime
 from db_logger import log_processing_event
+from vendor_extractors.certificate_ocr import (
+    CUSTOMS_RELEASE_STAMP,
+    certificate_fields_missing,
+    fill_missing_certificate_fields,
+)
 
 item_usage_counter = defaultdict(int)
 
 AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
 AZURE_KEY = os.getenv("AZURE_KEY")
+_CERTIFICATE_FIELDS = ("GrowerGerm", "GrowerGermDate", "PureSeed", "InertMatter")
 
 def extract_text_with_azure_ocr(pdf_bytes: bytes) -> List[str]:
     """
@@ -290,7 +297,7 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
     return line_items
 
 def _choose_batch_key(report_text_upper: str, filename: str) -> str | None:
-    m = re.search(r"(?:LOT|BATCH)\s*(?:#|NO\.?)?\s*[^A-Z0-9]*([A-Z]{1,2}\d{5,})", report_text_upper, re.IGNORECASE)
+    m = re.search(r"\b(?:LOT|BATCH)\s*(?:#|NUMBER|NO\.?)?\s*[^A-Z0-9]*([A-Z]{1,2}\d{5,})", report_text_upper, re.IGNORECASE)
     if m: return m.group(1).upper()
 
     m = re.match(r"([A-Z]{1,2}\d{5,})", os.path.basename(filename).upper())
@@ -304,118 +311,92 @@ def _choose_batch_key(report_text_upper: str, filename: str) -> str | None:
         return codes[-1].upper()
     return None
 
-def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]]) -> Dict[str, Dict]:
+def _parse_purity_report(text: str, filename: str) -> tuple[str, dict] | None:
+    if not re.search(r"\b(?:Report|Analysis)\b", text, re.I):
+        return None
+    batch_key = _choose_batch_key(text.upper(), filename)
+    if not batch_key:
+        return None
+
+    data = {}
+    for label, field in ((r"Pure\s+Seed", "PureSeed"), (r"Inert\s+Matter", "InertMatter")):
+        match = re.search(rf"\b{label}\s*(?:%|\(%\))?\s*[:=]?\s*(\d+(?:\.\d+)?)(?![\d./])", text, re.I)
+        if match and float(match.group(1)) <= 100:
+            data[field] = float(match.group(1))
+
+    germ = re.search(
+        r"\bGerm(?:ination)?\b\s*(?:Normal\s+Seedlings?\s*)?%?\s*:?\s*(\d{1,3})(?![\d./])",
+        text, re.I,
+    )
+    if germ and int(germ.group(1)) <= 100:
+        data["GrowerGerm"] = int(germ.group(1))
+
+    germ_date = _extract_germ_date_from_report(text)
+    if germ_date:
+        data["GrowerGermDate"] = germ_date
+    return batch_key, data
+
+
+def extract_purity_analysis_reports_from_bytes(pdf_files: list[tuple[str, bytes]], read_ocr=None) -> Dict[str, Dict]:
+    read_ocr = read_ocr or extract_text_with_azure_ocr
     purity_data = defaultdict(dict)
     for filename, pdf_bytes in pdf_files:
         try:
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            text = ""
-            for page in doc:
-                text += page.get_text() + " " 
-            doc.close()
+            with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+                text = "\n".join(page.get_text() for page in doc)
+            if not CUSTOMS_RELEASE_STAMP.search(text) and re.search(
+                r"\b(?:Invoice\s+(?:Number|No\.?|Date)|Packing\s+List)\b", text, re.I
+            ) and not re.search(r"\b(?:Purity\s+Analysis|Report\s+of\s+(?:Seed\s+)?Analysis)\b", text, re.I):
+                continue
 
-            is_valid_report_text = "REPORT" in text.upper() or "ANALYSIS" in text.upper()
-            if not text.strip() or not is_valid_report_text:
+            report = _parse_purity_report(text, filename)
+            if report is None or certificate_fields_missing(report[1], _CERTIFICATE_FIELDS):
                 try:
-                    ocr_lines = extract_text_with_azure_ocr(pdf_bytes)
-                    text = " ".join(ocr_lines)
-                except Exception as e:
-                    print(f"OCR failed for {filename}: {e}")
-                    continue
+                    ocr_report = _parse_purity_report("\n".join(read_ocr(pdf_bytes)), filename)
+                    if report is None:
+                        report = ocr_report
+                    elif ocr_report and ocr_report[0] == report[0]:
+                        fill_missing_certificate_fields(report[1], ocr_report[1])
+                except Exception as exc:
+                    print(f"Certificate OCR failed for {filename}: {exc}")
 
-            if "REPORT" not in text.upper() and "ANALYSIS" not in text.upper():
+            if report is None:
                 continue
-            
-            U = text.upper()
-            batch_key = _choose_batch_key(U, filename)
-            if not batch_key:
+            batch_key, fields = report
+            if not fields:
                 continue
-            
-            keys_to_store = [batch_key]
-            if len(batch_key) > 6:
-                keys_to_store.append(batch_key[:6])
+            if fields.get("PureSeed") == 100:
+                fields["PureSeed"] = 99.99
+                if fields.get("InertMatter") is not None:
+                    fields["InertMatter"] = 0.01
+            if fields.get("GrowerGerm") is not None:
+                fields["Germ"] = 98 if fields["GrowerGerm"] == 100 else fields["GrowerGerm"]
+            if fields.get("GrowerGermDate") is not None:
+                fields["GermDate"] = fields["GrowerGermDate"]
 
-            data_found = {}
-            match_pure = re.search(r"Pure Seed[^0-9]*(\d+(?:\.\d+)?)[^0-9%]*%", text, re.IGNORECASE)
-            match_inert = re.search(r"Inert Matter[^0-9]*(\d+(?:\.\d+)?)[^0-9%]*%", text, re.IGNORECASE)
-
-            if match_pure and match_inert:
-                pure_seed = float(match_pure.group(1))
-                data_found["PureSeed"] = 99.99 if pure_seed == 100 else pure_seed
-                data_found["InertMatter"] = 0.01 if pure_seed == 100 else float(match_inert.group(1))
-                
-            # finditer finds ALL occurrences, not just the first one.
-            # We loop through them until we find a valid germ > 50.
-            germ_matches = re.finditer(r"Germ(?:ination)?(?!\s*Date)[^0-9]*\b(100|\d{2})\b", text, re.IGNORECASE)
-
-            for match in germ_matches:
-                val = int(float(match.group(1)))
-                
-                # Only accept if > 70. If not, the loop continues to the next match.
-                if val > 70:
-                    data_found["GrowerGerm"] = val
-                    data_found["Germ"] = 98 if val == 100 else val
-                    break # Stop searching once we find a valid number
-
-            # if match := re.search(r"%\s*Comments:\s*(?:[A-Za-z]+\s+)*(\d{2,3})\b", text, re.IGNORECASE | re.DOTALL):
-            #     germ = int(float(match.group(1)))
-            #     data_found["GrowerGerm"] = germ
-            #     data_found["Germ"] = 98 if germ == 100 else germ
-            
-            germ_date = _extract_germ_date_from_report(text)
-            if germ_date:
-                data_found["GrowerGermDate"] = germ_date
-                data_found["GermDate"] = germ_date
-
-            if data_found:
-                for k in keys_to_store:
-                    purity_data[k].update(data_found)
-
-        except Exception as e:
-            print(f"ERROR: Could not process {filename} for purity analysis: {e}")
-            continue
-            
+            for key in dict.fromkeys((batch_key, batch_key[:6])):
+                purity_data[key].update(fields)
+        except Exception as exc:
+            print(f"Could not process {filename} for purity analysis: {exc}")
     return purity_data
 
-def _normalize_mdy(s: str) -> str:
-    m, d, y = re.match(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", s).groups()
-    y = int(y)
-    if y < 100:
-        y += 2000 if y < 50 else 1900
-    return f"{int(m)}/{int(d)}/{y}"
 
-def _extract_germ_date_from_report(txt: str) -> str | None:
-    flat = re.sub(r"\s+", " ", txt)
-    def _norm(mdy: str) -> str:
-        return _normalize_mdy(mdy)
-
-    date_issued = None
-    m_issued = re.search(r"Date\s*Issued[^0-9]{0,300}([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", flat, re.IGNORECASE)
-    if m_issued:
-        date_issued = _norm(m_issued.group(1))
-
-    label_match = re.search(r"(?:Test|Germ(?:ination)?)\s*Date", flat, re.IGNORECASE)
-    if label_match:
-        window_size = 500
-        search_window = flat[label_match.end(): label_match.end() + window_size]
-        found_dates = re.findall(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", search_window)
-        
-        for date_str in found_dates:
-            norm_date = _norm(date_str)
-            if date_issued and norm_date == date_issued:
-                continue
-            return norm_date
-
-    if date_issued:
-        return date_issued
-        
-    any_dates = re.findall(r"([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", flat)
-    if any_dates:
-        if len(any_dates) > 1:
-             return _norm(any_dates[1])
-        return _norm(any_dates[0])
-
+def _extract_germ_date_from_report(text: str) -> str | None:
+    match = re.search(
+        r"\b(?:Test\s*Date|Germ(?:ination)?\s*Date|Date\s+Test(?:ed|\s+Completed))\s*:?\s*"
+        r"(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})\b",
+        text, re.I,
+    )
+    if match:
+        month, day, year = map(int, match.groups())
+        if year < 100:
+            year += 2000 if year < 50 else 1900
+        try:
+            return datetime.date(year, month, day).strftime("%m/%d/%Y")
+        except ValueError:
+            pass
     return None
+
 
 def enrich_invoice_items_with_purity(items: List[Dict], purity_data: Dict[str, Dict]) -> List[Dict]:
     for item in items:
@@ -669,7 +650,7 @@ def extract_discounts(blocks: List) -> List[Tuple[str, float]]:
 
 #     return line_items, extraction_info
 
-def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> Tuple[List[Dict], Dict]:
+def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes, read_ocr=None) -> Tuple[List[Dict], Dict]:
     # ... [Keep initial setup, fitz open, blocks extraction, OCR fallback logic] ...
     item_usage_counter.clear()
     
@@ -701,7 +682,7 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes) -> Tuple[List[Di
         if total_char_count < 100:
             ocr_triggered = True
             doc.close()
-            ocr_lines = extract_text_with_azure_ocr(pdf_bytes)
+            ocr_lines = (read_ocr or extract_text_with_azure_ocr)(pdf_bytes)
             extraction_info['method'] = 'Azure OCR'
             return extract_items_from_ocr_lines(ocr_lines), extraction_info
             
@@ -1154,7 +1135,8 @@ def extract_hm_clause_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
     if not pdf_files:
         return {}
 
-    purity_data = extract_purity_analysis_reports_from_bytes(pdf_files)
+    read_ocr = cache(extract_text_with_azure_ocr)
+    purity_data = extract_purity_analysis_reports_from_bytes(pdf_files, read_ocr)
 
     grouped_results = {}
     for filename, pdf_bytes in pdf_files:
@@ -1162,7 +1144,7 @@ def extract_hm_clause_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dic
             continue
 
         try:
-            items, info = extract_hm_clause_invoice_data_from_bytes(pdf_bytes)
+            items, info = extract_hm_clause_invoice_data_from_bytes(pdf_bytes, read_ocr)
             
             # --- LOGGING ---
             po_number = items[0].get("PurchaseOrder") if items else None

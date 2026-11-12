@@ -572,12 +572,19 @@ import re
 import fitz  # PyMuPDF
 import time
 import requests
+from datetime import datetime
 from typing import List, Dict, Tuple, Set
 from db_logger import log_processing_event
+from vendor_extractors.certificate_ocr import (
+    CUSTOMS_RELEASE_STAMP,
+    certificate_fields_missing,
+    fill_missing_certificate_fields,
+)
 
 # --- Azure Configuration ---
 AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
 AZURE_KEY = os.getenv("AZURE_KEY")
+_CERTIFICATE_FIELDS = ("CertificateGerm", "CertificateGermDate", "Purity", "Inert")
 
 def extract_text_with_azure_ocr(pdf_bytes: bytes) -> List[str]:
     """
@@ -636,7 +643,7 @@ def parse_analysis_text(text: str, filename: str, known_lots: Set[str]) -> Dict[
 
     # --- Extract Lot Number ---
     for known_lot in sorted(known_lots, key=len, reverse=True):
-        if known_lot in text:
+        if re.search(rf"(?<!\w){re.escape(known_lot)}(?!\w)", text, re.I):
             lot_no = known_lot
             print(f"   > Found Lot No (Linked from Invoice): {lot_no}")
             break
@@ -668,58 +675,31 @@ def parse_analysis_text(text: str, filename: str, known_lots: Set[str]) -> Dict[
         print("   > No valid Lot No found in report text.")
         return {}
 
-    # --- Extract Purity & Inert ---
-    start_match = re.search(r"Analyzed:", text)
-    if start_match:
-        sub_text = text[start_match.end():start_match.end()+250]
-        decimal_pattern = re.compile(r"\b(\d+(?:[\.,]\d+)?)\b")
-        raw_numbers = decimal_pattern.findall(sub_text)
-        
-        valid_floats = []
-        for raw in raw_numbers:
-            try:
-                val = float(raw.replace(",", "."))
-                valid_floats.append(val)
-            except: pass
-            
-        if valid_floats and valid_floats[0] > 100:
-            print(f"   > Skipping 'Grams Analyzed' value: {valid_floats[0]}")
-            valid_floats.pop(0)
+    # The result columns are purity, other crop, inert, weed, and germination.
+    if start_match := re.search(r"\bAnalyzed\s*:", text, re.I):
+        sub_text = text[start_match.end():start_match.end() + 250]
+        sub_text = CUSTOMS_RELEASE_STAMP.split(sub_text, maxsplit=1)[0]
+        sub_text = re.split(r"\b\d{1,2}/\d{1,2}/\d{4}\b", sub_text, maxsplit=1)[0]
+        values = [
+            float(token.replace(",", ".")) if token[0].isdigit() else None
+            for token in re.findall(r"\b(?:\d+(?:[.,]\d+)?|N/A|TR|X)\b|(?<!\S)-(?!\S)", sub_text, re.I)
+        ]
+        if values and values[0] is not None and values[0] > 100:
+            values = values[1:]
+        for index, field in ((0, "Purity"), (2, "Inert"), (4, "CertificateGerm")):
+            if index < len(values) and values[index] is not None and values[index] <= 100:
+                data[field] = values[index]
+        if "CertificateGerm" in data:
+            germ = data["CertificateGerm"]
+            data["CertificateGerm"] = 99 if germ == 100 else int(germ)
 
-        if len(valid_floats) >= 5:
-            try:
-                raw_purity = valid_floats[0]
-                raw_inert = valid_floats[2]
-                raw_germ = valid_floats[4]
+    if match := re.search(r"\bDate\s+Tested\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})\b", text, re.I):
+        try:
+            data["CertificateGermDate"] = datetime.strptime(match.group(1), "%m/%d/%Y").strftime("%m/%d/%Y")
+        except ValueError:
+            pass
+    return {lot_no: data}
 
-                if raw_germ > 100:
-                    print(f"   > raw_germ {raw_germ} > 100. Likely misalignment. Skipping biological data.")
-                else:
-                    data["Purity"] = 99.99 if raw_purity == 100.0 else raw_purity
-                    data["Inert"] = 0.01 if raw_purity == 100.0 else raw_inert
-                    data["CertificateGerm"] = 99 if raw_germ == 100.0 else int(raw_germ)
-                    print(f"   > Extracted: Pure={data.get('Purity')}, Inert={data.get('Inert')}, Germ={data.get('CertificateGerm')}")
-            except Exception as e:
-                print(f"   > Error logic assigning values: {e}")
-        else:
-            print(f"   > Not enough values found after anchor: {valid_floats}")
-    else:
-        print("   > Anchor 'Analyzed:' not found in text.")
-
-    # --- Extract Date ---
-    germ_info_match = re.search(r"Germination Information\s*[\r\n\s]+.*?Date Tested:\s*[\r\n\s]+.*?(\d{2}/\d{2}/\d{4})", text, re.DOTALL | re.IGNORECASE)
-    if germ_info_match:
-        data["CertificateGermDate"] = germ_info_match.group(1)
-    else:
-        all_dates = re.findall(r"\d{2}/\d{2}/\d{4}", text)
-        if len(all_dates) >= 3:
-             data["CertificateGermDate"] = all_dates[2]
-        elif all_dates:
-             data["CertificateGermDate"] = all_dates[-1]
-
-    if data:
-        return {lot_no: data}
-    return {}
 
 def process_item_block(block_lines: List[str], global_po: str, invoice_no: str, is_kamterter: bool) -> Dict:
     """
@@ -1004,6 +984,25 @@ def parse_invoice_text(text: str, filename: str, global_po: str, invoice_no: str
             
     return items
 
+def _is_syngenta_certificate(text: str) -> bool:
+    upper = text.upper()
+    return bool(
+        re.search(r"^\s*Report\s+of\s+Analysis\b", text, re.I | re.M)
+        or ("REPORT OF ANALYSIS" in upper and "VIABILITY" in upper)
+        or (
+            CUSTOMS_RELEASE_STAMP.search(text)
+            and not ("INVOICE" in upper and "SYNGENTA" in upper and "STOKES" in upper)
+            and not re.search(r"\bPACKING\s+LIST\b", text, re.I)
+        )
+    )
+
+
+def _ocr_syngenta_page(doc, index: int) -> str:
+    with fitz.open() as page_doc:
+        page_doc.insert_pdf(doc, from_page=index, to_page=index)
+        return "\n".join(extract_text_with_azure_ocr(page_doc.tobytes()))
+
+
 def extract_syngenta_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_desc_list: list) -> Dict[str, List[Dict]]:
     analysis_map = {}
     temp_invoice_items = {}
@@ -1025,50 +1024,24 @@ def extract_syngenta_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_des
                 page_num = i + 1
                 page_text = page.get_text()
                 
-                stripped_text = page_text.strip()
-                needs_ocr = False
-                
-                if len(stripped_text) < 50:
-                    needs_ocr = True
-                elif re.search(r"\bPACKING\s+LIST\b", page_text, re.IGNORECASE):
-                    # The shared tracking pass reads searchable packing lists directly.
-                    needs_ocr = False
-                elif ("REPORT OF ANALYSIS" not in page_text.upper() 
-                    or "PURITY ANALYSIS" not in page_text.upper()):
-                    
-                    if ("INVOICE" not in page_text.upper() 
-                    or "SYNGENTA" not in page_text.upper()):
-                        needs_ocr = True
-                    elif ("INVOICE" in page_text.upper()):
-                        print(f"   > Detected {filename} as a searchable Invoice.")
-                
-                elif ("REPORT OF ANALYSIS" in page_text.upper() 
-                    or "PURITY ANALYSIS" in page_text.upper()):
-                    print(f"   > Detected {filename} as a searchable Certificate.")
-                
-                if needs_ocr:
-                    print(f"   > Page {page_num} appears scanned. Attempting Azure OCR...")
-                    new_doc = fitz.open()
-                    new_doc.insert_pdf(doc, from_page=i, to_page=i)
-                    page_bytes = new_doc.tobytes()
-                    new_doc.close()
-                    
-                    ocr_lines = extract_text_with_azure_ocr(page_bytes)
-                    if ocr_lines:
-                        page_text = "\n".join(ocr_lines)
-                        print(f"   > OCR Successful for Page {page_num}")
-                    else:
-                        print(f"   > OCR failed/empty for Page {page_num}")
+                if _is_syngenta_certificate(page_text):
+                    analysis_files_queue.append((filename, page_num, page_text, pdf_bytes))
+                    continue
 
                 page_upper = page_text.upper()
-                is_analysis = "REPORT OF ANALYSIS" in page_upper and "VIABILITY" in page_upper
-                is_invoice = ("INVOICE" in page_upper and "SYNGENTA" in page_upper and "STOKES" in page_upper)
-                            
-                if is_analysis:
-                    print(f"   > [Page {page_num}] Identified as Analysis Report.")
-                    unique_id = f"{filename}_pg{page_num}"
-                    analysis_files_queue.append((unique_id, page_text))
-                
+                is_packing = re.search(r"\bPACKING\s+LIST\b", page_text, re.I)
+                if len(page_text.strip()) < 50 or (
+                    not is_packing and not ("INVOICE" in page_upper and "SYNGENTA" in page_upper)
+                ):
+                    ocr_text = _ocr_syngenta_page(doc, i)
+                    if ocr_text:
+                        page_text = ocr_text
+
+                page_upper = page_text.upper()
+                is_invoice = "INVOICE" in page_upper and "SYNGENTA" in page_upper and "STOKES" in page_upper
+
+                if _is_syngenta_certificate(page_text):
+                    analysis_files_queue.append((filename, page_num, page_text, None))
                 elif is_invoice:
                     print(f"   > [Page {page_num}] Identified as Invoice.")
                     current_invoice_text += page_text + "\n"
@@ -1110,10 +1083,31 @@ def extract_syngenta_data_from_bytes(pdf_files: List[Tuple[str, bytes]], pkg_des
     
     print(f"--- Known Lots from Invoices: {all_invoice_lots} ---")
 
-    for unique_id, text in analysis_files_queue:
-        result = parse_analysis_text(text, unique_id, all_invoice_lots)
-        if result:
-            analysis_map.update(result)
+    for filename, page_num, text, pdf_bytes in analysis_files_queue:
+        report_name = f"{filename}_pg{page_num}"
+        report = parse_analysis_text(text, report_name, all_invoice_lots)
+        if pdf_bytes is not None and (
+            not report or any(certificate_fields_missing(fields, _CERTIFICATE_FIELDS) for fields in report.values())
+        ):
+            try:
+                with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+                    ocr_text = _ocr_syngenta_page(doc, page_num - 1)
+                if _is_syngenta_certificate(ocr_text):
+                    ocr_report = parse_analysis_text(ocr_text, report_name, all_invoice_lots)
+                    if report:
+                        for lot, fields in report.items():
+                            fill_missing_certificate_fields(fields, ocr_report.get(lot, {}))
+                    else:
+                        report = ocr_report
+            except Exception as exc:
+                print(f"Certificate OCR failed for {report_name}: {exc}")
+
+        for lot, fields in report.items():
+            if fields.get("Purity") == 100:
+                fields["Purity"] = 99.99
+                if fields.get("Inert") is not None:
+                    fields["Inert"] = 0.01
+            analysis_map.setdefault(lot, {}).update(fields)
 
     # --- Link Data ---
     grouped_results = {}
