@@ -232,8 +232,8 @@
                       <td>${{ lines[0].InvoiceTotal }}</td>
                     </tr>
                     <tr class="invoice-discount-row" hidden>
-                      <td colspan="5" class="text-end pe-3">Invoice discount to apply in BC</td>
-                      <td>$<span class="invoice-discount-display"></span></td>
+                      <td colspan="5" class="text-end pe-3 invoice-adjustment-display"></td>
+                      <td><span class="invoice-discount-display"></span><small class="d-block">BC invoice discount</small></td>
                     </tr>
                     {% endif %}
                   </tfoot>
@@ -241,14 +241,19 @@
                 </table>
              </div>
              
-             <button class="btn btn-success float-end create-invoice-btn" 
+             {% set can_create_draft = bc_target != 'kamterter_us' or lines[0].UploadToken %}
+             <button type="button" class="btn {{ 'btn-success' if can_create_draft else 'btn-secondary' }} float-end create-invoice-btn"
                      data-index="{{ loop.index }}" 
                      data-inv="{{ lines[0].VendorInvoiceNo }}"
                      data-date="{{ lines[0].DocumentDate }}"
                      data-vendor-name="{{ lines[0].BuyFromVendorName }}"
                      {% if bc_target == 'kamterter_us' %}data-upload-token="{{ lines[0].UploadToken }}"{% endif %}
-                     data-filename="{{ filename }}">
-               Create Invoice in Business Central — {{ bc_destination_label }}
+                     data-filename="{{ filename }}" {% if not can_create_draft %}disabled{% endif %}>
+               {% if can_create_draft %}
+                 Create {{ 'Draft' if bc_target == 'kamterter_us' else 'Invoice' }} in Business Central — {{ bc_destination_label }}
+               {% else %}
+                 Draft creation disabled in preview
+               {% endif %}
              </button>
           {% endif %}
         </div>
@@ -264,6 +269,12 @@
   <script>
     const bcTarget = {{ bc_target | tojson }};
     const bcDestinationLabel = {{ bc_destination_label | tojson }};
+    const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+
+    function draftTotalAdjustment(discount) {
+      const action = discount < 0 ? 'Increase' : 'Reduce';
+      return `${action} draft total by ${usd.format(Math.abs(discount))}`;
+    }
 
     function updateDraftTotal(table) {
       let totalCents = 0;
@@ -271,11 +282,12 @@
         totalCents += Math.round(Number(subtotal.textContent) * 100);
       });
       table.querySelector('.grand-total-display').textContent = (totalCents / 100).toFixed(2);
-      const discount = table.querySelector('.invoice-discount-display');
-      if (discount) {
-        const difference = totalCents - Math.round(Number(table.dataset.invoiceTotal) * 100);
-        discount.textContent = (difference / 100).toFixed(2);
-        discount.closest('tr').hidden = difference === 0;
+      const adjustmentRow = table.querySelector('.invoice-discount-row');
+      if (adjustmentRow) {
+        const discount = (totalCents - Math.round(Number(table.dataset.invoiceTotal) * 100)) / 100;
+        adjustmentRow.querySelector('.invoice-adjustment-display').textContent = draftTotalAdjustment(discount);
+        adjustmentRow.querySelector('.invoice-discount-display').textContent = usd.format(discount);
+        adjustmentRow.hidden = discount === 0;
       }
     }
 
@@ -417,9 +429,10 @@
     });*/
 
     // --- INVOICE CREATION LOGIC ---
-    document.querySelectorAll('.create-invoice-btn').forEach(btn => {
+    document.querySelectorAll('.create-invoice-btn:not(:disabled)').forEach(btn => {
       btn.addEventListener('click', async () => {
-        if(!confirm(`Create this Purchase Invoice in ${bcDestinationLabel}?`)) return;
+        const documentType = bcTarget === 'kamterter_us' ? 'draft purchase invoice' : 'purchase invoice';
+        if (!confirm(`Create this ${documentType} in ${bcDestinationLabel}?`)) return;
         
         const idx = btn.dataset.index;
         const card = document.getElementById(`card-${idx}`);
@@ -504,14 +517,15 @@
             }
 
             // 3. BUTTON: Disable it
-            btn.textContent = "Invoice Created";
+            btn.textContent = bcTarget === 'kamterter_us' ? 'Draft Created' : 'Invoice Created';
             btn.classList.remove('btn-success');
             btn.classList.add('btn-secondary');
             btn.disabled = true;
             if (bcTarget === 'kamterter_us') {
               const instructions = json.warnings || [];
-              if (Number(json.invoice_discount_amount)) {
-                instructions.push(`Enter an invoice discount of $${json.invoice_discount_amount} in Business Central and verify the total before posting.`);
+              const discount = Number(json.invoice_discount_amount);
+              if (discount) {
+                instructions.push(`${draftTotalAdjustment(discount)}. Enter ${usd.format(discount)} as the invoice discount in Business Central and verify the total before posting.`);
               }
               if (instructions.length) alert([`Draft ${json.No}`, ...instructions].join('\n\n'));
             }

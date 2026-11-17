@@ -123,6 +123,17 @@ def _kamterter_upload():
         return {"vendor": "kamterter_us", "pdfs": (io.BytesIO(pdf.tobytes()), "invoice.pdf")}
 
 
+def test_kamterter_us_preview_disables_draft_creation():
+    from scripts.preview_ui import app
+
+    response = app.test_client().get("/_preview/results/kamterter_us")
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    button = re.search(r'<button[^>]*create-invoice-btn[^>]*>', html)[0]
+    assert re.search(r'\sdisabled\s*>', button)
+    assert "Draft creation disabled in preview" in html
+
+
 @pytest.mark.parametrize(("line_status", "resource_quantity"), [(201, 0), (400, 50)])
 def test_kamterter_us_review_creates_sandbox_draft_once(
     offline_ui_app, monkeypatch, tmp_path, line_status, resource_quantity,
@@ -179,6 +190,7 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
     assert 'data-invoice-total="145.50"' in html
     assert "Posted assembly PA-00001" in html and "Open assembly TR-00010" in html
     assert ("Using order quantity" in html) == (resource_quantity == 0)
+    assert "Create Draft in Business Central" in html
     assert reads == [
         ("posted", "TR-00009"), ("open", "TR-00009"),
         ("posted", "TR-00010"), ("open", "TR-00010"),
