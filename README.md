@@ -342,7 +342,7 @@ DocFlow was conceived, architected, implemented, deployed, and supported by **[P
 
 ### Explore more
 
-[Portfolio](https://privo211.github.io/priyanshu-portfolio) · [Source code](https://github.com/privo211/invoice-ocr) · [GitHub profile](https://github.com/privo211)
+[Portfolio](https://priyanshuvora.com) · [Source code](https://github.com/privo211/invoice-ocr) · [GitHub profile](https://github.com/privo211)
 
 <sub>Built to turn messy supplier documents into controlled, reviewable ERP actions.</sub>
 
