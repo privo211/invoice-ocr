@@ -217,7 +217,7 @@
 
                 <tfoot>
                     <tr>
-                      <td colspan="5" class="text-end pe-3" style="font-weight: bold;">{{ 'Draft line total' if bc_target == 'kamterter_us' else 'Grand Total:' }}</td>
+                      <td colspan="5" class="text-end pe-3" style="font-weight: bold;">Grand Total:</td>
                       <td style="font-weight: bold; font-size: 1.05em;">
                         {% set grand_total = namespace(value=0) %}
                         {% for line in lines %}
@@ -241,19 +241,14 @@
                 </table>
              </div>
              
-             {% set can_create_draft = bc_target != 'kamterter_us' or lines[0].UploadToken %}
-             <button type="button" class="btn {{ 'btn-success' if can_create_draft else 'btn-secondary' }} float-end create-invoice-btn"
+             <button type="button" class="btn btn-success float-end create-invoice-btn"
                      data-index="{{ loop.index }}" 
                      data-inv="{{ lines[0].VendorInvoiceNo }}"
                      data-date="{{ lines[0].DocumentDate }}"
                      data-vendor-name="{{ lines[0].BuyFromVendorName }}"
                      {% if bc_target == 'kamterter_us' %}data-upload-token="{{ lines[0].UploadToken }}"{% endif %}
-                     data-filename="{{ filename }}" {% if not can_create_draft %}disabled{% endif %}>
-               {% if can_create_draft %}
-                 Create {{ 'Draft' if bc_target == 'kamterter_us' else 'Invoice' }} in Business Central — {{ bc_destination_label }}
-               {% else %}
-                 Draft creation disabled in preview
-               {% endif %}
+                     data-filename="{{ filename }}"{% if bc_target == 'kamterter_us' and not lines[0].UploadToken %} disabled{% endif %}>
+               Create Invoice in Business Central{% if bc_target != 'kamterter_us' %} — {{ bc_destination_label }}{% endif %}
              </button>
           {% endif %}
         </div>
@@ -271,12 +266,12 @@
     const bcDestinationLabel = {{ bc_destination_label | tojson }};
     const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
-    function draftTotalAdjustment(discount) {
+    function invoiceTotalAdjustment(discount) {
       const action = discount < 0 ? 'Increase' : 'Reduce';
-      return `${action} draft total by ${usd.format(Math.abs(discount))}`;
+      return `${action} total by ${usd.format(Math.abs(discount))}`;
     }
 
-    function updateDraftTotal(table) {
+    function updateInvoiceTotal(table) {
       let totalCents = 0;
       table.querySelectorAll('.subtotal-display').forEach(subtotal => {
         totalCents += Math.round(Number(subtotal.textContent) * 100);
@@ -285,7 +280,7 @@
       const adjustmentRow = table.querySelector('.invoice-discount-row');
       if (adjustmentRow) {
         const discount = (totalCents - Math.round(Number(table.dataset.invoiceTotal) * 100)) / 100;
-        adjustmentRow.querySelector('.invoice-adjustment-display').textContent = draftTotalAdjustment(discount);
+        adjustmentRow.querySelector('.invoice-adjustment-display').textContent = invoiceTotalAdjustment(discount);
         adjustmentRow.querySelector('.invoice-discount-display').textContent = usd.format(discount);
         adjustmentRow.hidden = discount === 0;
       }
@@ -293,7 +288,7 @@
 
     // --- LIVE SUBTOTAL & GRAND TOTAL UPDATE LOGIC ---
     document.querySelectorAll('table').forEach(table => {
-      if (bcTarget === 'kamterter_us') updateDraftTotal(table);
+      if (bcTarget === 'kamterter_us') updateInvoiceTotal(table);
       table.addEventListener('input', (e) => {
         // 1. Update Description dynamically based on No. input
         if (bcTarget !== 'kamterter_us' && e.target.classList.contains('no-input')) {
@@ -324,7 +319,7 @@
             subtotalDisplay.textContent = (qty * cost).toFixed(2);
           }
 
-          updateDraftTotal(table);
+          updateInvoiceTotal(table);
         }
       });
     });
@@ -431,8 +426,7 @@
     // --- INVOICE CREATION LOGIC ---
     document.querySelectorAll('.create-invoice-btn:not(:disabled)').forEach(btn => {
       btn.addEventListener('click', async () => {
-        const documentType = bcTarget === 'kamterter_us' ? 'draft purchase invoice' : 'purchase invoice';
-        if (!confirm(`Create this ${documentType} in ${bcDestinationLabel}?`)) return;
+        if (!confirm(`Create this purchase invoice in ${bcDestinationLabel}?`)) return;
         
         const idx = btn.dataset.index;
         const card = document.getElementById(`card-${idx}`);
@@ -517,7 +511,7 @@
             }
 
             // 3. BUTTON: Disable it
-            btn.textContent = bcTarget === 'kamterter_us' ? 'Draft Created' : 'Invoice Created';
+            btn.textContent = 'Invoice Created';
             btn.classList.remove('btn-success');
             btn.classList.add('btn-secondary');
             btn.disabled = true;
@@ -525,9 +519,9 @@
               const instructions = json.warnings || [];
               const discount = Number(json.invoice_discount_amount);
               if (discount) {
-                instructions.push(`${draftTotalAdjustment(discount)}. Enter ${usd.format(discount)} as the invoice discount in Business Central and verify the total before posting.`);
+                instructions.push(`${invoiceTotalAdjustment(discount)}. Enter ${usd.format(discount)} as the invoice discount in Business Central and verify the total before posting.`);
               }
-              if (instructions.length) alert([`Draft ${json.No}`, ...instructions].join('\n\n'));
+              if (instructions.length) alert([`Invoice ${json.No}`, ...instructions].join('\n\n'));
             }
 
           } else {
@@ -537,16 +531,16 @@
             // Format the detailed error from the backend
             const errorDetails = json.details ? `\n\nBC Details: ${json.details}` : '';
             
-            const draftDetails = json.No ? `\n\nCheck draft ${json.No} in Business Central before retrying.` : '';
-            alert(`❌ Error: ${json.message || 'Unknown error'}${errorDetails}${draftDetails}`);
+            const invoiceDetails = json.No ? `\n\nCheck invoice ${json.No} in Business Central before retrying.` : '';
+            alert(`❌ Error: ${json.message || 'Unknown error'}${errorDetails}${invoiceDetails}`);
 
             btn.disabled = Boolean(json.No);
-            btn.textContent = json.No ? `Check draft ${json.No}` : "Try Again";
+            btn.textContent = json.No ? `Check invoice ${json.No}` : "Try Again";
           }
         } catch (e) {
           card.style.border = '2px solid red';
           alert(bcTarget === 'kamterter_us'
-            ? 'The request did not finish. Check Business Central for a draft before submitting again.'
+            ? 'The request did not finish. Check Business Central for the invoice before submitting again.'
             : `❌ Network Error: ${e.message}`);
           btn.disabled = false;
           btn.textContent = "Try Again";

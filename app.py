@@ -1237,7 +1237,7 @@ def create_purchase_invoice():
         try:
             os.rename(upload_path, submitted_path)
         except FileNotFoundError:
-            return jsonify({"message": "This upload is no longer available. Check Business Central for a draft before submitting it again."}), 409
+            return jsonify({"message": "This upload is no longer available. Check Business Central for the invoice before submitting it again."}), 409
     header_resp = requests.post(headers_url, headers=headers, json=header_payload)
     
     if header_resp.status_code not in (200, 201):
@@ -1250,7 +1250,7 @@ def create_purchase_invoice():
     document_no = header_json.get("No")
     system_id = header_json.get("SystemId")
     if us_invoice and not document_no:
-        return jsonify({"message": "Business Central did not return a draft number. Check for a draft before retrying."}), 502
+        return jsonify({"message": "Business Central did not return an invoice number. Check for the invoice before retrying."}), 502
     draft_warnings = []
     
     # 4.5 PATCH THE DATE
@@ -1385,7 +1385,7 @@ def create_purchase_invoice():
     }
     if us_invoice:
         if not pdf_attached:
-            draft_warnings.append("Attach the source PDF to the draft in Business Central.")
+            draft_warnings.append("Attach the source PDF to the invoice in Business Central.")
         result["invoice_discount_amount"] = str(invoice_discount)
         result["warnings"] = draft_warnings
     return jsonify(result), 201
