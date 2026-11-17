@@ -191,7 +191,11 @@
 
                       <td><span class="desc-display">{{ line.Description }}</span>
                         {% if line.AssemblyNo %}
-                          <small class="d-block">Assembly {{ line.AssemblyNo }}{% if line.ShippedWeight %} · PDF shipped weight {{ line.ShippedWeight }}{% endif %}</small>
+                          <small class="d-block">
+                            {% if line.AssemblyStatus %}{{ line.AssemblyStatus }} assembly{% else %}Assembly{% endif %} {{ line.AssemblyNo }}
+                            {% if line.UsesOrderQuantity %} · Using order quantity because the Resource quantity is zero{% endif %}
+                            {% if line.ShippedWeight %} · PDF shipped weight {{ line.ShippedWeight }}{% endif %}
+                          </small>
                         {% endif %}
                       </td>
 

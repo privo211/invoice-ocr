@@ -151,16 +151,16 @@ def _odata_quote(value: str) -> str:
 
 def _kamterter_assembly_lookup(target, token):
     company = urllib.parse.quote(_odata_quote(target["company"]), safe="")
-    url = (
+    odata_base = (
         f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{target['environment']}/"
-        f"ODataV4/Company('{company}')/KamterterPostedAssemblies"
+        f"ODataV4/Company('{company}')"
     )
 
-    @cache
-    def lookup(order_no):
+    def get_rows(service, params):
         response = timed_get(
-            url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-            params={"$filter": f"OrderNo eq '{_odata_quote(order_no)}'"},
+            f"{odata_base}/{service}",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            params=params,
             timeout=20, allow_redirects=False,
         )
         if response.status_code != 200:
@@ -168,11 +168,41 @@ def _kamterter_assembly_lookup(target, token):
         try:
             data = response.json()
         except ValueError as exc:
-            raise requests.RequestException("Invalid posted assembly response") from exc
+            raise requests.RequestException(f"Invalid response from {service}") from exc
         rows = data.get("value") if isinstance(data, dict) else None
         if (not isinstance(rows, list) or data.get("@odata.nextLink")
-                or any(not isinstance(row, dict) or row.get("OrderNo") != order_no for row in rows)):
-            raise requests.RequestException("Invalid or incomplete posted assembly response")
+                or any(not isinstance(row, dict) for row in rows)):
+            raise requests.RequestException(f"Invalid or incomplete response from {service}")
+        return rows
+
+    @cache
+    def lookup(order_no):
+        order_filter = _odata_quote(order_no)
+        posted = get_rows("KamterterPostedAssemblies", {"$filter": f"OrderNo eq '{order_filter}'"})
+        if any(row.get("OrderNo") != order_no for row in posted):
+            raise requests.RequestException("Posted assembly response does not match the TR")
+        rows = [{**row, "AssemblyStatus": "Posted"} for row in posted]
+
+        lines_field = "Assembly_Order_ExcelLines"
+        open_orders = get_rows("Assembly_Order_Excel", {
+            "$filter": f"No eq '{order_filter}'",
+            "$select": "No,Quantity,Unit_of_Measure_Code",
+            "$expand": f"{lines_field}($select=Type,No,Quantity,Unit_of_Measure_Code)",
+        })
+        for order in open_orders:
+            lines = order.get(lines_field)
+            if (order.get("No") != order_no or not isinstance(lines, list)
+                    or order.get(f"{lines_field}@odata.nextLink")
+                    or any(not isinstance(line, dict) for line in lines)):
+                raise requests.RequestException("Invalid or incomplete open assembly lines")
+            for line in lines or [{}]:
+                rows.append({
+                    "AssemblyNo": order_no, "AssemblyStatus": "Open", "LineType": line.get("Type"),
+                    "ResourceNo": line.get("No"), "Quantity": line.get("Quantity"),
+                    "UnitOfMeasure": line.get("Unit_of_Measure_Code"),
+                    "AssemblyQuantity": order.get("Quantity"),
+                    "AssemblyUnitOfMeasure": order.get("Unit_of_Measure_Code"),
+                })
         return rows
 
     return lookup
@@ -1038,10 +1068,10 @@ def index():
                         session.pop("user_token", None)
                         session.pop("user_name", None)
                         return redirect(url_for("sign_in"))
-                    app.logger.warning("US posted assembly lookup failed (HTTP status: %s)", status)
+                    app.logger.warning("US assembly lookup failed (HTTP status: %s)", status)
                     return render_template(
-                        "message.html", title="Posted assembly lookup unavailable",
-                        message="Check the KamterterPostedAssemblies web service and permissions in the US Sandbox.",
+                        "message.html", title="Assembly lookup unavailable",
+                        message="Check the KamterterPostedAssemblies and Assembly_Order_Excel services in the US Sandbox.",
                         action_endpoint="index", action_label="Back to Invoice Processor",
                     ), 502
                 for filename, pdf_bytes in pdf_files:

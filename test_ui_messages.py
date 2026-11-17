@@ -123,8 +123,10 @@ def _kamterter_upload():
         return {"vendor": "kamterter_us", "pdfs": (io.BytesIO(pdf.tobytes()), "invoice.pdf")}
 
 
-@pytest.mark.parametrize("line_status", [201, 400])
-def test_kamterter_us_review_creates_sandbox_draft_once(offline_ui_app, monkeypatch, tmp_path, line_status):
+@pytest.mark.parametrize(("line_status", "resource_quantity"), [(201, 0), (400, 50)])
+def test_kamterter_us_review_creates_sandbox_draft_once(
+    offline_ui_app, monkeypatch, tmp_path, line_status, resource_quantity,
+):
     app = offline_ui_app
     monkeypatch.setitem(app.app.config, "UPLOAD_FOLDER", str(tmp_path))
     monkeypatch.setitem(app.KAMTERTER_BC_TARGETS["kamterter_us"], "environment", "Sandbox-Holland-260216")
@@ -138,16 +140,29 @@ def test_kamterter_us_review_creates_sandbox_draft_once(offline_ui_app, monkeypa
             assert url.endswith("/ODataV4/Company('Stokes%20Seeds%20US')/KamterterPostedAssemblies")
             assert kwargs["headers"]["Authorization"] == "Bearer test-token"
             po = kwargs["params"]["$filter"].removeprefix("OrderNo eq '").removesuffix("'")
-            reads.append(po)
-            assembly, resource, quantity = {
-                "TR-00009": ("PA-00001", "ON-THI", 8181),
-                "TR-00010": ("PA-00002", "ON-MK", 50),
-            }[po]
-            row = {"OrderNo": po, "AssemblyNo": assembly, "UnitOfMeasure": "MS", "Quantity": quantity}
+            reads.append(("posted", po))
+            if po == "TR-00010":
+                return _Response(200, {"value": []})
+            assert po == "TR-00009"
+            row = {"OrderNo": po, "AssemblyNo": "PA-00001", "UnitOfMeasure": "MS", "Quantity": 8181}
             return _Response(200, {"value": [
                 {**row, "LineType": "Item", "ResourceNo": "SEED"},
-                {**row, "LineType": "Resource", "ResourceNo": resource},
+                {**row, "LineType": "Resource", "ResourceNo": "ON-THI"},
             ]})
+        if url.endswith("/Assembly_Order_Excel"):
+            assert url.endswith("/ODataV4/Company('Stokes%20Seeds%20US')/Assembly_Order_Excel")
+            assert kwargs["headers"]["Authorization"] == "Bearer test-token"
+            assert kwargs["params"]["$expand"] == "Assembly_Order_ExcelLines($select=Type,No,Quantity,Unit_of_Measure_Code)"
+            assert kwargs["params"]["$select"] == "No,Quantity,Unit_of_Measure_Code"
+            po = kwargs["params"]["$filter"].removeprefix("No eq '").removesuffix("'")
+            reads.append(("open", po))
+            if po == "TR-00009":
+                return _Response(200, {"value": []})
+            assert po == "TR-00010"
+            return _Response(200, {"value": [{"No": po, "Quantity": 50, "Unit_of_Measure_Code": "MS", "Assembly_Order_ExcelLines": [
+                {"Type": "Item", "No": "SEED", "Quantity": 50, "Unit_of_Measure_Code": "MS"},
+                {"Type": "Resource", "No": "ON-MK", "Quantity": resource_quantity, "Unit_of_Measure_Code": "MS"},
+            ]}]})
         assert kwargs["params"]["$filter"] == "name eq 'Stokes Seeds US'"
         return _Response(200, {"value": [{"id": "us-company"}]})
 
@@ -162,7 +177,12 @@ def test_kamterter_us_review_creates_sandbox_draft_once(offline_ui_app, monkeypa
     assert 'value="8181.0"' in html and 'value="50.0"' in html and 'value="0.01467"' in html
     assert "PDF shipped weight 8181.31 M" in html
     assert 'data-invoice-total="145.50"' in html
-    assert reads == ["TR-00009", "TR-00010"]
+    assert "Posted assembly PA-00001" in html and "Open assembly TR-00010" in html
+    assert ("Using order quantity" in html) == (resource_quantity == 0)
+    assert reads == [
+        ("posted", "TR-00009"), ("open", "TR-00009"),
+        ("posted", "TR-00010"), ("open", "TR-00010"),
+    ]
     token = re.search(r'data-upload-token="([^"]+)"', html)[1]
     writes = []
 
@@ -218,22 +238,30 @@ def test_kamterter_us_review_creates_sandbox_draft_once(offline_ui_app, monkeypa
     assert len(writes) == write_count
 
 
-@pytest.mark.parametrize(("lookup_status", "status", "message"), [
-    (200, 200, "TR-00009 needs one matching posted assembly"),
-    (403, 502, "Posted assembly lookup unavailable"),
+@pytest.mark.parametrize(("lookup_status", "both", "status", "message"), [
+    (200, False, 200, "TR-00009 needs one matching open or posted assembly"),
+    (200, True, 200, "TR-00009 has both open and posted assemblies. Check for a partial posting."),
+    (403, False, 502, "Assembly lookup unavailable"),
 ])
 def test_kamterter_us_requires_tr_match_and_rejects_live_target(
-    offline_ui_app, monkeypatch, tmp_path, lookup_status, status, message,
+    offline_ui_app, monkeypatch, tmp_path, lookup_status, both, status, message,
 ):
     app = offline_ui_app
     monkeypatch.setitem(app.app.config, "UPLOAD_FOLDER", str(tmp_path))
     target = app.KAMTERTER_BC_TARGETS["kamterter_us"]
     monkeypatch.setitem(target, "environment", "Sandbox-Holland-260216")
     client = _authenticated_client(app, monkeypatch)
-    empty_lookup = requests.Response()
-    empty_lookup.status_code = lookup_status
-    empty_lookup._content = b'{"value": []}'
-    monkeypatch.setattr(app.requests, "get", lambda *args, **kwargs: empty_lookup)
+    def get(url, **kwargs):
+        if both:
+            if url.endswith("/KamterterPostedAssemblies"):
+                return _Response(200, {"value": [{"OrderNo": "TR-00009", "AssemblyNo": "PA-1"}]})
+            return _Response(200, {"value": [{"No": "TR-00009", "Assembly_Order_ExcelLines": []}]})
+        response = requests.Response()
+        response.status_code = lookup_status
+        response._content = b'{"value": []}'
+        return response
+
+    monkeypatch.setattr(app.requests, "get", get)
     response = client.post("/", data=_kamterter_upload())
     assert response.status_code == status
     assert message in response.get_data(as_text=True)

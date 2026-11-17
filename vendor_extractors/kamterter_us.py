@@ -1,4 +1,4 @@
-"""US Kamterter invoice extraction and posted assembly matching."""
+"""US Kamterter invoice extraction and assembly matching."""
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
@@ -54,24 +54,35 @@ def _treated_line(block, invoice_no, po, amount, lookup_assembly):
         raise ValueError(f"PO {po} is not a recognized assembly order number.")
 
     rows = lookup_assembly(reference)
-    assembly_numbers = {row.get("AssemblyNo") for row in rows}
-    if len(assembly_numbers) != 1 or None in assembly_numbers or "" in assembly_numbers:
-        raise ValueError(f"PO {po} needs one matching posted assembly in Business Central.")
+    assemblies = {(row.get("AssemblyStatus"), row.get("AssemblyNo")) for row in rows}
+    if len({status for status, _ in assemblies}) > 1:
+        raise ValueError(f"PO {po} has both open and posted assemblies. Check for a partial posting.")
+    if len(assemblies) != 1:
+        raise ValueError(f"PO {po} needs one matching open or posted assembly in Business Central.")
 
-    assembly_no = next(iter(assembly_numbers))
+    assembly_status, assembly_no = next(iter(assemblies))
+    if not assembly_no:
+        raise ValueError(f"The matching assembly for PO {po} has no document number.")
+    assembly_label = f"{assembly_status} assembly {assembly_no}"
     resources = [row for row in rows if row.get("LineType") == "Resource"]
     if len(resources) != 1:
-        raise ValueError(f"Posted assembly {assembly_no} needs exactly one Resource line.")
+        raise ValueError(f"{assembly_label} needs exactly one Resource line.")
 
     resource_line = resources[0]
     resource = resource_line.get("ResourceNo")
     unit = resource_line.get("UnitOfMeasure")
     try:
         quantity = Decimal(str(resource_line.get("Quantity")))
+        uses_order_quantity = (
+            assembly_status == "Open" and quantity == 0 and bool(unit)
+            and unit == resource_line.get("AssemblyUnitOfMeasure")
+        )
+        if uses_order_quantity:
+            quantity = Decimal(str(resource_line.get("AssemblyQuantity")))
     except InvalidOperation as exc:
-        raise ValueError(f"Posted assembly {assembly_no} has an invalid Resource quantity.") from exc
+        raise ValueError(f"{assembly_label} has an invalid Resource quantity.") from exc
     if not resource or not unit or not quantity.is_finite() or quantity <= 0:
-        raise ValueError(f"Posted assembly {assembly_no} needs a Resource number, quantity, and unit.")
+        raise ValueError(f"{assembly_label} needs a Resource number, quantity, and unit.")
 
     seed_match = re.search(r"^[ \t]*Seed\s*Type[ \t]*:[ \t]*(.+)$", block, re.IGNORECASE | re.MULTILINE)
     if not seed_match:
@@ -83,7 +94,10 @@ def _treated_line(block, invoice_no, po, amount, lookup_assembly):
         shipped_weight = ""
 
     line = _invoice_line("Resource", resource, f"INV{invoice_no}_{seed}_{reference}", quantity, amount, unit)
-    line.update(AssemblyNo=assembly_no, ShippedWeight=shipped_weight)
+    line.update(
+        AssemblyNo=assembly_no, AssemblyStatus=assembly_status,
+        UsesOrderQuantity=uses_order_quantity, ShippedWeight=shipped_weight,
+    )
     return line
 
 
@@ -116,7 +130,7 @@ def _invoice_lines(text, invoice_no, lookup_assembly):
                 raise ValueError("An invoice section is missing its PO number.")
             line = _treated_line(block, invoice_no, po, amount, lookup_assembly)
             if line["AssemblyNo"] in treated_orders:
-                raise ValueError(f"Posted assembly {line['AssemblyNo']} appears in more than one treatment section.")
+                raise ValueError(f"Assembly {line['AssemblyNo']} appears in more than one treatment section.")
             treated_orders.add(line["AssemblyNo"])
             lines.append(line)
         if freight:
