@@ -53,14 +53,6 @@ def app_module(monkeypatch):
             extract_hm_clause_data_from_bytes=no_items,
             find_best_hm_clause_package_description=no_op,
         ),
-        "vendor_extractors.kamterter": _module(
-            "vendor_extractors.kamterter",
-            extract_kamterter_data_from_bytes=no_items,
-        ),
-        "vendor_extractors.kamterter_us": _module(
-            "vendor_extractors.kamterter_us",
-            extract_kamterter_us_data_from_bytes=no_items,
-        ),
         "vendor_extractors.kamterter_shipping": _module(
             "vendor_extractors.kamterter_shipping",
             extract_kamterter_shipping_data_from_bytes=no_items,

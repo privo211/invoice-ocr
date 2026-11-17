@@ -29,7 +29,15 @@ def sample_items(vendor, count=1):
     filename = f'{vendor}_sample_invoice_10482.pdf'
     if vendor == 'kamterter_shipping':
         return {filename: {'customer_po': '91256', 'date_shipped': '10/03/2026', 'est_date_from_treater': '10/08/2026', 'errors': []}}
-    if vendor in ('kamterter', 'kamterter_us'):
+    if vendor == 'kamterter_us':
+        return {filename: [{
+            'VendorInvoiceNo': '10482', 'DocumentDate': '2026-10-03',
+            'BuyFromVendorName': 'Kamterter', 'InvoiceTotal': '625.00',
+            'Type': 'Resource', 'No': 'TREATMENT', 'Description': 'INV10482_Tomato_TR-00001',
+            'AssemblyNo': 'PA-00001', 'ShippedWeight': '50.23 M',
+            'Quantity': 50, 'Unit': 'MS', 'DirectUnitCost': 12.5,
+        }]}
+    if vendor == 'kamterter':
         return {filename: [{
             'VendorInvoiceNo': '10482', 'DocumentDate': '2026-10-03',
             'BuyFromVendorName': 'Kamterter', 'IsUSWarning': False,

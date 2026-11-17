@@ -218,10 +218,15 @@ AZURE_KEY=<document-intelligence-key>
 BC_COMPANY=<url-encoded-company-name>
 BC_ENV=<business-central-environment>
 
-# Optional second allowlisted target.
-BC_US_ENV=<us-business-central-environment>
+# Optional US Kamterter sandbox target.
+BC_US_ENV=<us-sandbox-environment>
 BC_US_COMPANY=<us-company-name>
 ```
+
+For **Kamterter (US SANDBOX)**, upload the invoice PDFs with the TR-ASSEMBLY
+Excel export containing posted assembly headers and lines. Review the Resource
+lines and apply any displayed invoice discount to the Business Central draft
+before posting.
 
 Register this development redirect URI in Microsoft Entra ID:
 

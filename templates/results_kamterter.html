@@ -165,7 +165,8 @@
              </div>
           {% else %}
              <div class="table-responsive">
-                <table class="table table-bordered table-hover">
+                <table class="table table-bordered table-hover"
+                       {% if bc_target == 'kamterter_us' %}data-invoice-total="{{ lines[0].InvoiceTotal }}"{% endif %}>
                   <thead>
                     <tr>
                       <th>Type</th>
@@ -188,11 +189,15 @@
                         <input type="text" class="form-control table-input no-input" value="{{ line.No }}">
                       </td>
 
-                      <!-- <td>{{ line.Description }}</td> -->
-                      <td class="desc-display">{{ line.Description }}</td>
+                      <td><span class="desc-display">{{ line.Description }}</span>
+                        {% if line.AssemblyNo %}
+                          <small class="d-block">Assembly {{ line.AssemblyNo }}{% if line.ShippedWeight %} · PDF shipped weight {{ line.ShippedWeight }}{% endif %}</small>
+                        {% endif %}
+                      </td>
 
                       <td style="width: 15%;">
-                        <input type="number" step="0.01" class="form-control table-input qty-input" value="{{ line.Quantity }}">
+                        <input type="number" step="{{ 'any' if bc_target == 'kamterter_us' else '0.01' }}" class="form-control table-input qty-input" value="{{ line.Quantity }}">
+                        {% if line.Unit %}<small>{{ line.Unit }}</small>{% endif %}
                       </td>
 
                       <td style="width: 15%;">
@@ -200,15 +205,15 @@
                       </td>
 
                       <td style="width: 15%;">
-                        $<span class="subtotal-display">{{ "%.2f"|format(line.Quantity * line.DirectUnitCost) }}</span>
+                        $<span class="subtotal-display">{{ "%.2f"|format(line.LineAmount if bc_target == 'kamterter_us' and line.LineAmount is defined else line.Quantity * line.DirectUnitCost) }}</span>
                       </td>
                     </tr>
                     {% endfor %}
                   </tbody>
 
-                  <tfoot>
+                <tfoot>
                     <tr>
-                      <td colspan="5" class="text-end pe-3" style="font-weight: bold;">Grand Total:</td>
+                      <td colspan="5" class="text-end pe-3" style="font-weight: bold;">{{ 'Draft line total' if bc_target == 'kamterter_us' else 'Grand Total:' }}</td>
                       <td style="font-weight: bold; font-size: 1.05em;">
                         {% set grand_total = namespace(value=0) %}
                         {% for line in lines %}
@@ -217,6 +222,16 @@
                         $<span class="grand-total-display">{{ "%.2f"|format(grand_total.value) }}</span>
                       </td>
                     </tr>
+                    {% if bc_target == 'kamterter_us' %}
+                    <tr>
+                      <td colspan="5" class="text-end pe-3">PDF total</td>
+                      <td>${{ lines[0].InvoiceTotal }}</td>
+                    </tr>
+                    <tr class="invoice-discount-row" hidden>
+                      <td colspan="5" class="text-end pe-3">Invoice discount to apply in BC</td>
+                      <td>$<span class="invoice-discount-display"></span></td>
+                    </tr>
+                    {% endif %}
                   </tfoot>
 
                 </table>
@@ -227,6 +242,7 @@
                      data-inv="{{ lines[0].VendorInvoiceNo }}"
                      data-date="{{ lines[0].DocumentDate }}"
                      data-vendor-name="{{ lines[0].BuyFromVendorName }}"
+                     {% if bc_target == 'kamterter_us' %}data-upload-token="{{ lines[0].UploadToken }}"{% endif %}
                      data-filename="{{ filename }}">
                Create Invoice in Business Central — {{ bc_destination_label }}
              </button>
@@ -245,11 +261,26 @@
     const bcTarget = {{ bc_target | tojson }};
     const bcDestinationLabel = {{ bc_destination_label | tojson }};
 
+    function updateDraftTotal(table) {
+      let totalCents = 0;
+      table.querySelectorAll('.subtotal-display').forEach(subtotal => {
+        totalCents += Math.round(Number(subtotal.textContent) * 100);
+      });
+      table.querySelector('.grand-total-display').textContent = (totalCents / 100).toFixed(2);
+      const discount = table.querySelector('.invoice-discount-display');
+      if (discount) {
+        const difference = totalCents - Math.round(Number(table.dataset.invoiceTotal) * 100);
+        discount.textContent = (difference / 100).toFixed(2);
+        discount.closest('tr').hidden = difference === 0;
+      }
+    }
+
     // --- LIVE SUBTOTAL & GRAND TOTAL UPDATE LOGIC ---
     document.querySelectorAll('table').forEach(table => {
+      if (bcTarget === 'kamterter_us') updateDraftTotal(table);
       table.addEventListener('input', (e) => {
         // 1. Update Description dynamically based on No. input
-        if (e.target.classList.contains('no-input')) {
+        if (bcTarget !== 'kamterter_us' && e.target.classList.contains('no-input')) {
           const row = e.target.closest('tr');
           const descCell = row.querySelector('.desc-display');
           
@@ -277,15 +308,7 @@
             subtotalDisplay.textContent = (qty * cost).toFixed(2);
           }
 
-          let newGrandTotal = 0;
-          table.querySelectorAll('.subtotal-display').forEach(subElement => {
-            newGrandTotal += parseFloat(subElement.textContent) || 0;
-          });
-          
-          const grandTotalDisplay = table.querySelector('.grand-total-display');
-          if (grandTotalDisplay) {
-            grandTotalDisplay.textContent = newGrandTotal.toFixed(2);
-          }
+          updateDraftTotal(table);
         }
       });
     });
@@ -444,6 +467,9 @@
           "bc_target": bcTarget,
           "PurchaseLines": linesPayload
         };
+        if (bcTarget === 'kamterter_us') {
+          payload.UploadToken = btn.dataset.uploadToken;
+        }
 
         try {
           btn.disabled = true;
@@ -478,6 +504,13 @@
             btn.classList.remove('btn-success');
             btn.classList.add('btn-secondary');
             btn.disabled = true;
+            if (bcTarget === 'kamterter_us') {
+              const instructions = json.warnings || [];
+              if (Number(json.invoice_discount_amount)) {
+                instructions.push(`Enter an invoice discount of $${json.invoice_discount_amount} in Business Central and verify the total before posting.`);
+              }
+              if (instructions.length) alert([`Draft ${json.No}`, ...instructions].join('\n\n'));
+            }
 
           } else {
             // FAILURE VISUALS
@@ -486,14 +519,17 @@
             // Format the detailed error from the backend
             const errorDetails = json.details ? `\n\nBC Details: ${json.details}` : '';
             
-            alert(`❌ Error: ${json.message || 'Unknown error'}${errorDetails}`);
-            
-            btn.disabled = false;
-            btn.textContent = "Try Again";
+            const draftDetails = json.No ? `\n\nCheck draft ${json.No} in Business Central before retrying.` : '';
+            alert(`❌ Error: ${json.message || 'Unknown error'}${errorDetails}${draftDetails}`);
+
+            btn.disabled = Boolean(json.No);
+            btn.textContent = json.No ? `Check draft ${json.No}` : "Try Again";
           }
         } catch (e) {
           card.style.border = '2px solid red';
-          alert(`❌ Network Error: ${e.message}`);
+          alert(bcTarget === 'kamterter_us'
+            ? 'The request did not finish. Check Business Central for a draft before submitting again.'
+            : `❌ Network Error: ${e.message}`);
           btn.disabled = false;
           btn.textContent = "Try Again";
         }

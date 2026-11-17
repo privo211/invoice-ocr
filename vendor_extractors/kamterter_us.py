@@ -1,250 +1,204 @@
-"""US Kamterter invoice extractor."""
+"""US Kamterter invoice extraction and posted assembly matching."""
 
-import fitz  # PyMuPDF
+from collections import defaultdict
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
+from xml.etree.ElementTree import ParseError
+from zipfile import BadZipFile
+
+import fitz
+from openpyxl import load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
+
 from db_logger import log_processing_event
+from vendor_extractors.kamterter import _extract_freight_amount
+
+US_KAMTERTER_VENDOR = "KAMTERTER II, LLC (M&T EDI)"
+CENT = Decimal("0.01")
+UNIT_COST_PRECISION = Decimal("0.00001")
+AMOUNT = r"\$[ \t]*([\d,]+\.\d{2})"
 
 
-def parse_currency(value_str):
-    """Parses currency string, robust against spaces and OCR weirdness"""
-    if not value_str:
-        return 0.0
+def _po_key(value):
+    value = str(value or "").strip().upper()
+    if match := re.fullmatch(r"TR[ \t-]*(\d+)", value):
+        return f"TR-{match[1]}"
+    return value if value.isdigit() else ""
 
-    clean = re.sub(r"[^\d\.,-]", "", value_str)
-    clean = clean.replace(",", "")
 
-    if clean.count(".") > 1:
-        parts = clean.split(".")
-        clean = "".join(parts[:-1]) + "." + parts[-1]
+def _assembly_rows(workbook, sheet, fields):
+    rows = workbook[sheet].values
+    for row in rows:
+        if all(field in row for field in fields):
+            positions = [row.index(field) for field in fields]
+            return ([record[i] for i in positions] for record in rows)
+    raise ValueError("The assembly export is missing required columns.")
+
+
+def load_kamterter_us_assemblies(stream):
+    """Index Resource lines by the original PO in a TR-ASSEMBLY export."""
+    if stream is None:
+        return {}
 
     try:
-        return float(clean)
-    except ValueError:
-        print(f"    [DEBUG] parse_currency FAILED for input: '{value_str}'")
-        return 0.0
+        workbook = load_workbook(stream, read_only=True, data_only=True, keep_links=False)
+    except (BadZipFile, InvalidFileException, OSError, ParseError, ValueError) as exc:
+        raise ValueError("Select a valid TR-ASSEMBLY Excel export.") from exc
+
+    try:
+        resources = defaultdict(list)
+        for document, line_type, number, quantity, unit in _assembly_rows(
+            workbook, "911 Posted Assembly Line",
+            ("Document No.", "Type", "No.", "Quantity", "Unit of Measure Code"),
+        ):
+            if document and line_type == "Resource":
+                resources[str(document).strip()].append((str(number or "").strip(), quantity, unit))
+
+        assemblies = defaultdict(dict)
+        for document, order, customer_po, reversed_order in _assembly_rows(
+            workbook, "910 Posted Assembly Header", ("No.", "Order No.", "CustomerPO", "Reversed"),
+        ):
+            if not document or str(reversed_order).strip().lower() in {"true", "yes", "1"}:
+                continue
+            document = str(document).strip()
+            for key in {_po_key(order), _po_key(customer_po)} - {""}:
+                assemblies[key][document] = resources[document]
+        return assemblies
+    except (KeyError, ParseError) as exc:
+        raise ValueError("The export must include posted assembly headers and lines.") from exc
+    finally:
+        workbook.close()
 
 
-def _extract_freight_amount(block: str) -> float:
-    """Extract a detailed ``Freight: ...`` charge without matching summaries."""
-    amount_pattern = r"\$\s*[\d,.]+"
-    horizontal_space = r"[^\S\r\n]*"
-
+def _labeled_amount(text, label):
+    horizontal = r"[ \t]*"
+    prefix = rf"^{horizontal}{label}{horizontal}:{horizontal}"
     patterns = (
-        # PyMuPDF commonly places the right-aligned amount before its label.
-        rf"(?im)^{horizontal_space}({amount_pattern}){horizontal_space}\r?\n"
-        rf"{horizontal_space}Freight{horizontal_space}:[^$\r\n]*$",
-        # Label and amount extracted on the same line.
-        rf"(?im)^{horizontal_space}Freight{horizontal_space}:[^$\r\n]*"
-        rf"({amount_pattern})[^\r\n]*$",
-        # Label extracted first, with the amount on the following line.
-        rf"(?im)^{horizontal_space}Freight{horizontal_space}:[^\r\n]*\r?\n"
-        rf"{horizontal_space}({amount_pattern}){horizontal_space}$",
+        rf"{prefix}{AMOUNT}{horizontal}$",
+        rf"^{horizontal}{AMOUNT}{horizontal}\r?\n{prefix}$",
+        rf"{prefix}\r?\n{horizontal}{AMOUNT}{horizontal}$",
     )
-
     for pattern in patterns:
-        if match := re.search(pattern, block):
-            return parse_currency(match.group(1))
+        if matches := re.findall(pattern, text, re.IGNORECASE | re.MULTILINE):
+            return Decimal(matches[-1].replace(",", ""))
+    raise ValueError(f"The PDF is missing a readable {label.lower()}.")
 
-    return 0.0
+
+def _invoice_line(line_type, number, description, quantity, amount, unit=""):
+    unit_cost = (amount / quantity).quantize(UNIT_COST_PRECISION, rounding=ROUND_HALF_UP)
+    return {
+        "Type": line_type,
+        "No": number,
+        "Description": description,
+        "Quantity": float(quantity),
+        "Unit": unit,
+        "DirectUnitCost": float(unit_cost),
+        "LineAmount": float((quantity * unit_cost).quantize(CENT, rounding=ROUND_HALF_UP)),
+    }
 
 
-def extract_kamterter_us_data_from_bytes(pdf_files: list[tuple[str, bytes]]) -> dict[str, list[dict]]:
+def _treated_line(block, invoice_no, po, amount, assemblies):
+    matches = assemblies.get(_po_key(po), {})
+    if len(matches) != 1:
+        raise ValueError(f"PO {po} needs one matching posted assembly in the export.")
+
+    assembly_no, resources = next(iter(matches.items()))
+    if len(resources) != 1:
+        raise ValueError(f"Posted assembly {assembly_no} needs exactly one Resource line.")
+
+    resource, raw_quantity, unit = resources[0]
+    try:
+        quantity = Decimal(str(raw_quantity).replace(",", ""))
+    except InvalidOperation as exc:
+        raise ValueError(f"Posted assembly {assembly_no} has an invalid Resource quantity.") from exc
+    if not resource or not unit or not quantity.is_finite() or quantity <= 0:
+        raise ValueError(f"Posted assembly {assembly_no} needs a Resource number, quantity, and unit.")
+
+    seed_match = re.search(r"^[ \t]*Seed\s*Type[ \t]*:[ \t]*(.+)$", block, re.IGNORECASE | re.MULTILINE)
+    if not seed_match:
+        raise ValueError(f"PO {po} is missing its seed type.")
+    seed = seed_match[1].strip()
+    reference = _po_key(po)
+    if shipped_match := re.search(r"Shipped Weight[ \t]*:[ \t]*([\d,.]+)[ \t]*(\S+)", block, re.IGNORECASE):
+        shipped_weight = f"{shipped_match[1]} {shipped_match[2]}"
+    else:
+        shipped_weight = ""
+
+    line = _invoice_line("Resource", resource, f"INV{invoice_no}_{seed}_{reference}", quantity, amount, unit)
+    line.update(AssemblyNo=assembly_no, ShippedWeight=shipped_weight)
+    return line
+
+
+def _invoice_lines(text, invoice_no, assemblies):
+    total = _labeled_amount(text, "Total")
+    blocks = re.split(r"(?=^[ \t]*Lot[ \t]*[:#])", text, flags=re.IGNORECASE | re.MULTILINE)
+    lines = []
+    treated_orders = set()
+    subtotals = Decimal(0)
+    for block in blocks:
+        if not re.search(r"^[ \t]*KTT[ \t]*#", block, re.IGNORECASE | re.MULTILINE):
+            continue
+        block = re.split(r"^[ \t]*Summary of Charges[ \t]*$", block, maxsplit=1,
+                         flags=re.IGNORECASE | re.MULTILINE)[0]
+        po_match = re.search(r"^[ \t]*PO[ \t]*#?[ \t]*:[ \t]*(.+)$", block, re.IGNORECASE | re.MULTILINE)
+        po = po_match[1].strip() if po_match else ""
+        subtotal = _labeled_amount(block, "Subtotal")
+        freight = Decimal(str(_extract_freight_amount(block)))
+        if freight > subtotal:
+            raise ValueError(f"Freight exceeds the subtotal for PO {po or 'unknown'}.")
+        subtotals += subtotal
+        amount = subtotal - freight
+
+        if re.search(r"\b(?:left unprocessed|unprocessed seed)\b", block, re.IGNORECASE):
+            if amount:
+                lines.append(_invoice_line("G/L Account", "609100",
+                                           f"INV{invoice_no}_{po}_Unprocessed Seed", Decimal(1), amount))
+        elif amount or not freight:
+            if not po:
+                raise ValueError("An invoice section is missing its PO number.")
+            line = _treated_line(block, invoice_no, po, amount, assemblies)
+            if line["AssemblyNo"] in treated_orders:
+                raise ValueError(f"Posted assembly {line['AssemblyNo']} appears in more than one treatment section.")
+            treated_orders.add(line["AssemblyNo"])
+            lines.append(line)
+        if freight:
+            lines.append(_invoice_line("G/L Account", "609100",
+                                       f"INV{invoice_no}_{po}_Freight", Decimal(1), freight))
+
+    if not lines or subtotals != total:
+        raise ValueError("The extracted section subtotals must add up to the PDF invoice total.")
+    return lines, total
+
+
+def extract_kamterter_us_data_from_bytes(pdf_files, assemblies=None):
     grouped_results = {}
 
     for filename, pdf_bytes in pdf_files:
-        print(f"\n{'='*60}")
-        print(f"🔎 STARTING DEBUG ANALYSIS: {filename}")
-        print(f"{'='*60}")
+        invoice_no = doc_date = ""
+        page_count = 0
+        try:
+            with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+                page_count = doc.page_count
+                text = "\n".join(page.get_text() for page in doc)
+            invoice = re.search(r"Invoice\s*(?:#|No\.?)[ \t:]*([0-9]+)", text, re.IGNORECASE)
+            date = re.search(r"Invoiced\s*Date[ \t:]*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})", text, re.IGNORECASE)
+            invoice_no = invoice[1] if invoice else ""
+            doc_date = date[1] if date else ""
+            if not invoice_no or not doc_date:
+                raise ValueError("The PDF is missing a readable invoice number or date.")
+            lines, total = _invoice_lines(text, invoice_no, assemblies or {})
+            lines[0]["InvoiceTotal"] = str(total)
+        except fitz.FileDataError:
+            lines = [{"IsUSWarning": True, "Description": "This invoice PDF could not be opened."}]
+        except ValueError as exc:
+            lines = [{"IsUSWarning": True, "Description": str(exc)}]
 
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        full_text = "".join(page.get_text() for page in doc)
-        page_count = doc.page_count
-        doc.close()
-
-        print(f"--- [DEBUG] RAW TEXT DUMP---")
-        print(full_text)
-        print(f"--- [DEBUG] END RAW TEXT DUMP ---\n")
-
-        # --- 1. Global Metadata ---
-        invoice_no = None
-        if m := re.search(r"Invoice\s*(?:#|No\.?)[:\s]*(\d+)", full_text, re.IGNORECASE):
-            invoice_no = m.group(1)
-            print(f"[DEBUG] Invoice No Found: {invoice_no}")
-
-        doc_date = None
-        if m := re.search(r"Invoiced\s*Date[:\s]*(\d{1,2}/\d{1,2}/\d{4})", full_text, re.IGNORECASE):
-            doc_date = m.group(1)
-            print(f"[DEBUG] Date Found: {doc_date}")
-
-        # --- 2. Extract Grand Total ---
-        grand_total = 0.0
-        all_prices_raw = re.findall(r"\$\s*([0-9,.]+)", full_text)
-        all_prices = [parse_currency(p) for p in all_prices_raw]
-
-        if all_prices:
-            grand_total = max(all_prices)
-            print(f"[DEBUG] GRAND TOTAL FOUND: {grand_total}")
-        else:
-            print("[DEBUG] ❌ GRAND TOTAL NOT FOUND")
-
-        # --- 3. Block Processing ---
-        split_pattern = r"(?=Lot\s*[:#])"
-        ktt_blocks = re.split(split_pattern, full_text)
-        print(f"\n[DEBUG] Split Logic: Found {len(ktt_blocks)} segments using pattern '{split_pattern}'")
-
-        resource_lines = []
-        processed_line_total_sum = 0.0
-        skipped_numeric_amount = 0.0
-        numeric_po_found = False
-
-        for i, block in enumerate(ktt_blocks):
-            if "KTT" not in block:
-                continue
-
-            print(f"\n--- BLOCK {i} ANALYSIS ---")
-
-            # --- FINANCIALS ---
-            subtotal = 0.0
-
-            if m := re.search(r"(\$\s*[\d,.]+)\s*\n\s*Subtotal", block, re.IGNORECASE):
-                subtotal = parse_currency(m.group(1))
-                print(f"   Subtotal (Reverse): {subtotal}")
-            elif m := re.search(r"Subtotal\s*[:\n]*\s*(\$\s*[\d,.]+)", block, re.IGNORECASE):
-                subtotal = parse_currency(m.group(1))
-                print(f"   Subtotal (Forward): {subtotal}")
-            else:
-                prices = re.findall(r"\$\s*([\d,.]+)", block)
-                if prices:
-                    subtotal = parse_currency(prices[-1])
-                    print(f"   Subtotal (Fallback): {subtotal}")
-
-            # Require the detailed "Freight:" label so the summary's bare
-            # "Freight" line is not counted as another lot-level charge.
-            freight = _extract_freight_amount(block)
-            if freight > 0:
-                print(f"   Freight Found: {freight}")
-
-            adjusted_subtotal = subtotal
-            if freight > 0 and subtotal > freight:
-                adjusted_subtotal = subtotal - freight
-                print(
-                    f"   Adjusted Subtotal: {adjusted_subtotal} "
-                    f"(Subtotal {subtotal} - Freight {freight})"
-                )
-
-            # --- PO EXTRACTION ---
-            po_match = re.search(r"PO\s*(?:#)?[:\s]*([^\n]+)", block, re.IGNORECASE)
-            po_raw = po_match.group(1).strip() if po_match else "UNKNOWN"
-            clean_po = re.sub(r"[\s\u00A0]+", "", po_raw)
-            print(f"   PO Found: '{po_raw}' (Clean: '{clean_po}')")
-
-            # --- US NUMERIC PO SKIP ---
-            if re.match(r"^\d+$", clean_po):
-                numeric_po_found = True
-
-                # FIX: skip ONLY US item cost, keep freight for G/L
-                skipped_numeric_amount += adjusted_subtotal
-
-                print(
-                    f"   👉 ACTION: SKIP (Numeric PO). "
-                    f"Skipping US Item Cost: {adjusted_subtotal}, "
-                    f"Keeping Freight: {freight}"
-                )
-                continue
-
-            # --- Date / Unprocessed ---
-            if re.match(r"\d{1,2}/\d{1,2}/\d{4}", po_raw) or "left unprocessed" in block.lower():
-                print(
-                    f"   👉 ACTION: SKIP (Date/Unprocessed). "
-                    f"Amount {subtotal} will flow to G/L."
-                )
-                continue
-
-            # --- ITEM DETAILS ---
-            seed_type = "Unknown"
-            if m := re.search(r"Seed\s*Type.*?:(.*?)(?:\n|$)", block, re.IGNORECASE):
-                seed_type = m.group(1).strip()
-                print(f"   Seed Type: '{seed_type}'")
-
-            quantity = 0.0
-            if m := re.search(r"Shipped\s*Weight[:\s]*([\d,]+\.\d{2})", block, re.IGNORECASE):
-                quantity = parse_currency(m.group(1))
-                print(f"   Quantity: {quantity}")
-
-            unit_cost = 0.0
-            if quantity > 0:
-                unit_cost = adjusted_subtotal / quantity
-                print(f"   Unit Cost: {unit_cost}")
-
-            item_no = po_raw
-            if "-" in po_raw:
-                if m := re.search(r"^\d+-(.+)", po_raw):
-                    item_no = m.group(1).strip()
-
-            description = f"INV{invoice_no}_{seed_type}_{po_raw}"
-            line_amount = round(quantity * round(unit_cost, 5), 2)
-
-            processed_line_total_sum += line_amount
-            print(f"   👉 ACTION: ADD LINE. Amount: {line_amount}")
-
-            resource_lines.append({
-                "Type": "Resource",
-                "No": item_no,
-                "Description": description,
-                "Quantity": quantity,
-                "DirectUnitCost": round(unit_cost, 5),
-                "LineAmount": line_amount,
-                "PO_Number": po_raw
-            })
-
-        # --- 4. G/L BALANCING ---
-        print("\n" + "=" * 40)
-        print("📊 FINAL G/L CALCULATION")
-        print("=" * 40)
-        print(f"Grand Total:        {grand_total}")
-        print(f" - Processed Sum:   {processed_line_total_sum}")
-        print(f" - Skipped Numeric: {skipped_numeric_amount}")
-        print("-" * 20)
-
-        gl_amount = grand_total - processed_line_total_sum - skipped_numeric_amount
-        print(f" = G/L Result:      {gl_amount}")
-        print("=" * 40 + "\n")
-
-        if resource_lines and abs(gl_amount) >= 0.01:
-            resource_lines.append({
-                "Type": "G/L Account",
-                "No": "609100",
-                "Description": f"INV{invoice_no}_Unprocessed_WOSplit_Shipping",
-                "Quantity": 1,
-                "DirectUnitCost": round(gl_amount, 2),
-                "LineAmount": round(gl_amount, 2),
-                "PO_Number": "G/L Adjustment"
-            })
-
-        if not resource_lines and numeric_po_found:
-            resource_lines.append({
-                "Type": "NOTE",
-                "No": "",
-                "Description": "The detected PO# Lines for this invoice belong to the US.",
-                "Quantity": 0,
-                "DirectUnitCost": 0,
-                "LineAmount": 0,
-                "IsUSWarning": True
-            })
-
+        for line in lines:
+            line.update(VendorInvoiceNo=invoice_no, DocumentDate=doc_date, BuyFromVendorName=US_KAMTERTER_VENDOR)
+        grouped_results[filename] = lines
         log_processing_event(
-            vendor="Kamterter US",
-            filename=filename,
-            extraction_info={"method": "PyMuPDF", "page_count": page_count},
-            po_number=None
+            vendor="Kamterter US", filename=filename,
+            extraction_info={"method": "PyMuPDF", "page_count": page_count}, po_number=None,
         )
-
-        if resource_lines:
-            for line in resource_lines:
-                line["VendorInvoiceNo"] = invoice_no
-                line["DocumentDate"] = doc_date
-                line["BuyFromVendorName"] = "KAMTERTER II, LLC"
-
-            grouped_results[filename] = resource_lines
 
     return grouped_results

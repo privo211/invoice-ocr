@@ -1,6 +1,7 @@
 #app.py
 
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from itsdangerous import BadSignature, URLSafeSerializer
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 import os
@@ -9,16 +10,21 @@ import re
 import fitz
 import requests
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import difflib
 from difflib import get_close_matches
 import msal
 from dotenv import load_dotenv
 from functools import wraps
 from multiprocessing import Pool, cpu_count
+from uuid import uuid4
 from vendor_extractors.sakata import load_package_descriptions, get_po_items
 from vendor_extractors.hm_clause import extract_hm_clause_data_from_bytes, find_best_hm_clause_package_description
 from vendor_extractors.kamterter import extract_kamterter_data_from_bytes
-from vendor_extractors.kamterter_us import extract_kamterter_us_data_from_bytes
+from vendor_extractors.kamterter_us import (
+    CENT, UNIT_COST_PRECISION, US_KAMTERTER_VENDOR,
+    extract_kamterter_us_data_from_bytes, load_kamterter_us_assemblies,
+)
 from vendor_extractors.kamterter_shipping import extract_kamterter_shipping_data_from_bytes
 from vendor_extractors.seminis import extract_seminis_data_from_bytes, find_best_seminis_package_description
 from vendor_extractors.syngenta import extract_syngenta_data_from_bytes
@@ -37,6 +43,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.secret_key = os.environ["SECRET_KEY"]
+kamterter_review = URLSafeSerializer(app.secret_key, salt="kamterter-us-review")
 app.permanent_session_lifetime = timedelta(hours=8)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -74,7 +81,7 @@ KAMTERTER_BC_TARGETS = {
     "kamterter_us": {
         "environment": BC_US_ENV,
         "company": urllib.parse.unquote(BC_US_COMPANY),
-        "label": "US LIVE" if BC_US_ENV.casefold() == "production-holland" else "US SANDBOX",
+        "label": "US SANDBOX",
     },
 }
 KAMTERTER_EXTRACTORS = {
@@ -87,7 +94,11 @@ def get_kamterter_bc_target(target_key: str | None) -> dict[str, str] | None:
     """Resolve an allowlisted Kamterter destination without trusting browser-supplied URLs."""
     if not target_key:
         return None
-    return KAMTERTER_BC_TARGETS.get(target_key.strip().lower())
+    target_key = target_key.strip().lower()
+    target = KAMTERTER_BC_TARGETS.get(target_key)
+    if target_key == "kamterter_us" and not target["environment"].casefold().startswith("sandbox"):
+        return None
+    return target
 
 def get_bc_env(vendor: str | None = None) -> str:
     """Return 'Production' if vendor in ["seminis", "hm_clause", "sakata", "syngenta", "kamterter"], else use default BC_ENV."""
@@ -745,8 +756,7 @@ def index():
                 pdf_bytes = f.read()
                 pdf_files.append((safe_filename, pdf_bytes))
                 
-                # Save a temporary copy for the attachment process for either Kamterter target.
-                if vendor in KAMTERTER_EXTRACTORS:
+                if vendor == "kamterter":
                     temp_path = os.path.join(app.config["UPLOAD_FOLDER"], safe_filename)
                     with open(temp_path, "wb") as temp_file:
                         temp_file.write(pdf_bytes)
@@ -975,8 +985,42 @@ def index():
             )
             
         elif vendor in KAMTERTER_EXTRACTORS:
-            grouped_results = KAMTERTER_EXTRACTORS[vendor](pdf_files)
             target = get_kamterter_bc_target(vendor)
+            if not target:
+                return render_template(
+                    "message.html", title="US Sandbox unavailable",
+                    message="Configure a US Sandbox environment for Kamterter.",
+                    action_endpoint="index", action_label="Back to Invoice Processor",
+                ), 400
+
+            if vendor == "kamterter_us":
+                if len({filename for filename, _ in pdf_files}) != len(pdf_files):
+                    return render_template(
+                        "message.html", title="Duplicate invoice filenames",
+                        message="Rename the PDFs so each has a distinct filename, then upload them again.",
+                        action_endpoint="index", action_label="Back to Invoice Processor",
+                    ), 400
+                export = request.files.get("assembly_export")
+                try:
+                    assemblies = load_kamterter_us_assemblies(export.stream if export else None)
+                except ValueError as exc:
+                    return render_template(
+                        "message.html", title="Unable to read assembly export", message=str(exc),
+                        action_endpoint="index", action_label="Back to Invoice Processor",
+                    ), 400
+                grouped_results = KAMTERTER_EXTRACTORS[vendor](pdf_files, assemblies)
+                for filename, pdf_bytes in pdf_files:
+                    lines = grouped_results[filename]
+                    if not lines[0].get("IsUSWarning"):
+                        upload_id = uuid4().hex
+                        lines[0]["UploadToken"] = kamterter_review.dumps({
+                            "id": upload_id, "filename": filename, "total": lines[0]["InvoiceTotal"],
+                            "invoice": lines[0]["VendorInvoiceNo"], "date": lines[0]["DocumentDate"],
+                        })
+                        with open(os.path.join(app.config["UPLOAD_FOLDER"], upload_id), "wb") as temporary:
+                            temporary.write(pdf_bytes)
+            else:
+                grouped_results = KAMTERTER_EXTRACTORS[vendor](pdf_files)
             return render_template(
                 "results_kamterter.html",
                 items=grouped_results,
@@ -1018,6 +1062,35 @@ def create_purchase_invoice():
     if not bc_target:
         return jsonify({"message": "Invalid or missing Business Central target"}), 400
 
+    purchase_lines = data.get("PurchaseLines", [])
+    us_invoice = target_key == "kamterter_us"
+    if data.get("UploadToken") and not us_invoice:
+        return jsonify({"message": "This invoice review belongs to the US Sandbox."}), 400
+    if us_invoice:
+        try:
+            review = kamterter_review.loads(str(data.get("UploadToken") or ""))
+        except BadSignature:
+            return jsonify({"message": "Upload and review the invoice again before creating it."}), 400
+        upload_path = os.path.join(app.config["UPLOAD_FOLDER"], review["id"])
+        submitted_path = upload_path + ".submitted"
+        try:
+            source_total = Decimal(review["total"])
+            if source_total <= 0 or not purchase_lines:
+                raise ValueError
+            draft_total = Decimal(0)
+            for line in purchase_lines:
+                quantity = Decimal(str(line["Quantity"]))
+                unit_cost = Decimal(str(line["Direct_Unit_Cost"]))
+                if (line["Type"] not in {"Resource", "G/L Account"} or not line["No"].strip()
+                        or not quantity.is_finite() or quantity <= 0
+                        or not unit_cost.is_finite() or unit_cost < 0
+                        or unit_cost != unit_cost.quantize(UNIT_COST_PRECISION)):
+                    raise ValueError
+                draft_total += (quantity * unit_cost).quantize(CENT, rounding=ROUND_HALF_UP)
+            invoice_discount = (draft_total - source_total).quantize(CENT, rounding=ROUND_HALF_UP)
+        except (InvalidOperation, ValueError, TypeError, KeyError, AttributeError):
+            return jsonify({"message": "Review the invoice total, line numbers, quantities, and unit costs."}), 400
+
     bc_env = bc_target["environment"]
     bc_company = bc_target["company"]
     token = session.get("user_token")
@@ -1037,14 +1110,12 @@ def create_purchase_invoice():
         return jsonify({"message": "Authentication token missing"}), 401
 
     # 2. Date Formatting
-    bc_date = data.get("Document_Date")
+    bc_date = review["date"] if us_invoice else data.get("Document_Date")
     try:
         if bc_date and "/" in bc_date:
             bc_date = datetime.strptime(bc_date, "%m/%d/%Y").strftime("%Y-%m-%d")
     except Exception:
         pass
-
-    purchase_lines = data.get("PurchaseLines", [])
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -1088,8 +1159,8 @@ def create_purchase_invoice():
     # 4. Create Header
     header_payload = {
         "Document_Type": "Invoice",
-        "Vendor_Name": data.get("Buy_from_Vendor_Name"),
-        "Vendor_Invoice_No": data.get("Vendor_Invoice_No"),
+        "Vendor_Name": US_KAMTERTER_VENDOR if us_invoice else data.get("Buy_from_Vendor_Name"),
+        "Vendor_Invoice_No": review["invoice"] if us_invoice else data.get("Vendor_Invoice_No"),
         # We try sending date here, but BC usually overwrites it
         "Document_Date": bc_date 
     }
@@ -1097,15 +1168,25 @@ def create_purchase_invoice():
     app.logger.info("=== CREATE PURCHASE HEADER REQUEST ===")
     app.logger.info(f"Payload: {json.dumps(header_payload, indent=2)}")
     
+    if us_invoice:
+        try:
+            os.rename(upload_path, submitted_path)
+        except FileNotFoundError:
+            return jsonify({"message": "This upload is no longer available. Check Business Central for a draft before submitting it again."}), 409
     header_resp = requests.post(headers_url, headers=headers, json=header_payload)
     
     if header_resp.status_code not in (200, 201):
+        if us_invoice and 400 <= header_resp.status_code < 500:
+            os.rename(submitted_path, upload_path)
         app.logger.error(f"❌ HEADER FAILED: {header_resp.status_code}")
         return jsonify({"message": "Header creation failed", "details": header_resp.text}), header_resp.status_code
 
     header_json = header_resp.json()
     document_no = header_json.get("No")
     system_id = header_json.get("SystemId")
+    if us_invoice and not document_no:
+        return jsonify({"message": "Business Central did not return a draft number. Check for a draft before retrying."}), 502
+    draft_warnings = []
     
     # 4.5 PATCH THE DATE
     if bc_date and system_id:
@@ -1127,6 +1208,8 @@ def create_purchase_invoice():
         else:
              app.logger.warning(f"⚠️ Failed to patch date. BC Status: {patch_resp.status_code}")
              app.logger.warning(f"Response: {patch_resp.text}")
+             if us_invoice:
+                 draft_warnings.append(f"Check the document date in Business Central. The PDF date is {bc_date}.")
 
     app.logger.info(f"✅ Header Created & Verified: {document_no}")
 
@@ -1167,19 +1250,23 @@ def create_purchase_invoice():
             except Exception:
                 pass # Fallback to raw text if it's not JSON
                 
-            return jsonify({
+            failure = {
                 "message": f"Failed to create Line {idx}",
                 "details": bc_error_msg
-            }), line_resp.status_code 
+            }
+            if us_invoice:
+                failure["No"] = document_no
+            return jsonify(failure), line_resp.status_code
 
     app.logger.info(f"✅ FINISHED: {success_count} lines created successfully.")
     
     # ==========================================
     # 6. ATTACH THE PDF TO THE INVOICE
     # ==========================================
-    filename = data.get("Filename")
+    filename = review["filename"] if us_invoice else data.get("Filename")
+    pdf_attached = False
     if filename and system_id:
-        filepath = os.path.join(app.config["UPLOAD_FOLDER"], secure_filename(filename))
+        filepath = submitted_path if us_invoice else os.path.join(app.config["UPLOAD_FOLDER"], secure_filename(filename))
         
         if os.path.exists(filepath):
             try:
@@ -1210,6 +1297,7 @@ def create_purchase_invoice():
                         upload_resp = requests.patch(content_url, headers=content_headers, data=pdf_file)
                         
                     if upload_resp.status_code in (200, 204):
+                        pdf_attached = True
                         app.logger.info(f"✅ PDF Attached successfully to Invoice {document_no}")
                     else:
                         app.logger.error(f"❌ Failed to upload PDF content: {upload_resp.text}")
@@ -1225,11 +1313,17 @@ def create_purchase_invoice():
                 except Exception as e:
                     app.logger.error(f"⚠️ Could not delete temp file {filepath}: {e}")
                     
-    return jsonify({
+    result = {
         "message": "Purchase invoice created",
         "No": document_no,
         "lines_created": success_count
-    }), 201
+    }
+    if us_invoice:
+        if not pdf_attached:
+            draft_warnings.append("Attach the source PDF to the draft in Business Central.")
+        result["invoice_discount_amount"] = str(invoice_discount)
+        result["warnings"] = draft_warnings
+    return jsonify(result), 201
 
 # --- Kamterter Shipping: sandbox-only OData update route ---
 @app.route("/update-kamterter-shipping-report", methods=["POST"])
