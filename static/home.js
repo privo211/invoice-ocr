@@ -3,15 +3,6 @@
   'use strict';
   const form = document.getElementById('extract-form');
   if (!form) return;
-  const vendor = document.getElementById('vendor');
-  const assemblyExport = document.getElementById('assembly-export');
-  function updateAssemblyField() {
-    const isUSKamterter = vendor.value === 'kamterter_us';
-    document.getElementById('assembly-export-field').hidden = !isUSKamterter;
-    assemblyExport.disabled = !isUSKamterter;
-  }
-  vendor.addEventListener('change', updateAssemblyField);
-  updateAssemblyField();
   const dropzone = document.getElementById('dropzone');
   const pdfInput = document.getElementById('pdfs');
   const fileInfo = document.getElementById('file-info');
@@ -78,7 +69,6 @@
     form.setAttribute('aria-busy', 'true');
   });
   window.addEventListener('pageshow', event => {
-    updateAssemblyField();
     if (event.persisted) { document.getElementById('loading-overlay').hidden = true; form.removeAttribute('aria-busy'); }
   });
 })();

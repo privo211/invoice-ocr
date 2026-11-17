@@ -15,7 +15,7 @@ import difflib
 from difflib import get_close_matches
 import msal
 from dotenv import load_dotenv
-from functools import wraps
+from functools import cache, wraps
 from multiprocessing import Pool, cpu_count
 from uuid import uuid4
 from vendor_extractors.sakata import load_package_descriptions, get_po_items
@@ -23,7 +23,7 @@ from vendor_extractors.hm_clause import extract_hm_clause_data_from_bytes, find_
 from vendor_extractors.kamterter import extract_kamterter_data_from_bytes
 from vendor_extractors.kamterter_us import (
     CENT, UNIT_COST_PRECISION, US_KAMTERTER_VENDOR,
-    extract_kamterter_us_data_from_bytes, load_kamterter_us_assemblies,
+    extract_kamterter_us_data_from_bytes,
 )
 from vendor_extractors.kamterter_shipping import extract_kamterter_shipping_data_from_bytes
 from vendor_extractors.seminis import extract_seminis_data_from_bytes, find_best_seminis_package_description
@@ -148,6 +148,34 @@ def _odata_quote(value: str) -> str:
     """Escape single quotes for OData string literals by doubling them."""
     # ponytail: minimal escaping sufficient for OData string literal context
     return str(value).replace("'", "''")
+
+def _kamterter_assembly_lookup(target, token):
+    company = urllib.parse.quote(_odata_quote(target["company"]), safe="")
+    url = (
+        f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{target['environment']}/"
+        f"ODataV4/Company('{company}')/KamterterPostedAssemblies"
+    )
+
+    @cache
+    def lookup(order_no):
+        response = timed_get(
+            url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            params={"$filter": f"OrderNo eq '{_odata_quote(order_no)}'"},
+            timeout=20, allow_redirects=False,
+        )
+        if response.status_code != 200:
+            raise requests.HTTPError(response=response)
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise requests.RequestException("Invalid posted assembly response") from exc
+        rows = data.get("value") if isinstance(data, dict) else None
+        if (not isinstance(rows, list) or data.get("@odata.nextLink")
+                or any(not isinstance(row, dict) or row.get("OrderNo") != order_no for row in rows)):
+            raise requests.RequestException("Invalid or incomplete posted assembly response")
+        return rows
+
+    return lookup
 
 def _bc_error_message(resp: requests.Response) -> str:
     """Extract Business Central error message if present; fallback to text."""
@@ -740,13 +768,13 @@ def fix_stats():
 @timed_func("index handler")
 def index():
     user_token = session.get("user_token")
-    if not token_is_valid(user_token):
+    vendor = request.form.get("vendor") if request.method == "POST" else None
+    if vendor != "kamterter_us" and not token_is_valid(user_token):
         session.pop("user_token", None)
         session.pop("user_name", None)
         return redirect(url_for("sign_in"))
 
     if request.method == "POST":
-        vendor = request.form.get("vendor")
         files = request.files.getlist("pdfs")
                 
         pdf_files = []
@@ -1000,15 +1028,22 @@ def index():
                         message="Rename the PDFs so each has a distinct filename, then upload them again.",
                         action_endpoint="index", action_label="Back to Invoice Processor",
                     ), 400
-                export = request.files.get("assembly_export")
                 try:
-                    assemblies = load_kamterter_us_assemblies(export.stream if export else None)
-                except ValueError as exc:
+                    grouped_results = KAMTERTER_EXTRACTORS[vendor](
+                        pdf_files, _kamterter_assembly_lookup(target, user_token)
+                    )
+                except requests.RequestException as exc:
+                    status = exc.response.status_code if exc.response is not None else None
+                    if status == 401:
+                        session.pop("user_token", None)
+                        session.pop("user_name", None)
+                        return redirect(url_for("sign_in"))
+                    app.logger.warning("US posted assembly lookup failed (HTTP status: %s)", status)
                     return render_template(
-                        "message.html", title="Unable to read assembly export", message=str(exc),
+                        "message.html", title="Posted assembly lookup unavailable",
+                        message="Check the KamterterPostedAssemblies web service and permissions in the US Sandbox.",
                         action_endpoint="index", action_label="Back to Invoice Processor",
-                    ), 400
-                grouped_results = KAMTERTER_EXTRACTORS[vendor](pdf_files, assemblies)
+                    ), 502
                 for filename, pdf_bytes in pdf_files:
                     lines = grouped_results[filename]
                     if not lines[0].get("IsUSWarning"):

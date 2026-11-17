@@ -1,14 +1,9 @@
 """US Kamterter invoice extraction and posted assembly matching."""
 
-from collections import defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
-from xml.etree.ElementTree import ParseError
-from zipfile import BadZipFile
 
 import fitz
-from openpyxl import load_workbook
-from openpyxl.utils.exceptions import InvalidFileException
 
 from db_logger import log_processing_event
 from vendor_extractors.kamterter import _extract_freight_amount
@@ -24,50 +19,6 @@ def _po_key(value):
     if match := re.fullmatch(r"TR[ \t-]*(\d+)", value):
         return f"TR-{match[1]}"
     return value if value.isdigit() else ""
-
-
-def _assembly_rows(workbook, sheet, fields):
-    rows = workbook[sheet].values
-    for row in rows:
-        if all(field in row for field in fields):
-            positions = [row.index(field) for field in fields]
-            return ([record[i] for i in positions] for record in rows)
-    raise ValueError("The assembly export is missing required columns.")
-
-
-def load_kamterter_us_assemblies(stream):
-    """Index Resource lines by the original PO in a TR-ASSEMBLY export."""
-    if stream is None:
-        return {}
-
-    try:
-        workbook = load_workbook(stream, read_only=True, data_only=True, keep_links=False)
-    except (BadZipFile, InvalidFileException, OSError, ParseError, ValueError) as exc:
-        raise ValueError("Select a valid TR-ASSEMBLY Excel export.") from exc
-
-    try:
-        resources = defaultdict(list)
-        for document, line_type, number, quantity, unit in _assembly_rows(
-            workbook, "911 Posted Assembly Line",
-            ("Document No.", "Type", "No.", "Quantity", "Unit of Measure Code"),
-        ):
-            if document and line_type == "Resource":
-                resources[str(document).strip()].append((str(number or "").strip(), quantity, unit))
-
-        assemblies = defaultdict(dict)
-        for document, order, customer_po, reversed_order in _assembly_rows(
-            workbook, "910 Posted Assembly Header", ("No.", "Order No.", "CustomerPO", "Reversed"),
-        ):
-            if not document or str(reversed_order).strip().lower() in {"true", "yes", "1"}:
-                continue
-            document = str(document).strip()
-            for key in {_po_key(order), _po_key(customer_po)} - {""}:
-                assemblies[key][document] = resources[document]
-        return assemblies
-    except (KeyError, ParseError) as exc:
-        raise ValueError("The export must include posted assembly headers and lines.") from exc
-    finally:
-        workbook.close()
 
 
 def _labeled_amount(text, label):
@@ -97,18 +48,26 @@ def _invoice_line(line_type, number, description, quantity, amount, unit=""):
     }
 
 
-def _treated_line(block, invoice_no, po, amount, assemblies):
-    matches = assemblies.get(_po_key(po), {})
-    if len(matches) != 1:
-        raise ValueError(f"PO {po} needs one matching posted assembly in the export.")
+def _treated_line(block, invoice_no, po, amount, lookup_assembly):
+    reference = _po_key(po)
+    if not reference:
+        raise ValueError(f"PO {po} is not a recognized assembly order number.")
 
-    assembly_no, resources = next(iter(matches.items()))
+    rows = lookup_assembly(reference)
+    assembly_numbers = {row.get("AssemblyNo") for row in rows}
+    if len(assembly_numbers) != 1 or None in assembly_numbers or "" in assembly_numbers:
+        raise ValueError(f"PO {po} needs one matching posted assembly in Business Central.")
+
+    assembly_no = next(iter(assembly_numbers))
+    resources = [row for row in rows if row.get("LineType") == "Resource"]
     if len(resources) != 1:
         raise ValueError(f"Posted assembly {assembly_no} needs exactly one Resource line.")
 
-    resource, raw_quantity, unit = resources[0]
+    resource_line = resources[0]
+    resource = resource_line.get("ResourceNo")
+    unit = resource_line.get("UnitOfMeasure")
     try:
-        quantity = Decimal(str(raw_quantity).replace(",", ""))
+        quantity = Decimal(str(resource_line.get("Quantity")))
     except InvalidOperation as exc:
         raise ValueError(f"Posted assembly {assembly_no} has an invalid Resource quantity.") from exc
     if not resource or not unit or not quantity.is_finite() or quantity <= 0:
@@ -118,7 +77,6 @@ def _treated_line(block, invoice_no, po, amount, assemblies):
     if not seed_match:
         raise ValueError(f"PO {po} is missing its seed type.")
     seed = seed_match[1].strip()
-    reference = _po_key(po)
     if shipped_match := re.search(r"Shipped Weight[ \t]*:[ \t]*([\d,.]+)[ \t]*(\S+)", block, re.IGNORECASE):
         shipped_weight = f"{shipped_match[1]} {shipped_match[2]}"
     else:
@@ -129,7 +87,7 @@ def _treated_line(block, invoice_no, po, amount, assemblies):
     return line
 
 
-def _invoice_lines(text, invoice_no, assemblies):
+def _invoice_lines(text, invoice_no, lookup_assembly):
     total = _labeled_amount(text, "Total")
     blocks = re.split(r"(?=^[ \t]*Lot[ \t]*[:#])", text, flags=re.IGNORECASE | re.MULTILINE)
     lines = []
@@ -156,7 +114,7 @@ def _invoice_lines(text, invoice_no, assemblies):
         elif amount or not freight:
             if not po:
                 raise ValueError("An invoice section is missing its PO number.")
-            line = _treated_line(block, invoice_no, po, amount, assemblies)
+            line = _treated_line(block, invoice_no, po, amount, lookup_assembly)
             if line["AssemblyNo"] in treated_orders:
                 raise ValueError(f"Posted assembly {line['AssemblyNo']} appears in more than one treatment section.")
             treated_orders.add(line["AssemblyNo"])
@@ -170,7 +128,7 @@ def _invoice_lines(text, invoice_no, assemblies):
     return lines, total
 
 
-def extract_kamterter_us_data_from_bytes(pdf_files, assemblies=None):
+def extract_kamterter_us_data_from_bytes(pdf_files, lookup_assembly):
     grouped_results = {}
 
     for filename, pdf_bytes in pdf_files:
@@ -186,7 +144,7 @@ def extract_kamterter_us_data_from_bytes(pdf_files, assemblies=None):
             doc_date = date[1] if date else ""
             if not invoice_no or not doc_date:
                 raise ValueError("The PDF is missing a readable invoice number or date.")
-            lines, total = _invoice_lines(text, invoice_no, assemblies or {})
+            lines, total = _invoice_lines(text, invoice_no, lookup_assembly)
             lines[0]["InvoiceTotal"] = str(total)
         except fitz.FileDataError:
             lines = [{"IsUSWarning": True, "Description": "This invoice PDF could not be opened."}]

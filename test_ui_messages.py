@@ -4,7 +4,6 @@ from html.parser import HTMLParser
 import re
 
 import fitz
-from openpyxl import Workbook
 import pytest
 import requests
 
@@ -111,7 +110,7 @@ def test_home_keeps_multipart_upload_fields_and_vendor_destinations(offline_ui_a
     assert parser.vendors == ["sakata", "hm_clause", "seminis", "nunhems", "syngenta", "kamterter", "kamterter_us", "kamterter_shipping"]
 
 
-def _kamterter_upload(include_export=True):
+def _kamterter_upload():
     with fitz.open() as pdf:
         pdf.new_page().insert_text((40, 40), "\n".join([
             "Invoice #: 12345", "Invoiced Date: 10/03/2026",
@@ -121,25 +120,7 @@ def _kamterter_upload(include_export=True):
             "Shipped Weight: 50.42 M", "Shipping Mode: Freight", "Subtotal: $25.50",
             "Total: $145.50",
         ]))
-        data = {"vendor": "kamterter_us", "pdfs": (io.BytesIO(pdf.tobytes()), "invoice.pdf")}
-    if include_export:
-        workbook = Workbook()
-        headers = workbook.active
-        headers.title = "910 Posted Assembly Header"
-        headers.append(["No.", "Order No.", "CustomerPO", "Reversed"])
-        headers.append(["PA-00001", "TR-00009", "TR-00009", False])
-        headers.append(["PA-00002", "TR-00010", "TR-00010", False])
-        headers.append(["PA-00003", "TR-00009", "TR-00009", True])
-        lines = workbook.create_sheet("911 Posted Assembly Line")
-        lines.append(["Document No.", "Type", "No.", "Quantity", "Unit of Measure Code"])
-        lines.append(["PA-00001", "Item", "SEED", 8181, "MS"])
-        lines.append(["PA-00001", "Resource", "ON-THI", 8181, "MS"])
-        lines.append(["PA-00002", "Resource", "ON-MK", 50, "MS"])
-        export = io.BytesIO()
-        workbook.save(export)
-        export.seek(0)
-        data["assembly_export"] = (export, "assembly.xlsx")
-    return data
+        return {"vendor": "kamterter_us", "pdfs": (io.BytesIO(pdf.tobytes()), "invoice.pdf")}
 
 
 @pytest.mark.parametrize("line_status", [201, 400])
@@ -149,6 +130,29 @@ def test_kamterter_us_review_creates_sandbox_draft_once(offline_ui_app, monkeypa
     monkeypatch.setitem(app.KAMTERTER_BC_TARGETS["kamterter_us"], "environment", "Sandbox-Holland-260216")
     monkeypatch.setitem(app.KAMTERTER_BC_TARGETS["kamterter_us"], "company", "Stokes Seeds US")
     client = _authenticated_client(app, monkeypatch)
+    reads = []
+
+    def get(url, **kwargs):
+        assert "/Sandbox-Holland-260216/" in url
+        if url.endswith("/KamterterPostedAssemblies"):
+            assert url.endswith("/ODataV4/Company('Stokes%20Seeds%20US')/KamterterPostedAssemblies")
+            assert kwargs["headers"]["Authorization"] == "Bearer test-token"
+            po = kwargs["params"]["$filter"].removeprefix("OrderNo eq '").removesuffix("'")
+            reads.append(po)
+            assembly, resource, quantity = {
+                "TR-00009": ("PA-00001", "ON-THI", 8181),
+                "TR-00010": ("PA-00002", "ON-MK", 50),
+            }[po]
+            row = {"OrderNo": po, "AssemblyNo": assembly, "UnitOfMeasure": "MS", "Quantity": quantity}
+            return _Response(200, {"value": [
+                {**row, "LineType": "Item", "ResourceNo": "SEED"},
+                {**row, "LineType": "Resource", "ResourceNo": resource},
+            ]})
+        assert kwargs["params"]["$filter"] == "name eq 'Stokes Seeds US'"
+        return _Response(200, {"value": [{"id": "us-company"}]})
+
+    monkeypatch.setattr(app.requests, "get", get)
+    monkeypatch.setattr(app, "token_is_valid", lambda token: pytest.fail("US uploads must not probe Canada"))
     upload = _kamterter_upload()
     pdf_bytes = upload["pdfs"][0].getvalue()
     response = client.post("/", data=upload)
@@ -158,13 +162,9 @@ def test_kamterter_us_review_creates_sandbox_draft_once(offline_ui_app, monkeypa
     assert 'value="8181.0"' in html and 'value="50.0"' in html and 'value="0.01467"' in html
     assert "PDF shipped weight 8181.31 M" in html
     assert 'data-invoice-total="145.50"' in html
+    assert reads == ["TR-00009", "TR-00010"]
     token = re.search(r'data-upload-token="([^"]+)"', html)[1]
     writes = []
-
-    def get(url, **kwargs):
-        assert "/Sandbox-Holland-260216/" in url
-        assert kwargs["params"]["$filter"] == "name eq 'Stokes Seeds US'"
-        return _Response(200, {"value": [{"id": "us-company"}]})
 
     def post(url, **kwargs):
         assert "/Sandbox-Holland-260216/" in url and "companies(us-company)" in url
@@ -184,7 +184,6 @@ def test_kamterter_us_review_creates_sandbox_draft_once(offline_ui_app, monkeypa
             assert kwargs["json"] == {"Document_Date": "2026-10-03"}
         return _Response(204)
 
-    monkeypatch.setattr(app.requests, "get", get)
     monkeypatch.setattr(app.requests, "post", post)
     monkeypatch.setattr(app.requests, "patch", patch)
     lines = [
@@ -219,15 +218,25 @@ def test_kamterter_us_review_creates_sandbox_draft_once(offline_ui_app, monkeypa
     assert len(writes) == write_count
 
 
-def test_kamterter_us_requires_tr_match_and_rejects_live_target(offline_ui_app, monkeypatch, tmp_path):
+@pytest.mark.parametrize(("lookup_status", "status", "message"), [
+    (200, 200, "TR-00009 needs one matching posted assembly"),
+    (403, 502, "Posted assembly lookup unavailable"),
+])
+def test_kamterter_us_requires_tr_match_and_rejects_live_target(
+    offline_ui_app, monkeypatch, tmp_path, lookup_status, status, message,
+):
     app = offline_ui_app
     monkeypatch.setitem(app.app.config, "UPLOAD_FOLDER", str(tmp_path))
     target = app.KAMTERTER_BC_TARGETS["kamterter_us"]
     monkeypatch.setitem(target, "environment", "Sandbox-Holland-260216")
     client = _authenticated_client(app, monkeypatch)
-    response = client.post("/", data=_kamterter_upload(include_export=False))
-    assert response.status_code == 200
-    assert "TR-00009 needs one matching posted assembly" in response.get_data(as_text=True)
+    empty_lookup = requests.Response()
+    empty_lookup.status_code = lookup_status
+    empty_lookup._content = b'{"value": []}'
+    monkeypatch.setattr(app.requests, "get", lambda *args, **kwargs: empty_lookup)
+    response = client.post("/", data=_kamterter_upload())
+    assert response.status_code == status
+    assert message in response.get_data(as_text=True)
     assert not list(tmp_path.iterdir())
 
     monkeypatch.setitem(target, "environment", "Production-Holland")

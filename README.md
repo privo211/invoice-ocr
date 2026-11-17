@@ -223,10 +223,15 @@ BC_US_ENV=<us-sandbox-environment>
 BC_US_COMPANY=<us-company-name>
 ```
 
-For **Kamterter (US SANDBOX)**, upload the invoice PDFs with the TR-ASSEMBLY
-Excel export containing posted assembly headers and lines. Review the Resource
-lines and apply any displayed invoice discount to the Business Central draft
-before posting.
+For **Kamterter (US SANDBOX)**, upload the invoice PDFs. The portal looks up the
+original assembly order number in the US Sandbox and uses the matching posted
+Resource line. Apply any displayed invoice discount to the Business Central
+draft before posting.
+
+Install [query 50142](business_central/50142KamterterPostedAssemblies.Query.al)
+in the US Sandbox with the purchase invoice extension. On **Web Services**,
+publish it as a Query named `KamterterPostedAssemblies`. The portal user needs
+permission to execute the query and read the posted assembly tables.
 
 Register this development redirect URI in Microsoft Entra ID:
 
