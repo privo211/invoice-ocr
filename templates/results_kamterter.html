@@ -165,8 +165,7 @@
              </div>
           {% else %}
              <div class="table-responsive">
-                <table class="table table-bordered table-hover"
-                       {% if bc_target == 'kamterter_us' %}data-invoice-total="{{ lines[0].InvoiceTotal }}"{% endif %}>
+                <table class="table table-bordered table-hover">
                   <thead>
                     <tr>
                       <th>Type</th>
@@ -189,19 +188,10 @@
                         <input type="text" class="form-control table-input no-input" value="{{ line.No }}">
                       </td>
 
-                      <td><span class="desc-display">{{ line.Description }}</span>
-                        {% if line.AssemblyNo %}
-                          <small class="d-block">
-                            {% if line.AssemblyStatus %}{{ line.AssemblyStatus }} assembly{% else %}Assembly{% endif %} {{ line.AssemblyNo }}
-                            {% if line.UsesOrderQuantity %} · Using order quantity because the Resource quantity is zero{% endif %}
-                            {% if line.ShippedWeight %} · PDF shipped weight {{ line.ShippedWeight }}{% endif %}
-                          </small>
-                        {% endif %}
-                      </td>
+                      <td><span class="desc-display">{{ line.Description }}</span></td>
 
                       <td style="width: 15%;">
                         <input type="number" step="{{ 'any' if bc_target == 'kamterter_us' else '0.01' }}" class="form-control table-input qty-input" value="{{ line.Quantity }}">
-                        {% if line.Unit %}<small>{{ line.Unit }}</small>{% endif %}
                       </td>
 
                       <td style="width: 15%;">
@@ -226,16 +216,6 @@
                         $<span class="grand-total-display">{{ "%.2f"|format(grand_total.value) }}</span>
                       </td>
                     </tr>
-                    {% if bc_target == 'kamterter_us' %}
-                    <tr>
-                      <td colspan="5" class="text-end pe-3">PDF total</td>
-                      <td>${{ lines[0].InvoiceTotal }}</td>
-                    </tr>
-                    <tr class="invoice-discount-row" hidden>
-                      <td colspan="5" class="text-end pe-3 invoice-adjustment-display"></td>
-                      <td><span class="invoice-discount-display"></span><small class="d-block">BC invoice discount</small></td>
-                    </tr>
-                    {% endif %}
                   </tfoot>
 
                 </table>
@@ -248,7 +228,7 @@
                      data-vendor-name="{{ lines[0].BuyFromVendorName }}"
                      {% if bc_target == 'kamterter_us' %}data-upload-token="{{ lines[0].UploadToken }}"{% endif %}
                      data-filename="{{ filename }}"{% if bc_target == 'kamterter_us' and not lines[0].UploadToken %} disabled{% endif %}>
-               Create Invoice in Business Central{% if bc_target != 'kamterter_us' %} — {{ bc_destination_label }}{% endif %}
+               Create Invoice in Business Central{% if bc_target != 'kamterter_us' %} - {{ bc_destination_label }}{% endif %}
              </button>
           {% endif %}
         </div>
@@ -277,13 +257,6 @@
         totalCents += Math.round(Number(subtotal.textContent) * 100);
       });
       table.querySelector('.grand-total-display').textContent = (totalCents / 100).toFixed(2);
-      const adjustmentRow = table.querySelector('.invoice-discount-row');
-      if (adjustmentRow) {
-        const discount = (totalCents - Math.round(Number(table.dataset.invoiceTotal) * 100)) / 100;
-        adjustmentRow.querySelector('.invoice-adjustment-display').textContent = invoiceTotalAdjustment(discount);
-        adjustmentRow.querySelector('.invoice-discount-display').textContent = usd.format(discount);
-        adjustmentRow.hidden = discount === 0;
-      }
     }
 
     // --- LIVE SUBTOTAL & GRAND TOTAL UPDATE LOGIC ---

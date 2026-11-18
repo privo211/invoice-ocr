@@ -22,7 +22,7 @@ def customer_po(value):
 
 
 app.jinja_env.filters['customer_po'] = customer_po
-BC_OPTIONS = [{'No': '1750286-MS', 'Description': 'Tomato — Sample Variety', 'UnitOfMeasure': 'MS', 'Quantity': 50}]
+BC_OPTIONS = [{'No': '1750286-MS', 'Description': 'Tomato - Sample Variety', 'UnitOfMeasure': 'MS', 'Quantity': 50}]
 
 
 def sample_items(vendor, count=1):
@@ -32,23 +32,22 @@ def sample_items(vendor, count=1):
     if vendor == 'kamterter_us':
         return {filename: [{
             'VendorInvoiceNo': '10482', 'DocumentDate': '2026-10-03',
-            'BuyFromVendorName': 'Kamterter', 'InvoiceTotal': '625.00',
+            'BuyFromVendorName': 'Kamterter',
             'Type': 'Resource', 'No': 'TREATMENT', 'Description': 'INV10482_Tomato_TR-00001',
-            'AssemblyNo': 'PA-00001', 'ShippedWeight': '50.23 M',
-            'Quantity': 50, 'Unit': 'MS', 'DirectUnitCost': 12.5,
+            'Quantity': 50, 'DirectUnitCost': 12.5,
         }]}
     if vendor == 'kamterter':
         return {filename: [{
             'VendorInvoiceNo': '10482', 'DocumentDate': '2026-10-03',
             'BuyFromVendorName': 'Kamterter', 'IsUSWarning': False,
-            'Type': 'Item', 'No': '1750286-MS', 'Description': 'Tomato — Sample Variety',
+            'Type': 'Item', 'No': '1750286-MS', 'Description': 'Tomato - Sample Variety',
             'Quantity': 50, 'DirectUnitCost': 12.5,
         }]}
     record = {
         'InvoiceNumber': '10482', 'VendorInvoiceNo': '10482', 'PurchaseOrder': '91256',
         'BCItemNo': '1750286-MS', 'SuggestedBCItemNo': '1750286-MS', 'BCOptions': BC_OPTIONS,
-        'VendorItemNumber': 'T-104', 'VendorDescription': 'Tomato — Sample Variety',
-        'VendorItemDescription': 'Tomato — Sample Variety', 'VendorLotNo': '4513632829',
+        'VendorItemNumber': 'T-104', 'VendorDescription': 'Tomato - Sample Variety',
+        'VendorItemDescription': 'Tomato - Sample Variety', 'VendorLotNo': '4513632829',
         'VendorLot': '4513632829', 'VendorProductLot': '4513632829',
         'VendorBatchLot': '0262198116', 'VendorBatch': '0262198116', 'VendorBatchNo': '0262198116',
         'Germ': 94, 'CurrentGerm': 94, 'PackingGerm': 94, 'GrowerGerm': 96,
@@ -170,7 +169,7 @@ def preview_directory():
     # Test-only appearance controls allow browser verification of historic preferences.
     links = ''.join(f'<li><a href="{url_for("results", vendor=vendor)}">{vendor}</a></li>' for vendor in VENDORS)
     return f'''<!doctype html><html lang="en"><title>UI preview directory</title><body>
-    <h1>UI preview directory — synthetic data</h1><ul>{links}</ul>
+    <h1>UI preview directory - synthetic data</h1><ul>{links}</ul>
     <p><a href="/">Home</a> · <a href="/logs">Logs</a> · <a href="/logout">Logout</a></p>
     <p>Lot feedback samples:
       <a href="/_preview/results/sakata?lot_feedback=success">Success</a> ·

@@ -251,13 +251,13 @@
                       </option>
                       {% for opt in item.BCOptions %}
                         <option value="{{ opt.No }}" {% if item.SuggestedBCItemNo == opt.No %}selected{% endif %}>
-                          {{ opt.No }} — {{ opt.Description }}
+                          {{ opt.No }} - {{ opt.Description }}
                         </option>
                       {% endfor %}
                       <option value="Other">Other</option>
                     </select>
                     <select id="bc-input-{{ item_idx }}" class="field-box form-select mt-1" style="{% if item.BCItemNo == 'Other' or item.BCOptions|length == 0 %}display:block;{% else %}display:none;{% endif %}">
-                      <option value="" {% if not item.BCItemNo or item.BCItemNo == 'Other' %}selected{% endif %}>— Choose an Item No. —</option>
+                      <option value="" {% if not item.BCItemNo or item.BCItemNo == 'Other' %}selected{% endif %}>- Choose an Item No. -</option>
                     </select>
                   </dd>
 
@@ -309,7 +309,7 @@
                   <dt class="col-sm-4">Package Description</dt>
                   <dd class="col-sm-8">
                     <select class="form-select field-box" data-field="PackageDescription">
-                      <option value="" {% if not item.PackageDescription %}selected{% endif %}>— Choose a Package Description —</option>
+                      <option value="" {% if not item.PackageDescription %}selected{% endif %}>- Choose a Package Description -</option>
                       {% for desc in pkg_descs %}<option value="{{ desc }}" {% if item.PackageDescription == desc %}selected{% endif %}>{{ desc }}</option>{% endfor %}
                     </select>
                   </dd>
@@ -456,7 +456,7 @@
             items.forEach(item => {
               const opt = document.createElement('option');
               opt.value = item.No;
-              opt.textContent = `${item.No} — ${item.Description}`;
+              opt.textContent = `${item.No} - ${item.Description}`;
               manualInput.appendChild(opt);
             });
             manualInput.dataset.filled = 'true';
@@ -512,7 +512,7 @@
             opts.forEach(o => {
               const optEl = document.createElement('option');
               optEl.value = o.No;
-              optEl.textContent = `${o.No} — ${o.Description}`;
+              optEl.textContent = `${o.No} - ${o.Description}`;
               select.append(optEl);
             });
 
@@ -522,7 +522,7 @@
             select.append(otherEl);
 
             //opts.forEach(o => {
-              //select.options.add(new Option(`${o.No} — ${o.Description}`, o.No));
+              //select.options.add(new Option(`${o.No} - ${o.Description}`, o.No));
             //});
             //select.options.add(new Option('Other', 'Other'));
 

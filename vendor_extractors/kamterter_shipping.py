@@ -216,7 +216,7 @@ def extract_kamterter_shipping_data_from_bytes(pdf_files):
                     "page_count": page_count,
                     "errors": list(base_errors),  # copy
                 }
-                key = f"{filename} — {po}"
+                key = f"{filename} - {po}"
                 results[key] = rec
 
                 # Optional logging per PO

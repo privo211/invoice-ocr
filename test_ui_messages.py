@@ -187,10 +187,11 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
     html = response.get_data(as_text=True)
     assert "INV12345_Onion_TR-00009" in html and "INV12345_Onion_TR-00010" in html
     assert 'value="8181.0"' in html and 'value="50.0"' in html and 'value="0.01467"' in html
-    assert "PDF shipped weight 8181.31 M" in html
-    assert 'data-invoice-total="145.50"' in html
-    assert "Posted assembly PA-00001" in html and "Open assembly TR-00010" in html
-    assert ("Using order quantity" in html) == (resource_quantity == 0)
+    assert 'value="ON-THI"' in html and 'value="ON-MK"' in html
+    assert "Grand Total:" in html
+    for removed in ("PA-00001", "Open assembly TR-00010", "Using order quantity", "PDF shipped weight",
+                    "<small>MS</small>", "PDF total", "BC invoice discount", "data-invoice-total"):
+        assert removed not in html
     assert "Create Invoice in Business Central" in html
     assert reads == [
         ("posted", "TR-00009"), ("open", "TR-00009"),
