@@ -190,7 +190,7 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
     assert 'value="ON-THI"' in html and 'value="ON-MK"' in html
     assert "Grand Total:" in html
     for removed in ("PA-00001", "Open assembly TR-00010", "Using order quantity", "PDF shipped weight",
-                    "<small>MS</small>", "PDF total", "BC invoice discount", "data-invoice-total"):
+                    "<small>MS</small>", "PDF total", "invoice discount", "data-invoice-total"):
         assert removed not in html
     assert "Create Invoice in Business Central" in html
     assert reads == [
@@ -240,7 +240,8 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
     assert writes[1]["Description"] == lines[0]["Description"]
     assert writes[1]["Quantity"] == 8181
     if line_status == 201:
-        assert response.json["invoice_discount_amount"] == "0.02"
+        assert response.json["warnings"] == []
+        assert "invoice_discount_amount" not in response.json
         assert writes[2]["No"] == "ON-MK"
         assert writes[3]["fileName"] == "invoice.pdf"
         assert not list(tmp_path.iterdir())

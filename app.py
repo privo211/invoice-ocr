@@ -10,7 +10,7 @@ import re
 import fitz
 import requests
 from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation
 import difflib
 from difflib import get_close_matches
 import msal
@@ -22,7 +22,7 @@ from vendor_extractors.sakata import load_package_descriptions, get_po_items
 from vendor_extractors.hm_clause import extract_hm_clause_data_from_bytes, find_best_hm_clause_package_description
 from vendor_extractors.kamterter import extract_kamterter_data_from_bytes
 from vendor_extractors.kamterter_us import (
-    CENT, UNIT_COST_PRECISION, US_KAMTERTER_VENDOR,
+    UNIT_COST_PRECISION, US_KAMTERTER_VENDOR,
     extract_kamterter_us_data_from_bytes,
 )
 from vendor_extractors.kamterter_shipping import extract_kamterter_shipping_data_from_bytes
@@ -1139,9 +1139,8 @@ def create_purchase_invoice():
         submitted_path = upload_path + ".submitted"
         try:
             source_total = Decimal(review["total"])
-            if source_total <= 0 or not purchase_lines:
+            if not source_total.is_finite() or source_total <= 0 or not purchase_lines:
                 raise ValueError
-            draft_total = Decimal(0)
             for line in purchase_lines:
                 quantity = Decimal(str(line["Quantity"]))
                 unit_cost = Decimal(str(line["Direct_Unit_Cost"]))
@@ -1150,8 +1149,6 @@ def create_purchase_invoice():
                         or not unit_cost.is_finite() or unit_cost < 0
                         or unit_cost != unit_cost.quantize(UNIT_COST_PRECISION)):
                     raise ValueError
-                draft_total += (quantity * unit_cost).quantize(CENT, rounding=ROUND_HALF_UP)
-            invoice_discount = (draft_total - source_total).quantize(CENT, rounding=ROUND_HALF_UP)
         except (InvalidOperation, ValueError, TypeError, KeyError, AttributeError):
             return jsonify({"message": "Review the invoice total, line numbers, quantities, and unit costs."}), 400
 
@@ -1385,7 +1382,6 @@ def create_purchase_invoice():
     if us_invoice:
         if not pdf_attached:
             draft_warnings.append("Attach the source PDF to the invoice in Business Central.")
-        result["invoice_discount_amount"] = str(invoice_discount)
         result["warnings"] = draft_warnings
     return jsonify(result), 201
 

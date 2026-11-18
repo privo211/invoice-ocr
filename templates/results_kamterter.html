@@ -244,12 +244,6 @@
   <script>
     const bcTarget = {{ bc_target | tojson }};
     const bcDestinationLabel = {{ bc_destination_label | tojson }};
-    const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
-
-    function invoiceTotalAdjustment(discount) {
-      const action = discount < 0 ? 'Increase' : 'Reduce';
-      return `${action} total by ${usd.format(Math.abs(discount))}`;
-    }
 
     function updateInvoiceTotal(table) {
       let totalCents = 0;
@@ -488,13 +482,8 @@
             btn.classList.remove('btn-success');
             btn.classList.add('btn-secondary');
             btn.disabled = true;
-            if (bcTarget === 'kamterter_us') {
-              const instructions = json.warnings || [];
-              const discount = Number(json.invoice_discount_amount);
-              if (discount) {
-                instructions.push(`${invoiceTotalAdjustment(discount)}. Enter ${usd.format(discount)} as the invoice discount in Business Central and verify the total before posting.`);
-              }
-              if (instructions.length) alert([`Invoice ${json.No}`, ...instructions].join('\n\n'));
+            if (bcTarget === 'kamterter_us' && json.warnings?.length) {
+              alert([`Invoice ${json.No}`, ...json.warnings].join('\n\n'));
             }
 
           } else {

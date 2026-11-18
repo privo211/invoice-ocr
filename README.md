@@ -228,8 +228,8 @@ TR in open and posted assemblies in **Production-Holland**, company **Stokes
 Seeds US**, and uses the Resource line from a unique match. When an open Resource
 line has zero quantity and the units match, the review uses the order header
 quantity. A TR present in both sets needs review for partial posting. Creating
-the invoice sends it and the PDF to the configured US Sandbox. Apply any
-displayed invoice discount to the Business Central draft before posting.
+the invoice sends it and the PDF to the configured US Sandbox. Review and
+reconcile the invoice in Business Central before posting.
 
 In Production-Holland, install [query 50142](business_central/50142KamterterPostedAssemblies.Query.al)
 and publish it as `KamterterPostedAssemblies` in **Web Services**. The open lookup
