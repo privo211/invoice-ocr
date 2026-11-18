@@ -21,6 +21,17 @@ item_usage_counter = defaultdict(int)
 AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
 AZURE_KEY = os.getenv("AZURE_KEY")
 _CERTIFICATE_FIELDS = ("GrowerGerm", "GrowerGermDate", "PureSeed", "InertMatter")
+_ITEM_START = re.compile(r"^(\d{6})(?:\s+(.+)|$)")
+_PRODUCT_FORM = re.compile(r"Product Form:[ \t]*(.+?)(?=[ \t]+Treatment:|$)", re.MULTILINE)
+
+
+def _invoice_block_order(block):
+    x, y = block[:2]
+    # shortcut: Allows 2 pt of font offset on the item row, revisit if layouts exceed it.
+    if _ITEM_START.match(block[4].strip()):
+        y -= 2
+    return y, x
+
 
 def extract_text_with_azure_ocr(pdf_bytes: bytes) -> List[str]:
     """
@@ -234,8 +245,8 @@ def extract_items_from_ocr_lines(lines: List[str]) -> List[Dict]:
                     current["OriginCountry"] = lines[i+o].strip()
                     break
 
-        if "ProductForm" not in current and (m_pf := re.search(r"Product Form:\s*(\w+)", line)):
-            current["ProductForm"] = m_pf.group(1)
+        if "ProductForm" not in current and (m_pf := _PRODUCT_FORM.search(line)):
+            current["ProductForm"] = m_pf.group(1).strip()
 
         if "Treatment" not in current and (m_tr := re.search(r"Treatment:\s*(.+)", line)):
             current["Treatment"] = m_tr.group(1).strip()
@@ -325,7 +336,7 @@ def _parse_purity_report(text: str, filename: str) -> tuple[str, dict] | None:
             data[field] = float(match.group(1))
 
     germ = re.search(
-        r"\bGerm(?:ination)?\b\s*(?:Normal\s+Seedlings?\s*)?%?\s*:?\s*(\d{1,3})(?![\d./])",
+        r"\bGerm(?:ination)?\b\s*(?:Normal\s+Seedlings?\s*)?(?:%|\(%\))?\s*:?\s*(\d{1,3})(?![\d./])",
         text, re.I,
     )
     if germ and int(germ.group(1)) <= 100:
@@ -698,7 +709,7 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes, read_ocr=None) -
     #         extraction_info['method'] = 'Azure OCR'
     #         return extract_items_from_ocr_lines(ocr_lines), extraction_info
             
-        sorted_blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
+        sorted_blocks = sorted(blocks, key=_invoice_block_order)
         all_blocks.extend(sorted_blocks)
         for b in sorted_blocks:
             full_text += b[4] + " "
@@ -769,41 +780,29 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes, read_ocr=None) -
     for idx, b in enumerate(all_blocks):
         block_text = b[4].strip()
 
-        # 1. LOT LOGIC (With Fallback)
+        if re.fullmatch(r"(?:\d{6}\s+)?Freight Charges", block_text, re.IGNORECASE):
+            flush_item()
+            continue
+
+        if item_match := _ITEM_START.match(block_text):
+            if is_disqualified(idx, all_blocks, item_match.group(1)):
+                continue
+            flush_item()
+            current_item_data["VendorItemNumber"] = item_match.group(1)
+            desc_part1 = (item_match.group(2) or "").strip()
+            continue
+
+        if not current_item_data:
+            continue
+
+        # A second short lot code can be the product lot when no PL code is printed.
         if re.fullmatch(r"[A-Z]\d{5}", block_text):
             if "VendorBatchLot" not in current_item_data:
                 current_item_data["VendorBatchLot"] = block_text
-            # Fallback: If BatchLot found, and we find another 5-digit code, treat as ProductLot
-            # unless we already found a 'PL' code.
-            elif "VendorProductLot" not in current_item_data or not current_item_data["VendorProductLot"].startswith("PL"):
-                # Ensure we are inside an item context so we don't accidentally grab a random header code
-                if current_item_data.get("VendorItemNumber") or current_item_data.get("VendorItemDescription"):
-                    current_item_data["VendorProductLot"] = block_text
-                else:
-                     # If we aren't deep in an item, but have a batch lot, this MIGHT be a new item's batch lot.
-                     # However, given the fallback logic, we prefer to keep the current item open if possible.
-                     # Only flush if the previous item is "complete" enough.
-                     if "VendorBatchLot" in current_item_data:
-                         flush_item()
-                         current_item_data["VendorBatchLot"] = block_text
+            elif not current_item_data.get("VendorProductLot", "").startswith("PL"):
+                current_item_data["VendorProductLot"] = block_text
             continue
 
-        if not current_item_data: continue
-        
-        # New Item Pattern 1: "123456 Description"
-        if m := re.match(r"^(\d{6})\s+(.+)", block_text):
-            if is_disqualified(idx, all_blocks, m.group(1)): continue
-            current_item_data["VendorItemNumber"] = m.group(1)
-            desc_part1 = m.group(2).strip()
-            continue
-
-        # New Item Pattern 2: "123456" (Standalone)
-        if re.fullmatch(r"\d{6}", block_text):
-            if is_disqualified(idx, all_blocks, block_text): continue
-            current_item_data["VendorItemNumber"] = block_text
-            desc_part1 = ""
-            continue
-        
         if desc_part1 and re.search(r"\b\d+\s*(Ks|MS)\b", block_text):
             part2 = re.sub(r"\bHM.*$", "", block_text, flags=re.IGNORECASE).strip()
             part2 = re.sub(r"^(Flc\.|Plt\.\w+)\s*", "", block_text, flags=re.IGNORECASE)
@@ -878,8 +877,8 @@ def extract_hm_clause_invoice_data_from_bytes(pdf_bytes: bytes, read_ocr=None) -
         if m_oc := re.search(r"Country of origin:\s*([A-Z]{2})", block_text):
             current_item_data["OriginCountry"] = m_oc.group(1)
             
-        if m_pf := re.search(r"Product Form:\s*(\w+)", block_text):
-            current_item_data["ProductForm"] = m_pf.group(1)
+        if m_pf := _PRODUCT_FORM.search(block_text):
+            current_item_data["ProductForm"] = m_pf.group(1).strip()
             
         if m_tr := re.search(r"Treatment:\s*(.+)", block_text):
             current_item_data["Treatment"] = m_tr.group(1).strip()
