@@ -225,11 +225,12 @@ BC_US_COMPANY=<us-company-name>
 
 For **Kamterter (US SANDBOX)**, upload the invoice PDFs. The portal looks up each
 TR in open and posted assemblies in **Production-Holland**, company **Stokes
-Seeds US**, and uses the Resource line from a unique match. When an open Resource
-line has zero quantity and the units match, the review uses the order header
-quantity. A TR present in both sets needs review for partial posting. Creating
-the invoice sends it and the PDF to the configured US Sandbox. Review and
-reconcile the invoice in Business Central before posting.
+Seeds US**, and uses the Resource code and unit from a unique match. Treatment
+quantities come from the PDF's shipped weights. `M` on the PDF matches `MS` in
+Business Central. Missing or invalid weights and unit mismatches need review
+before creation. A TR present in both sets needs review for partial posting.
+Creating the invoice sends it and the PDF to the configured US Sandbox. Review
+and reconcile the invoice in Business Central before posting.
 
 In Production-Holland, install [query 50142](business_central/50142KamterterPostedAssemblies.Query.al)
 and publish it as `KamterterPostedAssemblies` in **Web Services**. The open lookup

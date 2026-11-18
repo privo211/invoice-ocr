@@ -185,8 +185,8 @@ def _kamterter_assembly_lookup(token):
         lines_field = "Assembly_Order_ExcelLines"
         open_orders = get_rows("Assembly_Order_Excel", {
             "$filter": f"No eq '{order_filter}'",
-            "$select": "No,Quantity,Unit_of_Measure_Code",
-            "$expand": f"{lines_field}($select=Type,No,Quantity,Unit_of_Measure_Code)",
+            "$select": "No",
+            "$expand": f"{lines_field}($select=Type,No,Unit_of_Measure_Code)",
         })
         for order in open_orders:
             lines = order.get(lines_field)
@@ -197,10 +197,8 @@ def _kamterter_assembly_lookup(token):
             for line in lines or [{}]:
                 rows.append({
                     "AssemblyNo": order_no, "AssemblyStatus": "Open", "LineType": line.get("Type"),
-                    "ResourceNo": line.get("No"), "Quantity": line.get("Quantity"),
+                    "ResourceNo": line.get("No"),
                     "UnitOfMeasure": line.get("Unit_of_Measure_Code"),
-                    "AssemblyQuantity": order.get("Quantity"),
-                    "AssemblyUnitOfMeasure": order.get("Unit_of_Measure_Code"),
                 })
         return rows
 

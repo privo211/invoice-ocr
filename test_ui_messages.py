@@ -110,14 +110,14 @@ def test_home_keeps_multipart_upload_fields_and_vendor_destinations(offline_ui_a
     assert parser.vendors == ["sakata", "hm_clause", "seminis", "nunhems", "syngenta", "kamterter", "kamterter_us", "kamterter_shipping"]
 
 
-def _kamterter_upload():
+def _kamterter_upload(first_weight="8,181.31 M"):
     with fitz.open() as pdf:
         pdf.new_page().insert_text((40, 40), "\n".join([
             "Invoice #: 12345", "Invoiced Date: 10/03/2026",
             "Lot #: SAMPLE", "KTT #: 100", "PO #: TR-00009", "Seed Type: Onion",
-            "Shipped Weight: 8181.31 M", "Shipping Mode: Freight", "Subtotal: $120.00",
+            f"Shipped Weight: {first_weight}", "Shipping Mode: Freight", "Subtotal: $120.00",
             "Lot #: SAMPLE", "KTT #: 100", "PO #: TR-00010", "Seed Type: Onion",
-            "Shipped Weight: 50.42 M", "Shipping Mode: Freight", "Subtotal: $25.50",
+            "Shipped Weight: 50.42 MS", "Shipping Mode: Freight", "Subtotal: $25.50",
             "Total: $145.50",
         ]))
         return {"vendor": "kamterter_us", "pdfs": (io.BytesIO(pdf.tobytes()), "invoice.pdf")}
@@ -135,9 +135,9 @@ def test_kamterter_us_preview_disables_draft_creation():
     assert not re.search(r"\b(?:draft|preview)\b", html, re.IGNORECASE)
 
 
-@pytest.mark.parametrize(("line_status", "resource_quantity"), [(201, 0), (400, 50)])
+@pytest.mark.parametrize("line_status", [201, 400])
 def test_kamterter_us_review_creates_sandbox_draft_once(
-    offline_ui_app, monkeypatch, tmp_path, line_status, resource_quantity,
+    offline_ui_app, monkeypatch, tmp_path, line_status,
 ):
     app = offline_ui_app
     monkeypatch.setitem(app.app.config, "UPLOAD_FOLDER", str(tmp_path))
@@ -163,16 +163,16 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
         if url.endswith("/Assembly_Order_Excel"):
             assert url.endswith("/Production-Holland/ODataV4/Company('Stokes%20Seeds%20US')/Assembly_Order_Excel")
             assert kwargs["headers"]["Authorization"] == "Bearer test-token"
-            assert kwargs["params"]["$expand"] == "Assembly_Order_ExcelLines($select=Type,No,Quantity,Unit_of_Measure_Code)"
-            assert kwargs["params"]["$select"] == "No,Quantity,Unit_of_Measure_Code"
+            assert kwargs["params"]["$expand"] == "Assembly_Order_ExcelLines($select=Type,No,Unit_of_Measure_Code)"
+            assert kwargs["params"]["$select"] == "No"
             po = kwargs["params"]["$filter"].removeprefix("No eq '").removesuffix("'")
             reads.append(("open", po))
             if po == "TR-00009":
                 return _Response(200, {"value": []})
             assert po == "TR-00010"
-            return _Response(200, {"value": [{"No": po, "Quantity": 50, "Unit_of_Measure_Code": "MS", "Assembly_Order_ExcelLines": [
-                {"Type": "Item", "No": "SEED", "Quantity": 50, "Unit_of_Measure_Code": "MS"},
-                {"Type": "Resource", "No": "ON-MK", "Quantity": resource_quantity, "Unit_of_Measure_Code": "MS"},
+            return _Response(200, {"value": [{"No": po, "Assembly_Order_ExcelLines": [
+                {"Type": "Item", "No": "SEED", "Unit_of_Measure_Code": "MS"},
+                {"Type": "Resource", "No": "ON-MK", "Unit_of_Measure_Code": "MS"},
             ]}]})
         assert url.endswith("/Sandbox-Holland-260216/api/v2.0/companies")
         assert kwargs["params"]["$filter"] == "name eq 'Stokes Seeds US Test'"
@@ -186,7 +186,8 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert "INV12345_Onion_TR-00009" in html and "INV12345_Onion_TR-00010" in html
-    assert 'value="8181.0"' in html and 'value="50.0"' in html and 'value="0.01467"' in html
+    assert 'value="8181.31"' in html and 'value="50.42"' in html
+    assert 'value="0.01467"' in html and 'value="0.50575"' in html
     assert 'value="ON-THI"' in html and 'value="ON-MK"' in html
     assert "Grand Total:" in html
     for removed in ("PA-00001", "Open assembly TR-00010", "Using order quantity", "PDF shipped weight",
@@ -222,9 +223,9 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
     monkeypatch.setattr(app.requests, "patch", patch)
     lines = [
         {"Type": "Resource", "No": "ON-THI", "Description": "INV12345_Onion_TR-00009",
-         "Quantity": 8181, "Direct_Unit_Cost": 0.01467},
+         "Quantity": 8181.31, "Direct_Unit_Cost": 0.01467},
         {"Type": "Resource", "No": "ON-MK", "Description": "INV12345_Onion_TR-00010",
-         "Quantity": 50, "Direct_Unit_Cost": 0.51},
+         "Quantity": 50.42, "Direct_Unit_Cost": 0.50575},
     ]
     payload = {"bc_target": "kamterter_us", "UploadToken": token, "PurchaseLines": lines}
     assert client.post("/create-purchase-invoice", json={**payload, "bc_target": "kamterter"}).status_code == 400
@@ -238,11 +239,13 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
     }
     assert writes[1]["No"] == "ON-THI"
     assert writes[1]["Description"] == lines[0]["Description"]
-    assert writes[1]["Quantity"] == 8181
+    assert writes[1]["Quantity"] == 8181.31
     if line_status == 201:
         assert response.json["warnings"] == []
         assert "invoice_discount_amount" not in response.json
         assert writes[2]["No"] == "ON-MK"
+        assert writes[2]["Quantity"] == 50.42
+        assert writes[2]["Direct_Unit_Cost"] == 0.50575
         assert writes[3]["fileName"] == "invoice.pdf"
         assert not list(tmp_path.iterdir())
     else:
@@ -251,6 +254,34 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
     write_count = len(writes)
     assert client.post("/create-purchase-invoice", json=payload).status_code == 409
     assert len(writes) == write_count
+
+
+@pytest.mark.parametrize(("weight", "message"), [
+    ("8,181.31 lb", "The PDF uses lb and the assembly Resource line uses MS."),
+    ("", "needs a readable shipped weight and unit on the PDF."),
+    ("0 M", "needs a positive shipped weight on the PDF."),
+])
+def test_kamterter_us_requires_compatible_pdf_shipped_weight(offline_ui_app, monkeypatch, tmp_path, weight, message):
+    app = offline_ui_app
+    monkeypatch.setitem(app.app.config, "UPLOAD_FOLDER", str(tmp_path))
+    monkeypatch.setitem(app.KAMTERTER_BC_TARGETS["kamterter_us"], "environment", "Sandbox-Test")
+
+    def get(url, **kwargs):
+        if url.endswith("/KamterterPostedAssemblies"):
+            return _Response(200, {"value": [{
+                "OrderNo": "TR-00009", "AssemblyNo": "PA-1", "LineType": "Resource",
+                "ResourceNo": "ON-THI", "UnitOfMeasure": "MS", "Quantity": 8181,
+            }]})
+        assert url.endswith("/Assembly_Order_Excel")
+        return _Response(200, {"value": []})
+
+    monkeypatch.setattr(app.requests, "get", get)
+    response = _authenticated_client(app, monkeypatch).post("/", data=_kamterter_upload(weight))
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert message in html
+    assert "data-upload-token=" not in html
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize(("lookup_status", "both", "status", "message"), [

@@ -1,6 +1,6 @@
 """US Kamterter invoice extraction and assembly matching."""
 
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP
 import re
 
 import fitz
@@ -71,32 +71,32 @@ def _treated_line(block, invoice_no, po, amount, lookup_assembly):
     resource_line = resources[0]
     resource = resource_line.get("ResourceNo")
     unit = resource_line.get("UnitOfMeasure")
-    try:
-        quantity = Decimal(str(resource_line.get("Quantity")))
-        uses_order_quantity = (
-            assembly_status == "Open" and quantity == 0 and bool(unit)
-            and unit == resource_line.get("AssemblyUnitOfMeasure")
-        )
-        if uses_order_quantity:
-            quantity = Decimal(str(resource_line.get("AssemblyQuantity")))
-    except InvalidOperation as exc:
-        raise ValueError(f"{assembly_label} has an invalid Resource quantity.") from exc
-    if not resource or not unit or not quantity.is_finite() or quantity <= 0:
-        raise ValueError(f"{assembly_label} needs a Resource number, quantity, and unit.")
+    resource_unit = str(unit or "").strip().upper()
+    if not resource or not resource_unit:
+        raise ValueError(f"{assembly_label} needs a Resource number and unit.")
+
+    shipped_match = re.search(
+        r"Shipped[ \t]+Weight[ \t]*:[ \t]*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)[ \t]*([A-Z]\S*)",
+        block, re.IGNORECASE,
+    )
+    if not shipped_match:
+        raise ValueError(f"PO {po} needs a readable shipped weight and unit on the PDF.")
+    weight, weight_unit = shipped_match.groups()
+    quantity = Decimal(weight.replace(",", ""))
+    if quantity <= 0:
+        raise ValueError(f"PO {po} needs a positive shipped weight on the PDF.")
+    pdf_unit = weight_unit.upper()
+    if pdf_unit != resource_unit and (pdf_unit, resource_unit) != ("M", "MS"):
+        raise ValueError(f"PO {po} has a unit mismatch. The PDF uses {weight_unit} and the assembly Resource line uses {unit}.")
 
     seed_match = re.search(r"^[ \t]*Seed\s*Type[ \t]*:[ \t]*(.+)$", block, re.IGNORECASE | re.MULTILINE)
     if not seed_match:
         raise ValueError(f"PO {po} is missing its seed type.")
     seed = seed_match[1].strip()
-    if shipped_match := re.search(r"Shipped Weight[ \t]*:[ \t]*([\d,.]+)[ \t]*(\S+)", block, re.IGNORECASE):
-        shipped_weight = f"{shipped_match[1]} {shipped_match[2]}"
-    else:
-        shipped_weight = ""
-
     line = _invoice_line("Resource", resource, f"INV{invoice_no}_{seed}_{reference}", quantity, amount, unit)
     line.update(
         AssemblyNo=assembly_no, AssemblyStatus=assembly_status,
-        UsesOrderQuantity=uses_order_quantity, ShippedWeight=shipped_weight,
+        ShippedWeight=f"{weight} {weight_unit}",
     )
     return line
 
