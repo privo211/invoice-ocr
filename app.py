@@ -149,11 +149,10 @@ def _odata_quote(value: str) -> str:
     # ponytail: minimal escaping sufficient for OData string literal context
     return str(value).replace("'", "''")
 
-def _kamterter_assembly_lookup(target, token):
-    company = urllib.parse.quote(_odata_quote(target["company"]), safe="")
+def _kamterter_assembly_lookup(token):
     odata_base = (
-        f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/{target['environment']}/"
-        f"ODataV4/Company('{company}')"
+        f"https://api.businesscentral.dynamics.com/v2.0/{BC_TENANT}/Production-Holland/"
+        "ODataV4/Company('Stokes%20Seeds%20US')"
     )
 
     def get_rows(service, params):
@@ -1060,7 +1059,7 @@ def index():
                     ), 400
                 try:
                     grouped_results = KAMTERTER_EXTRACTORS[vendor](
-                        pdf_files, _kamterter_assembly_lookup(target, user_token)
+                        pdf_files, _kamterter_assembly_lookup(user_token)
                     )
                 except requests.RequestException as exc:
                     status = exc.response.status_code if exc.response is not None else None
@@ -1071,7 +1070,7 @@ def index():
                     app.logger.warning("US assembly lookup failed (HTTP status: %s)", status)
                     return render_template(
                         "message.html", title="Assembly lookup unavailable",
-                        message="Check the KamterterPostedAssemblies and Assembly_Order_Excel services in the US Sandbox.",
+                        message="Check the KamterterPostedAssemblies and Assembly_Order_Excel services in Production-Holland.",
                         action_endpoint="index", action_label="Back to Invoice Processor",
                     ), 502
                 for filename, pdf_bytes in pdf_files:

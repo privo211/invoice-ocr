@@ -142,14 +142,13 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
     app = offline_ui_app
     monkeypatch.setitem(app.app.config, "UPLOAD_FOLDER", str(tmp_path))
     monkeypatch.setitem(app.KAMTERTER_BC_TARGETS["kamterter_us"], "environment", "Sandbox-Holland-260216")
-    monkeypatch.setitem(app.KAMTERTER_BC_TARGETS["kamterter_us"], "company", "Stokes Seeds US")
+    monkeypatch.setitem(app.KAMTERTER_BC_TARGETS["kamterter_us"], "company", "Stokes Seeds US Test")
     client = _authenticated_client(app, monkeypatch)
     reads = []
 
     def get(url, **kwargs):
-        assert "/Sandbox-Holland-260216/" in url
         if url.endswith("/KamterterPostedAssemblies"):
-            assert url.endswith("/ODataV4/Company('Stokes%20Seeds%20US')/KamterterPostedAssemblies")
+            assert url.endswith("/Production-Holland/ODataV4/Company('Stokes%20Seeds%20US')/KamterterPostedAssemblies")
             assert kwargs["headers"]["Authorization"] == "Bearer test-token"
             po = kwargs["params"]["$filter"].removeprefix("OrderNo eq '").removesuffix("'")
             reads.append(("posted", po))
@@ -162,7 +161,7 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
                 {**row, "LineType": "Resource", "ResourceNo": "ON-THI"},
             ]})
         if url.endswith("/Assembly_Order_Excel"):
-            assert url.endswith("/ODataV4/Company('Stokes%20Seeds%20US')/Assembly_Order_Excel")
+            assert url.endswith("/Production-Holland/ODataV4/Company('Stokes%20Seeds%20US')/Assembly_Order_Excel")
             assert kwargs["headers"]["Authorization"] == "Bearer test-token"
             assert kwargs["params"]["$expand"] == "Assembly_Order_ExcelLines($select=Type,No,Quantity,Unit_of_Measure_Code)"
             assert kwargs["params"]["$select"] == "No,Quantity,Unit_of_Measure_Code"
@@ -175,7 +174,8 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
                 {"Type": "Item", "No": "SEED", "Quantity": 50, "Unit_of_Measure_Code": "MS"},
                 {"Type": "Resource", "No": "ON-MK", "Quantity": resource_quantity, "Unit_of_Measure_Code": "MS"},
             ]}]})
-        assert kwargs["params"]["$filter"] == "name eq 'Stokes Seeds US'"
+        assert url.endswith("/Sandbox-Holland-260216/api/v2.0/companies")
+        assert kwargs["params"]["$filter"] == "name eq 'Stokes Seeds US Test'"
         return _Response(200, {"value": [{"id": "us-company"}]})
 
     monkeypatch.setattr(app.requests, "get", get)
@@ -254,7 +254,7 @@ def test_kamterter_us_review_creates_sandbox_draft_once(
 @pytest.mark.parametrize(("lookup_status", "both", "status", "message"), [
     (200, False, 200, "TR-00009 needs one matching open or posted assembly"),
     (200, True, 200, "TR-00009 has both open and posted assemblies. Check for a partial posting."),
-    (403, False, 502, "Assembly lookup unavailable"),
+    (403, False, 502, "Check the KamterterPostedAssemblies and Assembly_Order_Excel services in Production-Holland."),
 ])
 def test_kamterter_us_requires_tr_match_and_rejects_live_target(
     offline_ui_app, monkeypatch, tmp_path, lookup_status, both, status, message,

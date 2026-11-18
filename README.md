@@ -224,18 +224,19 @@ BC_US_COMPANY=<us-company-name>
 ```
 
 For **Kamterter (US SANDBOX)**, upload the invoice PDFs. The portal looks up each
-TR in open and posted assemblies and uses the Resource line from a unique
-match. When an open Resource line has zero quantity and the units match, the
-review uses the order header quantity. A TR present in both sets needs review
-for partial posting. Apply any displayed invoice discount to the Business
-Central draft before posting.
+TR in open and posted assemblies in **Production-Holland**, company **Stokes
+Seeds US**, and uses the Resource line from a unique match. When an open Resource
+line has zero quantity and the units match, the review uses the order header
+quantity. A TR present in both sets needs review for partial posting. Creating
+the invoice sends it and the PDF to the configured US Sandbox. Apply any
+displayed invoice discount to the Business Central draft before posting.
 
-Install [query 50142](business_central/50142KamterterPostedAssemblies.Query.al)
-in the US Sandbox with the purchase invoice extension. On **Web Services**,
-publish it as a Query named `KamterterPostedAssemblies`. The portal user needs
-permission to execute the query and read the posted assembly tables.
-The open lookup uses page 900 published as `Assembly_Order_Excel` and its Lines
-subpage in the same sandbox company.
+In Production-Holland, install [query 50142](business_central/50142KamterterPostedAssemblies.Query.al)
+and publish it as `KamterterPostedAssemblies` in **Web Services**. The open lookup
+uses page 900 published as `Assembly_Order_Excel` and its Lines subpage in the
+same company. The portal user needs read access to the assembly data and
+permission to execute the query. The US Sandbox needs the purchase invoice
+extension and permissions to create invoices and attachments.
 
 Register this development redirect URI in Microsoft Entra ID:
 
