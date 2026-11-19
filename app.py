@@ -493,7 +493,14 @@ def aggregate_duplicate_lots(grouped_results: dict, vendor: str) -> dict:
                 if lot_no and batch_no:
                     agg_key = (lot_no, batch_no)
             
-            elif vendor in ["sakata", "syngenta"]:
+            elif vendor == "syngenta":
+                batch_no = (item.get("VendorBatchNo") or "").strip()
+                item_no = item.get("VendorItemNumber")
+                if lot_no and batch_no and item_no:
+                    agg_key = (item.get("VendorInvoiceNo"), item.get("PurchaseOrder"), item_no,
+                               lot_no, batch_no, item.get("PackageDescription"))
+
+            elif vendor == "sakata":
                 item_no = item.get("VendorItemNumber")
                 if lot_no and item_no:
                     agg_key = (lot_no, item_no)
@@ -1009,22 +1016,17 @@ def index():
             # 4. Flatten results to process POs efficiently
             all_items_flat = [item for items_list in final_grouped_results.values() for item in items_list]
             
-            # 5. Fetch PO Items for ALL unique POs found in one request (Bulk Fetch)
-            all_pos = set(item.get("PurchaseOrder") for item in all_items_flat if item.get("PurchaseOrder"))
-            po_items_for_all = []
-            
-            if all_pos:
+            # Keep item suggestions scoped to the extracted row's PO.
+            all_pos = {item["PurchaseOrder"] for item in all_items_flat if item.get("PurchaseOrder")}
+            po_items_by_order = {}
+            for po in all_pos:
                 try:
-                    # Joins all POs (e.g., "PO-1001|PO-1002") for a single API call
-                    po_items_for_all = get_po_items("|".join(all_pos), user_token)
+                    po_items_by_order[po] = get_po_items(po, user_token)
                 except Exception as e:
                     app.logger.error(f"Failed to fetch PO items for Syngenta: {e}")
-                    po_items_for_all = [{"No": "ERROR", "Description": str(e)}]
 
-            # 6. Enrich items with BC Options and Suggestions
             for item in all_items_flat:
-                # Assign the bulk-fetched options if the item has a PO
-                item["BCOptions"] = po_items_for_all if item.get("PurchaseOrder") else []
+                item["BCOptions"] = po_items_by_order.get(item.get("PurchaseOrder"), [])
 
                 # Find best match based on description
                 vendor_desc = item.get("VendorItemDescription", "")

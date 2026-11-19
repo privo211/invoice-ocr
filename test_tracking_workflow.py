@@ -155,6 +155,32 @@ def test_sakata_upload_keeps_tracking_manual(offline_upload_app, monkeypatch):
     assert "Please verify before creating the lot." not in html
 
 
+def test_syngenta_review_keeps_batches_and_po_lookups_separate(offline_upload_app, monkeypatch):
+    first = _vendor_item("syngenta")
+    other_batch = {**first, "VendorBatchNo": "18784822"}
+    other_order = {**first, "PurchaseOrder": "PO-91234"}
+    po_items = {"PO-90677": "1750286-MS", "PO-91234": "1750287-MS"}
+
+    monkeypatch.setattr(offline_upload_app, "extract_syngenta_data_from_bytes", lambda *args: {
+        "invoice.pdf": [first, other_batch, other_order],
+    })
+    monkeypatch.setattr(offline_upload_app, "get_po_items", lambda po, token: [
+        {"No": po_items[po], "Description": "SAMPLE SEEDS"},
+    ])
+    client = _authenticated_client(offline_upload_app, monkeypatch)
+    response = client.post("/", data={
+        "vendor": "syngenta",
+        "pdfs": (BytesIO(_pdf_bytes(["SYNGENTA INVOICE", "Invoice: 12345678"])), "invoice.pdf"),
+    })
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert html.count('value="1750286-MS"') == 2
+    assert html.count('value="1750287-MS"') == 1
+    assert 'id="create-lots-btn"' in html
+    assert "Extraction needs review" not in html
+
+
 @pytest.mark.parametrize("vendor", ["syngenta", "seminis"])
 @pytest.mark.parametrize("other_tracking", ["1Z812W720396903368", ""])
 def test_existing_duplicate_aggregation_clears_conflicting_or_missing_tracking(

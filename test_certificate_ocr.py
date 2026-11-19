@@ -84,3 +84,54 @@ def test_live_certificate_fallback(monkeypatch, vendor, scenario):
     assert item.get("GrowerGermDate") == item.get(date_field) == expected_date
     assert item[purity_field] == (99.8 if scenario == "stamp_only" else 99.7)
     assert item.get(inert_field) == expected_inert
+
+
+@pytest.mark.parametrize("test_table,expected_date", [
+    (
+        "Purity Information Germination Information\n"
+        "Test Number : Date Tested : Test Number : Date Tested :\n"
+        "100023-01 05/17/2023 200024-02 07/30/2026\n",
+        "07/30/2026",
+    ),
+    (
+        "Purity Information\nDate Tested: 05/17/2023\n"
+        "Germination Information\nDate Tested: 07/30/2026\n",
+        "07/30/2026",
+    ),
+    (
+        "Test Number : Date Tested : Test Number : Date Tested :\n"
+        "100023-01 05/17/2023 200024-02 07/30/2026\n",
+        "07/30/2026",
+    ),
+    (
+        "Purity Information Germination Information\n"
+        "Test Number : Date Tested : Test Number : Date Tested :\n"
+        "100023-01 05/17/2023 200024-02\n",
+        None,
+    ),
+])
+def test_syngenta_certificate_with_small_sample_and_separate_test_dates(test_table, expected_date):
+    lot = "ABC123456"
+    text = (
+        f"Report of Analysis\nLot Number: {lot}\nDate Issued: 11/13/2026\n{test_table}"
+        "Purity Analysis Viability Analysis\n"
+        "Grams Pure Other Inert% Weed% Germ% Media No. Seeds Days Tested\n"
+        "Analyzed: Seed% Crop%\n50.00 99.98 NA 0.02 0.00 93 TOWEL 400 10\n"
+        f"{_STAMP}"
+    )
+
+    fields = syngenta.parse_analysis_text(text, "certificate.pdf", {lot})[lot]
+
+    assert fields == {
+        "Purity": 99.98, "Inert": 0.02, "CertificateGerm": 93,
+        **({"CertificateGermDate": expected_date} if expected_date else {}),
+    }
+
+
+def test_syngenta_certificate_uses_labeled_lot_and_rejects_conflicting_labels():
+    first, second = "ABC123456", "XYZ987654"
+    report = f"Report of Analysis\nReference: {first}\nLot Number: {second}\nDate Tested: 07/30/2026"
+    assert syngenta.parse_analysis_text(report, "report.pdf", {first, second}) == {
+        second: {"CertificateGermDate": "07/30/2026"},
+    }
+    assert syngenta.parse_analysis_text(report + f"\nLot No.: {first}", "report.pdf", {first, second}) == {}
